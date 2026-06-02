@@ -307,10 +307,8 @@ and desktop UI.
 
 ### Milestone 2: Rule Testing
 
-- Store captured requests as fixtures.
-- Add `rules test`.
-- Validate rule output schemas.
-- Add rule execution timeout and output size limits.
+Rule execution engine, fixture storage, rule CRUD, rules CLI commands, schema
+validation, execution timeouts, and output size limits.
 
 ### Milestone 3: HTTPS MITM
 
@@ -483,3 +481,214 @@ Each rule evaluation records:
 - `ruleId`, `ruleVersion`, `matched`, `actions`, `durationMs`, `error` (if any).
 
 This trace is attached to the request record and returned in request detail.
+
+---
+
+### Milestone 2 Decisions
+
+The following decisions resolve the design for Milestone 2 (Rule Testing). These
+extend the baseline established above.
+
+#### Rule Engine (`internal/rule`)
+
+A new Go package `internal/rule` provides Goja-based rule execution:
+
+- **Isolated runtimes**: A new Goja VM is created per evaluation. No runtime is
+  reused across evaluations or requests.
+- **Sandbox**: The VM has no filesystem, no network, no process spawning, and no
+  host environment access. Only ECMAScript 5.1 built-ins + `console.log` (no-op).
+- **Input context**: Each rule receives a `ctx` object — `ctx.request` mirrors
+  the Go `Request` struct (method, scheme, host, path, query, url, headers,
+  body, clientAddr). The context is immutable from the rule's perspective.
+- **Output contract**: Rules must return `{ match: boolean, actions?: Array<{ type, params }> }`.
+  If `match` is false, actions are ignored.
+- **Schema validation**: Every rule output is validated against a strict JSON
+  schema after evaluation. See "Rule Output Validation Schema" below.
+- **Timeout**: A 500 ms deadline (`DefaultRuleTimeout`) is enforced per rule via
+  Goja's interrupt mechanism. Violations produce a timeout error in the trace
+  and discard all actions from that rule.
+- **Output size limits**: The serialized rule result (return value of the `default`
+  function) is limited to 64 KB. `mockResponse.body` is additionally limited to
+  64 KB. Exceeding these limits discards the rule's actions and records an error.
+
+#### Actions
+
+Milestone 2 supports all six rule actions. The last three were deferred from
+Milestone 1 per the first-slice decisions.
+
+| Action | Params | Description |
+|---|---|---|
+| `tag` | `{ tags: string[] }` | Adds tags to the request record |
+| `block` | `{ status: number, body?: string }` | Aborts the request with the given status and optional body |
+| `mockResponse` | `{ status: number, headers?: object, body?: string }` | Replaces upstream response with a synthetic one (max 64 KB body) |
+| `setRequestHeader` | `{ name: string, value: string }` | Sets a request header before upstream forwarding |
+| `removeRequestHeader` | `{ name: string }` | Removes a request header before upstream forwarding |
+| `rewriteURL` | `{ url: string }` | Changes the upstream URL before forwarding |
+
+#### Rule Output Validation Schema
+
+The `default` function's return value must conform to this schema:
+
+```jsonc
+{
+  "match": boolean,            // required
+  "actions": [                  // optional; required when match=true
+    {
+      "type": enum,             // required: one of "tag", "block", "mockResponse",
+                                //   "setRequestHeader", "removeRequestHeader", "rewriteURL"
+      "params": { ... }         // required; per-type validation below
+    }
+  ]
+}
+```
+
+Per-action `params` validation:
+
+| Type | Field | Rule |
+|---|---|---|
+| `tag` | `params.tags` | required, must be non-empty `string[]` |
+| `block` | `params.status` | required, must be integer 100–599 |
+| `block` | `params.body` | optional, must be string |
+| `mockResponse` | `params.status` | required, must be integer 100–599 |
+| `mockResponse` | `params.headers` | optional, must be object with string values |
+| `mockResponse` | `params.body` | optional, must be string, max 64 KB |
+| `setRequestHeader` | `params.name` | required, must be non-empty string |
+| `setRequestHeader` | `params.value` | required, must be string |
+| `removeRequestHeader` | `params.name` | required, must be non-empty string |
+| `rewriteURL` | `params.url` | required, must be valid HTTP(S) URL string |
+
+#### Rule Storage (Daemon Side)
+
+Rules are stored in an in-memory `map[RuleID]*Rule` (no file or database
+persistence in Milestone 2 — lost on daemon restart). Extended from the
+first-slice design with full CRUD support:
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/v1/rules` | List all rules |
+| `POST` | `/v1/rules` | Create a rule (`{ name, priority, script }`) |
+| `GET` | `/v1/rules/:id` | Get a single rule |
+| `PUT` | `/v1/rules/:id` | Update rule fields |
+| `DELETE` | `/v1/rules/:id` | Delete a rule |
+| `POST` | `/v1/rules/:id/toggle` | Enable or disable a rule |
+| `POST` | `/v1/rules/test` | Test a rule script against a fixture |
+
+#### Rule Test Endpoint
+
+`POST /v1/rules/test` accepts:
+
+```jsonc
+{
+  "ruleScript": "export default function(ctx) { ... }",  // required
+  "fixture": "fixture-name",      // one of these three
+  "fixtureId": "req_abc",         //   must be set
+  "fixtureFile": "path/to/fixture.json"  //
+}
+```
+
+Response:
+
+```jsonc
+{
+  "matched": true,
+  "actions": [{ "type": "mockResponse", "params": { "status": 200 } }],
+  "durationMs": 3,
+  "schemaValid": true,
+  "schemaErrors": null,
+  "error": null,
+  "trace": {
+    "ruleId": "",
+    "ruleVersion": 0,
+    "matched": true,
+    "actions": [{ "type": "mockResponse", "params": { "status": 200 } }],
+    "durationMs": 3,
+    "error": ""
+  }
+}
+```
+
+#### Fixture Storage
+
+Fixtures are saved as JSON files under `~/.chiling/fixtures/<name>.json`:
+
+```jsonc
+{
+  "name": "example-api-chat",
+  "createdAt": "2026-06-03T10:00:00Z",
+  "request": {
+    "method": "POST",
+    "scheme": "https",
+    "host": "api.example.com",
+    "path": "/v1/chat",
+    "query": "",
+    "url": "https://api.example.com/v1/chat",
+    "requestHeaders": {"content-type": "application/json"},
+    "requestBody": "{\"prompt\":\"hello\"}",
+    "responseHeaders": {"content-type": "application/json"},
+    "responseBody": "{\"reply\":\"hi\"}",
+    "status": 200,
+    "clientAddr": "127.0.0.1:54321"
+  }
+}
+```
+
+Body data is **inlined** (the BodyCache references are resolved at save time)
+so fixtures are self-contained and survive daemon restarts.
+
+Fixture API:
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/v1/fixtures` | Save a captured request as a fixture (`{ requestId, name }`) |
+| `GET` | `/v1/fixtures` | List saved fixtures |
+| `GET` | `/v1/fixtures/:name` | Get fixture detail (the full JSON) |
+| `DELETE` | `/v1/fixtures/:name` | Delete a fixture file |
+
+#### CLI Extensions
+
+New commands under the existing `chiling` binary:
+
+```
+chiling rules list [--json|--pretty]
+chiling rules create <file> [--name <name>] [--priority <n>]
+chiling rules get <id> [--json|--pretty]
+chiling rules enable <id>
+chiling rules disable <id>
+chiling rules delete <id>
+chiling rules test <rule-file> --fixture <name> [--json|--pretty]
+chiling rules fixture save <request-id> <name>
+chiling rules fixture list [--json|--pretty]
+chiling rules fixture delete <name>
+```
+
+The `rules test` command reads the JS file from disk, resolves the fixture
+reference via the daemon API, submits both to `POST /v1/rules/test`, and
+displays the result (JSON by default, pretty-printed with `--pretty`).
+
+#### Rule Evaluation in the Proxy Pipeline
+
+When a request arrives at the proxy:
+
+1. After creating the request record and reading the body, evaluate all
+   **enabled** rules in ascending priority order.
+2. Each rule receives an immutable snapshot of the request.
+3. All matching rules' actions are **accumulated** into a list.
+4. Conflicting actions for the same dimension (e.g., two `mockResponse`
+   results) are resolved by **last-matching-rule wins**.
+5. Action application order:
+   - `setRequestHeader` / `removeRequestHeader` mutate the upstream request.
+   - `rewriteURL` replaces the upstream URL.
+   - `block` / `mockResponse` short-circuit the upstream call (block wins if both present).
+   - `tag` updates the request record (union of all tag action tags).
+6. Every evaluation appends a `RuleTrace` to the request's `RuleTrace` slice.
+7. Relevant events (`rule_evaluated`, `rule_applied`) are emitted via EventHub.
+
+#### Testing Approach
+
+- **Rule engine unit tests**: Test Goja execution with valid scripts, schema
+  violations, script errors, timeout enforcement, and output size limits.
+- **API integration tests**: Test rule CRUD endpoints, fixture save/list/get/delete,
+  and the `rules/test` endpoint against mock fixtures.
+- **CLI smoke**: Run `chiling rules test` against a running daemon with a fixture.
+- **Goja sandbox verification**: Explicit tests that FS/network/process calls in
+  rule scripts are blocked.

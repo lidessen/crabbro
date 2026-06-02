@@ -30,12 +30,20 @@ type RuleTrace struct {
 type RuleActionType string
 
 const (
-	// ActionTag adds tags to the request record.
-	ActionTag RuleActionType = "tag"
+	// ActionAbort aborts the request without a response.
+	ActionAbort RuleActionType = "abort"
 	// ActionBlock aborts the request with a configured response.
 	ActionBlock RuleActionType = "block"
 	// ActionMockResponse replaces the upstream response with a synthetic one.
 	ActionMockResponse RuleActionType = "mockResponse"
+	// ActionRemoveRequestHeader removes a header from the proxied request.
+	ActionRemoveRequestHeader RuleActionType = "removeRequestHeader"
+	// ActionSetRequestHeader sets a header on the proxied request.
+	ActionSetRequestHeader RuleActionType = "setRequestHeader"
+	// ActionTag adds tags to the request record.
+	ActionTag RuleActionType = "tag"
+	// ActionRewriteURL changes the upstream URL before forwarding.
+	ActionRewriteURL RuleActionType = "rewriteURL"
 )
 
 // RuleAction is a declarative action returned by a rule evaluation.

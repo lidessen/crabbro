@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/lidessen/chiling/internal/ring"
+	"github.com/lidessen/chiling/internal/rule"
 	"github.com/lidessen/chiling/internal/shared"
 )
 
@@ -22,6 +23,8 @@ type Proxy struct {
 	RingBuffer  *ring.RequestBuffer
 	BodyCache   *BodyCache
 	EventHub    *EventHub
+	RuleStore  *rule.RuleStore
+	RuleEngine *rule.RuleEngine
 	ReadTimeout time.Duration
 
 	server    *http.Server
@@ -32,12 +35,14 @@ type Proxy struct {
 }
 
 // New creates a new Proxy with sensible defaults.
-func New(addr string, rb *ring.RequestBuffer) *Proxy {
+func New(addr string, rb *ring.RequestBuffer, ruleStore *rule.RuleStore, ruleEngine *rule.RuleEngine) *Proxy {
 	return &Proxy{
 		ListenAddr:  addr,
 		RingBuffer:  rb,
 		BodyCache:   NewBodyCache(shared.MaxBodyCacheBytes, shared.MaxBodySize),
 		EventHub:    NewEventHub(),
+		RuleStore:   ruleStore,
+		RuleEngine:  ruleEngine,
 		ReadTimeout: 30 * time.Second,
 	}
 }

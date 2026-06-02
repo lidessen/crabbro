@@ -12,8 +12,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lidessen/chiling/internal/fixture"
 	"github.com/lidessen/chiling/internal/proxy"
 	"github.com/lidessen/chiling/internal/ring"
+	"github.com/lidessen/chiling/internal/rule"
 	"github.com/lidessen/chiling/internal/shared"
 )
 
@@ -21,11 +23,14 @@ import (
 type Server struct {
 	UDS        string
 	TCPAddr    string
-	RingBuffer *ring.RequestBuffer
-	BodyCache  *proxy.BodyCache
-	EventHub   *proxy.EventHub
-	ProxyAddr  string
-	Version    string
+	RingBuffer   *ring.RequestBuffer
+	BodyCache    *proxy.BodyCache
+	EventHub     *proxy.EventHub
+	RuleStore    *rule.RuleStore
+	RuleEngine   *rule.RuleEngine
+	FixtureStore *fixture.FixtureStore
+	ProxyAddr    string
+	Version      string
 
 	// RequestCountFn returns the current number of proxied requests.
 	RequestCountFn func() int64
@@ -41,17 +46,20 @@ type Server struct {
 	tcpListener net.Listener
 }
 
-// New creates a new API server backed by the given proxy components.
-func New(uds string, tcpAddr string, rb *ring.RequestBuffer, bodyCache *proxy.BodyCache, eventHub *proxy.EventHub, proxyAddr string) *Server {
+// New creates a new API server backed by the given proxy and store components.
+func New(uds string, tcpAddr string, rb *ring.RequestBuffer, bodyCache *proxy.BodyCache, eventHub *proxy.EventHub, fixtureStore *fixture.FixtureStore, ruleStore *rule.RuleStore, ruleEngine *rule.RuleEngine, proxyAddr string) *Server {
 	s := &Server{
-		UDS:        uds,
-		TCPAddr:    tcpAddr,
-		RingBuffer: rb,
-		BodyCache:  bodyCache,
-		EventHub:   eventHub,
-		ProxyAddr:  proxyAddr,
-		Version:    "0.1.0",
-		mux:        http.NewServeMux(),
+		UDS:          uds,
+		TCPAddr:      tcpAddr,
+		RingBuffer:   rb,
+		BodyCache:    bodyCache,
+		EventHub:     eventHub,
+		RuleStore:    ruleStore,
+		RuleEngine:   ruleEngine,
+		FixtureStore: fixtureStore,
+		ProxyAddr:    proxyAddr,
+		Version:      "0.1.0",
+		mux:          http.NewServeMux(),
 	}
 	s.registerRoutes()
 	return s
@@ -68,6 +76,14 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/v1/events", s.handleEvents)
 	s.mux.HandleFunc("/v1/requests", s.handleRequests)
 	s.mux.HandleFunc("/v1/requests/", s.handleRequestDetail)
+	// Milestone 2: Rule routes — note: /v1/rules/test must be registered
+	// before /v1/rules/ to avoid the trailing-slash catch-all.
+	s.mux.HandleFunc("/v1/rules/test", s.handleRulesTest)
+	s.mux.HandleFunc("/v1/rules", s.handleRules)
+	s.mux.HandleFunc("/v1/rules/", s.handleRulesByID)
+
+	s.mux.HandleFunc("/v1/fixtures", s.handleFixturesListOrSave)
+	s.mux.HandleFunc("/v1/fixtures/", s.handleFixtureByName)
 
 	// Wrap with middleware: recovery (outermost) → logging → routes.
 	s.handler = wrapMiddleware(s.mux)

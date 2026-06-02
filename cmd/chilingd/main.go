@@ -12,8 +12,10 @@ import (
 	"syscall"
 
 	"github.com/lidessen/chiling/internal/api"
+	"github.com/lidessen/chiling/internal/fixture"
 	"github.com/lidessen/chiling/internal/proxy"
 	"github.com/lidessen/chiling/internal/ring"
+	"github.com/lidessen/chiling/internal/rule"
 	"github.com/lidessen/chiling/internal/shared"
 )
 
@@ -30,6 +32,7 @@ func run() error {
 	udsPath := flag.String("uds-path", shared.DefaultUDSPath, "Unix domain socket path for the control API")
 	tcpAddr := flag.String("tcp-addr", shared.DefaultTCPAddr, "TCP address for the control API")
 	ringSize := flag.Int("ring-buffer-size", shared.DefaultRingBufferCapacity, "Number of requests to keep in the ring buffer")
+	fixtureDir := flag.String("fixture-dir", "", "Directory for fixture storage (default ~/.chiling/fixtures/)")
 	flag.Parse()
 
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
@@ -41,19 +44,32 @@ func run() error {
 
 	// Create shared components.
 	rb := ring.NewRequestBuffer(*ringSize)
+	ruleStore := rule.NewRuleStore()
+	ruleEngine := rule.NewRuleEngine()
 
 	// Start proxy.
-	pxy := proxy.New(*proxyAddr, rb)
+	pxy := proxy.New(*proxyAddr, rb, ruleStore, ruleEngine)
 	if err := pxy.Start(); err != nil {
 		return fmt.Errorf("starting proxy: %w", err)
 	}
 	log.Printf("proxy listening on %s", pxy.Addr())
 
+	// Create stores.
+	fixtureStore, err := fixture.New(*fixtureDir)
+	if err != nil {
+		pxy.Stop()
+		return fmt.Errorf("creating fixture store: %w", err)
+	}
+	log.Printf("fixture store:  %s", fixtureStore.BaseDir())
+
+	// Use the rule store for the RuleCountFn.
+	ruleCountFn := ruleStore.Count
+
 	// Start control API.
-	apiSrv := api.New(*udsPath, *tcpAddr, rb, pxy.BodyCache, pxy.EventHub, pxy.Addr())
+	apiSrv := api.New(*udsPath, *tcpAddr, rb, pxy.BodyCache, pxy.EventHub, fixtureStore, ruleStore, ruleEngine, pxy.Addr())
 	apiSrv.Version = "0.1.0"
 	apiSrv.RequestCountFn = pxy.RequestCount
-	apiSrv.RuleCountFn = func() int { return 0 }
+	apiSrv.RuleCountFn = ruleCountFn
 
 	if err := apiSrv.Start(); err != nil {
 		pxy.Stop()

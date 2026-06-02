@@ -46,6 +46,8 @@ func run() error {
 		return cmdListen(cfg, flag.Args()[1:])
 	case "requests":
 		return cmdRequests(cfg, flag.Args()[1:])
+	case "rules":
+		return cmdRules(cfg, flag.Args()[1:])
 	case "help", "--help", "-h":
 		printUsage()
 		return nil
@@ -58,10 +60,22 @@ func printUsage() {
 	fmt.Println(`Usage: chiling <command> [options]
 
 Commands:
-  status              Show daemon status
-  listen              Subscribe to live events (SSE stream)
-  requests list       List captured requests
-  requests get <id>   Get a single request's details
+  status                    Show daemon status
+  listen                    Subscribe to live events (SSE stream)
+  requests list             List captured requests
+  requests get <id>         Get a single request's details
+  rules list                List rules
+  rules create <file>       Create a rule from a JS file
+  rules get <id>            Get a rule's details
+  rules enable <id>         Enable a rule
+  rules disable <id>        Disable a rule
+  rules delete <id>         Delete a rule
+  rules test <file>         Test a rule script against a fixture
+    --fixture <name>          Fixture name (required)
+    --pretty                  Human-readable output
+  rules fixture save ...    Save a captured request as a fixture
+  rules fixture list        List saved fixtures
+  rules fixture delete      Delete a fixture
 
 Global options:
   --uds-path    Unix domain socket path (default: ~/.chiling/proxy.sock)

@@ -68,8 +68,152 @@ func (p *Proxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// -----------------------------------------------------------------------
+	// Rule evaluation (Milestone 2)
+	// -----------------------------------------------------------------------
+	// Resolve request body for rule evaluation.
+	reqBodyStr := ""
+	if req.RequestBodyRef != "" {
+		if bc := p.BodyCache.Get(req.RequestBodyRef); bc != nil {
+			reqBodyStr = string(bc)
+		}
+	}
+
+	ra := p.evaluateRules(req, reqBodyStr, shared.DefaultRuleTimeout)
+
+	// Apply rule traces and tags.
+	if len(ra.Traces) > 0 {
+		req.RuleTrace = ra.Traces
+	}
+	if len(ra.Tags) > 0 {
+		req.Tags = append(req.Tags, ra.Tags...)
+	}
+
+	// Emit rule evaluation events.
+	for _, trace := range ra.Traces {
+		p.EventHub.Emit(&shared.Event{
+			Type:      shared.EventRuleEvaluated,
+			RequestID: req.ID,
+			Timestamp: time.Now(),
+			Payload: map[string]any{
+				"ruleId":  trace.RuleID,
+				"matched": trace.Matched,
+			},
+		})
+		if trace.Matched && len(trace.Actions) > 0 {
+			p.EventHub.Emit(&shared.Event{
+				Type:      shared.EventRuleApplied,
+				RequestID: req.ID,
+				Timestamp: time.Now(),
+				Payload: map[string]any{
+					"ruleId":  trace.RuleID,
+					"actions": trace.Actions,
+				},
+			})
+		}
+	}
+
+	// Handle short-circuit actions: abort, block, mockResponse.
+	if ra.AbortAction {
+		// Abort: don't send any response, just close.
+		now := time.Now()
+		req.CompletedAt = &now
+		req.DurationMs = time.Since(startTime).Milliseconds()
+		p.EventHub.Emit(&shared.Event{
+			Type:      shared.EventRequestFailed,
+			RequestID: req.ID,
+			Timestamp: now,
+			Payload:   map[string]string{"error": "request aborted by rule"},
+		})
+		return
+	}
+
+	if ra.BlockAction != nil {
+		status := 403
+		body := ""
+		if s, ok := ra.BlockAction.Params["status"].(int); ok {
+			status = s
+		}
+		if b, ok := ra.BlockAction.Params["body"].(string); ok {
+			body = b
+		}
+		now := time.Now()
+		req.CompletedAt = &now
+		req.Status = status
+		req.DurationMs = time.Since(startTime).Milliseconds()
+		p.EventHub.Emit(&shared.Event{
+			Type:      shared.EventResponseCompleted,
+			RequestID: req.ID,
+			Timestamp: now,
+		})
+		if body != "" {
+			w.Header().Set("Content-Type", "text/plain")
+			w.WriteHeader(status)
+			w.Write([]byte(body))
+		} else {
+			w.WriteHeader(status)
+		}
+		return
+	}
+
+	if ra.MockAction != nil {
+		status := 200
+		headers := map[string]string{}
+		body := ""
+		if s, ok := ra.MockAction.Params["status"].(int); ok {
+			status = s
+		}
+		if h, ok := ra.MockAction.Params["headers"].(map[string]string); ok {
+			headers = h
+		}
+		if b, ok := ra.MockAction.Params["body"].(string); ok {
+			body = b
+		}
+		now := time.Now()
+		req.CompletedAt = &now
+		req.Status = status
+		req.DurationMs = time.Since(startTime).Milliseconds()
+		p.EventHub.Emit(&shared.Event{
+			Type:      shared.EventResponseCompleted,
+			RequestID: req.ID,
+			Timestamp: now,
+		})
+		for k, v := range headers {
+			w.Header().Set(k, v)
+		}
+		w.WriteHeader(status)
+		if body != "" {
+			w.Write([]byte(body))
+		}
+		return
+	}
+
+	// Apply URL rewrite before building upstream request.
+	finalURL := urlStr
+	if ra.RewriteURL != nil {
+		finalURL = *ra.RewriteURL
+	}
+
+	// Update the request record URL if it was rewritten.
+	if ra.RewriteURL != nil {
+		req.URL = *ra.RewriteURL
+		// Try to update scheme/host/path/query from the new URL.
+		if parsedURL, err := url.Parse(*ra.RewriteURL); err == nil {
+			if parsedURL.Scheme != "" {
+				req.Scheme = parsedURL.Scheme
+			}
+			if parsedURL.Host != "" {
+				req.Host = parsedURL.Host
+			}
+			if parsedURL.Path != "" {
+				req.Path = parsedURL.Path
+			}
+			req.Query = parsedURL.RawQuery
+		}
+	}
+
 	// Build upstream request.
-	upstreamReq, err := http.NewRequest(r.Method, urlStr, nil)
+	upstreamReq, err := http.NewRequest(r.Method, finalURL, nil)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "failed to create upstream request")
 		return
@@ -83,6 +227,14 @@ func (p *Proxy) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		for _, hv := range v {
 			upstreamReq.Header.Add(k, hv)
 		}
+	}
+
+	// Apply rule header modifications.
+	for _, name := range ra.RemoveHeader {
+		upstreamReq.Header.Del(name)
+	}
+	for name, value := range ra.SetHeaders {
+		upstreamReq.Header.Set(name, value)
 	}
 
 	// Send upstream request.

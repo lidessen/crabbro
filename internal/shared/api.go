@@ -38,6 +38,114 @@ type RequestDetailResponse struct {
 }
 
 // ---------------------------------------------------------------------------
+// Rule types
+// ---------------------------------------------------------------------------
+
+// CreateRuleRequest is the body for POST /v1/rules.
+type CreateRuleRequest struct {
+	Name     string `json:"name,omitempty"`
+	Priority int    `json:"priority,omitempty"`
+	Script   string `json:"script"`
+}
+
+// UpdateRuleRequest is the body for PUT /v1/rules/:id.
+type UpdateRuleRequest struct {
+	Name     *string `json:"name,omitempty"`
+	Priority *int    `json:"priority,omitempty"`
+	Script   *string `json:"script,omitempty"`
+}
+
+// ToggleRuleRequest is the body for POST /v1/rules/:id/toggle.
+type ToggleRuleRequest struct {
+	Enabled bool `json:"enabled"`
+}
+
+// ListRulesResponse is returned by GET /v1/rules.
+type ListRulesResponse struct {
+	Rules []*Rule `json:"rules"`
+}
+
+// GetRuleResponse is returned by GET /v1/rules/:id.
+type GetRuleResponse struct {
+	Rule Rule `json:"rule"`
+}
+
+// ---------------------------------------------------------------------------
+// Fixture types
+// ---------------------------------------------------------------------------
+
+// CreateFixtureRequest is the body for POST /v1/fixtures.
+type CreateFixtureRequest struct {
+	RequestID RequestID `json:"requestId"`
+	Name      string    `json:"name"`
+}
+
+// ListFixturesResponse is returned by GET /v1/fixtures.
+type ListFixturesResponse struct {
+	Fixtures []FixtureSummary `json:"fixtures"`
+}
+
+// FixtureSummary is a lightweight view of a fixture used in list responses.
+type FixtureSummary struct {
+	Name      string `json:"name"`
+	CreatedAt string `json:"createdAt"`
+	Method    string `json:"method"`
+	Host      string `json:"host"`
+	Path      string `json:"path"`
+}
+
+// GetFixtureResponse is returned by GET /v1/fixtures/:name.
+type GetFixtureResponse struct {
+	Fixture FixtureDetail `json:"fixture"`
+}
+
+// FixtureDetail is the full fixture data returned by GET /v1/fixtures/:name.
+type FixtureDetail struct {
+	Name      string         `json:"name"`
+	CreatedAt string         `json:"createdAt"`
+	Request   FixtureRequest `json:"request"`
+}
+
+// FixtureRequest captures the HTTP request and response fields of an exchange.
+type FixtureRequest struct {
+	Method          string            `json:"method"`
+	Scheme          string            `json:"scheme"`
+	Host            string            `json:"host"`
+	Path            string            `json:"path"`
+	Query           string            `json:"query"`
+	URL             string            `json:"url"`
+	RequestHeaders  map[string]string `json:"requestHeaders"`
+	RequestBody     string            `json:"requestBody,omitempty"`
+	ResponseHeaders map[string]string `json:"responseHeaders,omitempty"`
+	ResponseBody    string            `json:"responseBody,omitempty"`
+	Status          int               `json:"status,omitempty"`
+	ClientAddr      string            `json:"clientAddr"`
+}
+
+// ---------------------------------------------------------------------------
+// Rule test types
+// ---------------------------------------------------------------------------
+
+// TestRuleRequest is the body for POST /v1/rules/test.
+type TestRuleRequest struct {
+	RuleScript   string `json:"ruleScript"`
+	Fixture      string `json:"fixture,omitempty"`
+	FixtureID    string `json:"fixtureId,omitempty"`
+	FixtureFile  string `json:"fixtureFile,omitempty"`
+}
+
+// TestRuleResponse is returned by POST /v1/rules/test.
+type TestRuleResponse struct {
+	Matched     bool          `json:"matched"`
+	Actions     []RuleAction  `json:"actions,omitempty"`
+	DurationMs  int64         `json:"durationMs"`
+	SchemaValid bool          `json:"schemaValid"`
+	SchemaErrs  []string      `json:"schemaErrors,omitempty"`
+	Error       string        `json:"error,omitempty"`
+	Trace       RuleTrace     `json:"trace"`
+}
+
+// ---------------------------------------------------------------------------
 // Error types
 // ---------------------------------------------------------------------------
 
