@@ -48,6 +48,8 @@ func run() error {
 		return cmdRequests(cfg, flag.Args()[1:])
 	case "rules":
 		return cmdRules(cfg, flag.Args()[1:])
+	case "mitm":
+		return cmdMITM(cfg, flag.Args()[1:])
 	case "help", "--help", "-h":
 		printUsage()
 		return nil
@@ -76,6 +78,16 @@ Commands:
   rules fixture save ...    Save a captured request as a fixture
   rules fixture list        List saved fixtures
   rules fixture delete      Delete a fixture
+t  mitm enable               Enable HTTPS MITM interception
+t  mitm disable              Disable HTTPS MITM interception
+t  mitm status               Show MITM status and domain patterns
+t  mitm cert [--output <f>]  Download the root CA certificate
+t  mitm allow list           List allowed domain patterns
+t  mitm allow add <pattern>  Add a domain to the allowlist
+t  mitm allow remove <pat>   Remove a domain from the allowlist
+t  mitm deny list            List denied domain patterns
+t  mitm deny add <pattern>   Add a domain to the denylist
+t  mitm deny remove <pat>    Remove a domain from the denylist
 
 Global options:
   --uds-path    Unix domain socket path (default: ~/.chiling/proxy.sock)

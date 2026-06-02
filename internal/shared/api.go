@@ -6,11 +6,13 @@ package shared
 
 // StatusResponse is returned by GET /v1/status.
 type StatusResponse struct {
-	Version       string `json:"version"`
-	UptimeSeconds int64  `json:"uptimeSeconds"`
-	ProxyAddr     string `json:"proxyAddr"`
-	RequestCount  int64  `json:"requestCount"`
-	RuleCount     int    `json:"ruleCount"`
+	Version          string `json:"version"`
+	UptimeSeconds    int64  `json:"uptimeSeconds"`
+	ProxyAddr        string `json:"proxyAddr"`
+	RequestCount     int64  `json:"requestCount"`
+	RuleCount        int    `json:"ruleCount"`
+	MITMEnabled      bool   `json:"mitmEnabled"`
+	MITMCertInstalled bool  `json:"mitmCertInstalled"`
 }
 
 // ListRequestsResponse is returned by GET /v1/requests.
@@ -165,6 +167,23 @@ type ErrorBody struct {
 type ErrorDetail struct {
 	Field   string `json:"field"`
 	Message string `json:"message"`
+}
+
+// ---------------------------------------------------------------------------
+// MITM types
+// ---------------------------------------------------------------------------
+
+// MITMStatusResponse is returned by GET /v1/mitm/status.
+type MITMStatusResponse struct {
+	Enabled       bool     `json:"enabled"`
+	CertInstalled bool     `json:"certInstalled"`
+	AllowPatterns []string `json:"allowPatterns,omitempty"`
+	DenyPatterns  []string `json:"denyPatterns,omitempty"`
+}
+
+// MITMDomainRequest is the body for POST /v1/mitm/allow and POST /v1/mitm/deny.
+type MITMDomainRequest struct {
+	Pattern string `json:"pattern"`
 }
 
 // Standard error codes.

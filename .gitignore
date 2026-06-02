@@ -6,3 +6,6 @@
 # go
 *.out
 coverage.*
+
+# agent worker scratch
+/.claude/

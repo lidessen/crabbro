@@ -25,6 +25,11 @@ const (
 	EventResponseCompleted EventType = "response_completed"
 	// EventRequestFailed is emitted when the exchange ends with an error.
 	EventRequestFailed EventType = "request_failed"
+
+	// EventMITMEnabled is emitted when MITM is enabled on the daemon.
+	EventMITMEnabled EventType = "mitm_enabled"
+	// EventMITMDisabled is emitted when MITM is disabled on the daemon.
+	EventMITMDisabled EventType = "mitm_disabled"
 )
 
 // Event is a structured observation emitted by the daemon. Events are

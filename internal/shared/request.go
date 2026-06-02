@@ -29,6 +29,10 @@ type Request struct {
 	ClientAddr      string      `json:"clientAddr"`
 	RuleTrace       []RuleTrace `json:"ruleTrace,omitempty"`
 	Tags            []string    `json:"tags,omitempty"`
+
+	// Intercepted is true when the request was MITM-decrypted (as opposed to a
+	// raw TCP CONNECT tunnel passthrough).
+	Intercepted bool `json:"intercepted,omitempty"`
 }
 
 // Headers is a map of header name to its first value.

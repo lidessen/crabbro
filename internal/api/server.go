@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/lidessen/chiling/internal/fixture"
+	"github.com/lidessen/chiling/internal/mitm"
 	"github.com/lidessen/chiling/internal/proxy"
 	"github.com/lidessen/chiling/internal/ring"
 	"github.com/lidessen/chiling/internal/rule"
@@ -37,6 +38,9 @@ type Server struct {
 	// RuleCountFn returns the current number of registered rules.
 	RuleCountFn func() int
 
+	// MITMHandler is optional — if set, MITM control endpoints are registered.
+	MITMHandler *mitm.MITMHandler
+
 	httpServer  *http.Server
 	mux         *http.ServeMux
 	handler     http.Handler // middleware-wrapped handler used by http.Server and ServeHTTP
@@ -47,7 +51,8 @@ type Server struct {
 }
 
 // New creates a new API server backed by the given proxy and store components.
-func New(uds string, tcpAddr string, rb *ring.RequestBuffer, bodyCache *proxy.BodyCache, eventHub *proxy.EventHub, fixtureStore *fixture.FixtureStore, ruleStore *rule.RuleStore, ruleEngine *rule.RuleEngine, proxyAddr string) *Server {
+// If mitmHandler is non-nil, MITM control routes are registered during construction.
+func New(uds string, tcpAddr string, rb *ring.RequestBuffer, bodyCache *proxy.BodyCache, eventHub *proxy.EventHub, fixtureStore *fixture.FixtureStore, ruleStore *rule.RuleStore, ruleEngine *rule.RuleEngine, proxyAddr string, mitmHandler *mitm.MITMHandler) *Server {
 	s := &Server{
 		UDS:          uds,
 		TCPAddr:      tcpAddr,
@@ -59,6 +64,7 @@ func New(uds string, tcpAddr string, rb *ring.RequestBuffer, bodyCache *proxy.Bo
 		FixtureStore: fixtureStore,
 		ProxyAddr:    proxyAddr,
 		Version:      "0.1.0",
+		MITMHandler:  mitmHandler,
 		mux:          http.NewServeMux(),
 	}
 	s.registerRoutes()
@@ -84,6 +90,16 @@ func (s *Server) registerRoutes() {
 
 	s.mux.HandleFunc("/v1/fixtures", s.handleFixturesListOrSave)
 	s.mux.HandleFunc("/v1/fixtures/", s.handleFixtureByName)
+
+	// Milestone 3: MITM routes (registered only when a MITMHandler is set).
+	if s.MITMHandler != nil {
+		s.mux.HandleFunc("/v1/mitm/enable", s.handleMITMEnable)
+		s.mux.HandleFunc("/v1/mitm/disable", s.handleMITMDisable)
+		s.mux.HandleFunc("/v1/mitm/status", s.handleMITMStatus)
+		s.mux.HandleFunc("/v1/mitm/cert", s.handleMITMCert)
+		s.mux.HandleFunc("/v1/mitm/allow", s.handleMITMAllow)
+		s.mux.HandleFunc("/v1/mitm/deny", s.handleMITMDeny)
+	}
 
 	// Wrap with middleware: recovery (outermost) → logging → routes.
 	s.handler = wrapMiddleware(s.mux)

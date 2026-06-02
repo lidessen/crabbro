@@ -4,6 +4,7 @@ package proxy
 
 import (
 	"context"
+	"crypto/tls"
 	"log"
 	"net"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/lidessen/chiling/internal/mitm"
 	"github.com/lidessen/chiling/internal/ring"
 	"github.com/lidessen/chiling/internal/rule"
 	"github.com/lidessen/chiling/internal/shared"
@@ -26,6 +28,14 @@ type Proxy struct {
 	RuleStore  *rule.RuleStore
 	RuleEngine *rule.RuleEngine
 	ReadTimeout time.Duration
+
+	// MITM fields (optional — nil means MITM is unavailable).
+	MITMHandler *mitm.MITMHandler
+	MITMEnabled bool
+
+	// DialTLS allows injecting a custom TLS dialer for upstream connections
+	// in tests. If nil, tls.DialWithDialer is used with server name verification.
+	DialTLS func(dialer *net.Dialer, network, addr string, config *tls.Config) (*tls.Conn, error)
 
 	server    *http.Server
 	listener  net.Listener
@@ -57,11 +67,8 @@ func (p *Proxy) Start() error {
 		if err != nil {
 			return
 		}
-		mux := http.NewServeMux()
-		mux.HandleFunc("/", p.handleProxy)
-
 		p.server = &http.Server{
-			Handler:     mux,
+			Handler:     http.HandlerFunc(p.handleProxy),
 			ReadTimeout: p.ReadTimeout,
 		}
 		go func() {

@@ -692,3 +692,277 @@ When a request arrives at the proxy:
 - **CLI smoke**: Run `chiling rules test` against a running daemon with a fixture.
 - **Goja sandbox verification**: Explicit tests that FS/network/process calls in
   rule scripts are blocked.
+
+## Additional Events (Second Slice)
+
+The following event types are added in Milestone 3 for daemon-scoped configuration
+changes. Unlike request-scoped events, they carry no `requestId`.
+
+| Event Type | Payload | Description |
+|---|---|---|
+| `mitm_enabled` | `{}` | Emitted when MITM is enabled |
+| `mitm_disabled` | `{}` | Emitted when MITM is disabled |
+
+---
+
+### Milestone 3: HTTPS MITM
+
+The following decisions extend the design for Milestone 3 (HTTPS MITM). These
+address certificate generation and lifecycle, TLS interception, domain filtering,
+configuration, and the control API surface.
+
+#### Pre-Mortem — Why the Selected Approach Could Fail
+
+The preferred approach is **built-in Go `crypto/tls`** for all TLS operations
+(CA generation, host cert generation, client-side and server-side TLS). Before
+detailing the decisions, the pre-mortem for this approach:
+
+- **Certificate chain issues**: Some clients or servers may reject generated certs
+  if the chain is incomplete or the root CA is not in the system trust store.
+  *Mitigation:* Always emit a complete chain, document `install-ca` as a required
+  step, test against common clients (curl, browsers, Go HTTP client).
+- **Performance**: Generating an RSA 2048-bit leaf cert per host on first
+  connection introduces ~50–200ms latency. *Mitigation:* LRU in-memory cache
+  (max 1000 entries) so each host pays this cost once per daemon lifetime.
+- **TLS version mismatch**: Go's default TLS 1.2/1.3 config may not match what
+  every upstream expects. *Mitigation:* Use Go's defaults (TLS 1.2+), which are
+  broadly compatible. Document known-incompatible origins.
+- **Memory growth**: Cert cache and per-connection buffers could accumulate.
+  *Mitigation:* LRU eviction at 1000 entries, bounded TLS record buffers.
+- **Platform trust-store variance**: Installing a root CA requires different
+  commands per OS. *Mitigation:* Support macOS and Linux in the MVP; document
+  the manual install path for other platforms.
+
+#### Package Layout
+
+A new Go package `internal/mitm` with:
+
+| File | Responsibility |
+|---|---|
+| `ca.go` | Root CA generation (`GenerateCA`), PEM serialization, file load/save |
+| `certgen.go` | Host certificate generation (`GenerateHostCert`), LRU cache (`CertManager`) |
+| `intercept.go` | TLS interception handler — the MITM proxy loop |
+| `config.go` | Allowlist/denylist types with pattern matching (`DomainMatcher`) |
+
+#### Certificate Authority
+
+- Root CA generated using Go's `crypto/rand`, `crypto/rsa` (2048-bit), and
+  `crypto/x509` — **no external dependencies**.
+- CA certificate stored as PEM at `~/.chiling/certs/rootCA.pem`.
+- CA private key stored as PEM at `~/.chiling/certs/rootCA-key.pem`.
+- CA is generated **once** on first `--mitm` launch. On subsequent starts the
+  existing files are loaded (the key is reused so host certs signed in a prior
+  session are still valid if cached — though in MVP the host cert cache is
+  in-memory only, so this is for future persistence).
+- Cert directory `~/.chiling/certs/` created with `0700` on first start.
+- CA cert attributes:
+  - Validity: 10 years from generation.
+  - `BasicConstraints`: `CA: true`.
+  - `KeyUsage`: `CertSign`, `DigitalSignature`.
+  - Subject `CN`: `"chiling root CA"`.
+  - `IsCA`: `true`.
+
+#### Per-Host Certificate Generation
+
+- On first MITM connection to a new host, a leaf cert is generated on demand
+  signed by the root CA.
+- Leaf cert attributes:
+  - `Subject CN`: the target hostname (e.g. `api.example.com`).
+  - `DNSNames` SAN: `[hostname]` (exactly one entry).
+  - Key: ephemeral 2048-bit RSA (generated fresh per leaf).
+  - Signature: SHA-256 with RSA.
+  - Validity: 1 year from generation.
+- Leaf certs are cached in an **in-memory LRU map** (max 1000 entries, protected
+  by `sync.RWMutex`).
+- Cache is **not persisted** to disk in this milestone — lost on daemon restart.
+- Cache key: hostname string (lowercased). Collisions are impossible since each
+  hostname maps to exactly one cert.
+
+#### Certificate Installation (CLI)
+
+The `chiling mitm install-ca` command copies the root CA into the OS trust store.
+
+- **macOS**: `security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ~/.chiling/certs/rootCA.pem`
+- **Linux**: copy to `/usr/local/share/ca-certificates/chiling-root.crt` then
+  `update-ca-certificates`
+- **Behavior**: The command prints the exact command(s) it will run, then runs
+  them with `sudo` if needed. Failure is reported (non-fatal — the user can
+  install manually).
+- **Tracking**: The daemon exposes a `mitmCertInstalled` boolean in status. In
+  the MVP this is set by the CLI after a successful install (not auto-detected).
+
+#### MITM TLS Interception Flow
+
+The existing `handleConnect` in `internal/proxy` is extended with a branch:
+
+1. CONNECT request arrives for `host:port`.
+2. MITM gate check: is MITM enabled? Does `host` pass allowlist/denylist?
+3. **If MITM does not apply**: fall through to the existing TCP tunnel behavior
+   (unchanged passthrough).
+4. **If MITM applies**:
+
+   a. **Upstream connection**: Dial `host:port` via TCP, then perform a TLS
+      client handshake (the proxy acts as a TLS client to the real server).
+      The TLS config uses Go's defaults with `ServerName` set to the hostname.
+
+   b. **Client handshake**: Retrieve (or generate) a host-specific cert from
+      the `CertManager`. Perform a TLS server handshake with the local client,
+      presenting the host cert. Now the proxy has two `*tls.Conn` connections:
+      one decrypted (client side) and one encrypted (upstream side).
+
+   c. **Request loop**: Read HTTP/1.1 requests from the decrypted client
+      connection using Go's `http.ReadRequest` in a loop (`bufio.Reader`).
+
+   d. For each decrypted HTTP request:
+
+      i. **Create a request record** with `Method`, `Scheme: "https"`,
+         `Host`, `Path`, `Query`, `URL` all populated from the decrypted
+         request. `Intercepted: true` is set on the record.
+
+      ii. **Capture and cache** the request body (same BodyCache as HTTP path).
+
+      iii. **Evaluate rules** against the decrypted request (same
+           `evaluateRules` path as HTTP handler).
+
+      iv. **Forward** the request to the upstream TLS connection, reading
+          headers, handling rule-applied header modifications, and sending
+          the body.
+
+      v. **Read the upstream response** from the upstream TLS connection.
+
+      vi. **Capture response** metadata and body, emit events.
+
+      vii. **Write the response** back to the client over the decrypted
+           TLS connection.
+
+      viii. **Complete the request record** (set `CompletedAt`, `DurationMs`,
+            `Status`, emit `response_completed`).
+
+   e. On client disconnect, stream error, or timeout: close both TLS
+      connections and exit the loop.
+
+5. **Request records created** during interception:
+   - A CONNECT record is still created for the tunnel itself (marked
+     `Intercepted: true`).
+   - Each HTTP exchange within the tunnel gets its own request record (also
+     `Intercepted: true`).
+
+#### HTTP Version Handling
+
+- **HTTP/1.1 only** in this milestone. The request loop handles one request at
+  a time (no pipelining — each request is fully processed before reading the
+  next). `Connection: keep-alive` is respected for the client connection.
+- **HTTP/2** is deferred. If the client attempts HTTP/2 via ALPN, the proxy
+  cannot inspect it. The proxy's server-side TLS config does not advertise
+  HTTP/2 ALPN, so the client falls back to HTTP/1.1. Upstream HTTP/2 responses
+  are accepted and forwarded as HTTP/1.1 to the client (Go's TLS client
+  negotiates HTTP/2 automatically with the upstream; the response bytes are
+  streamed back through the HTTP/1.1 connection).
+
+#### Domain Allowlist and Denylist
+
+Two independent lists of domain patterns:
+
+```go
+type DomainMatcher struct {
+    mu       sync.RWMutex
+    patterns []string // each may contain * wildcards
+}
+```
+
+- **Pattern format**: Each pattern is a domain string. `*` matches any sequence
+  of characters except `.`. So `*.example.com` matches `a.example.com` but not
+  `a.b.example.com`. A bare `*` matches all domains.
+- **Denylist takes precedence**: If a host matches the denylist, MITM is
+  skipped regardless of the allowlist.
+- **Empty allowlist** (nil/empty slice) = MITM permitted for all domains
+  (subject to denylist).
+- **Non-empty allowlist** = MITM only for matching domains.
+- Matching is case-insensitive. The host part only (port is stripped).
+- Pattern lists are mutable at runtime via the control API.
+
+#### Configuration and Lifecycle
+
+- MITM is **disabled by default** (opt-in).
+- **Startup flags** on `chilingd`:
+  - `--mitm`: Enable MITM on startup.
+  - `--mitm-allow <pattern>`: Add an allowlist entry (repeatable).
+  - `--mitm-deny <pattern>`: Add a denylist entry (repeatable).
+- **Runtime control** via the control API (see routes below). Toggling MITM
+  at runtime affects new connections only; existing intercepted tunnels
+  continue until the client disconnects.
+
+#### Control API Routes
+
+New routes under `/v1/mitm/`:
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/v1/mitm` | Return MITM status: `{ enabled, certInstalled, allowCount, denyCount }` |
+| `POST` | `/v1/mitm/enable` | Enable MITM (body: `{}`). Emits `mitm_enabled` event. |
+| `POST` | `/v1/mitm/disable` | Disable MITM. Emits `mitm_disabled` event. |
+| `GET` | `/v1/mitm/ca` | Return root CA PEM as `application/x-pem-file` |
+| `POST` | `/v1/mitm/allow` | Add to allowlist: `{ "pattern": "*.example.com" }` |
+| `POST` | `/v1/mitm/deny` | Add to denylist: `{ "pattern": "*.example.com" }` |
+| `DELETE` | `/v1/mitm/allow` | Remove from allowlist: `{ "pattern": "*.example.com" }` |
+| `DELETE` | `/v1/mitm/deny` | Remove from denylist: `{ "pattern": "*.example.com" }` |
+
+#### Status Response Extension
+
+`/v1/status` response gains two fields:
+
+```jsonc
+{
+  "mitmEnabled": false,
+  "mitmCertInstalled": false,
+  // … existing fields unchanged
+}
+```
+
+#### Request Model Extension
+
+A new boolean field on `shared.Request`:
+
+```go
+// Intercepted is true when the request was MITM-decrypted (as opposed to a
+// raw TCP CONNECT tunnel passthrough).
+Intercepted bool `json:"intercepted,omitempty"`
+```
+
+#### CLI Commands
+
+```text
+chiling mitm status [--json|--pretty]
+chiling mitm enable
+chiling mitm disable
+chiling mitm install-ca
+chiling mitm allow <pattern>
+chiling mitm deny <pattern>
+chiling mitm allow rm <pattern>
+chiling mitm deny rm <pattern>
+```
+
+All MITM commands communicate with the daemon's control API (same as `status`,
+`requests`, `rules`).
+
+#### Testing Approach
+
+| Layer | Scope |
+|---|---|
+| **CA unit tests** | `GenerateCA` produces a valid cert+key pair; cert is self-signed; PEM round-trip |
+| **Cert generation tests** | `GenerateHostCert` produces a cert valid for the given hostname; signature verifies against CA |
+| **Domain matcher tests** | Allowlist/denylist matching with exact, wildcard, and empty patterns |
+| **MITM integration test** | Start daemon with MITM, connect via HTTPS (using the generated CA), verify decrypted request is captured, bodies are readable |
+| **Rule interaction test** | Rule (e.g., `mockResponse`) applied to a decrypted HTTPS request returns the mock, not the real upstream response |
+| **Allow/deny test** | Domains in denylist pass through as opaque tunnels; allowlist correctly restricts MITM scope |
+
+#### Deferred (Future Milestones)
+
+| Feature | Reason |
+|---|---|
+| HTTP/2 MITM | Requires HTTP/2 frame parsing or Go's `golang.org/x/net/http2`; keep MVP on HTTP/1.1 only |
+| Response-stage rule evaluation | Intercepted exchanges still only run request-stage rules; response rules added when the rule engine supports response-stage evaluation |
+| Persistent host cert cache | Regenerating on restart is fast enough for MVP; persisted cache adds complexity of disk format and staleness checks |
+| Automatic CA rotation | 10-year validity makes this low urgency for a dev tool |
+| OCSP stapling | Adds significant complexity for unlikely-before-2030 benefit in a local proxy |
+| Certificate transparency bypass | Not needed for developer proxy use cases |

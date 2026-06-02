@@ -37,6 +37,11 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		RequestCount:  requestCount,
 		RuleCount:     ruleCount,
 	}
+
+	if s.MITMHandler != nil {
+		resp.MITMEnabled = s.MITMHandler.Enabled()
+		resp.MITMCertInstalled = s.MITMHandler.CertInstalled()
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -635,5 +640,167 @@ func parseIncludeParam(val string) map[string]bool {
 		}
 	}
 	return result
+}
+
+// ---------------------------------------------------------------------------
+// MITM handlers (Milestone 3)
+// ---------------------------------------------------------------------------
+
+// handleMITMEnable responds to POST /v1/mitm/enable.
+func (s *Server) handleMITMEnable(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, shared.ErrCodeBadRequest, "method not allowed")
+		return
+	}
+	if s.MITMHandler == nil {
+		writeError(w, http.StatusNotFound, shared.ErrCodeNotFound, "MITM not configured")
+		return
+	}
+	s.MITMHandler.SetEnabled(true)
+	s.EventHub.Emit(&shared.Event{
+		Type:      shared.EventMITMEnabled,
+		Timestamp: time.Now(),
+	})
+	writeJSON(w, http.StatusOK, map[string]bool{"enabled": true})
+}
+
+// handleMITMDisable responds to POST /v1/mitm/disable.
+func (s *Server) handleMITMDisable(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, shared.ErrCodeBadRequest, "method not allowed")
+		return
+	}
+	if s.MITMHandler == nil {
+		writeError(w, http.StatusNotFound, shared.ErrCodeNotFound, "MITM not configured")
+		return
+	}
+	s.MITMHandler.SetEnabled(false)
+	s.EventHub.Emit(&shared.Event{
+		Type:      shared.EventMITMDisabled,
+		Timestamp: time.Now(),
+	})
+	writeJSON(w, http.StatusOK, map[string]bool{"enabled": false})
+}
+
+// handleMITMStatus responds to GET /v1/mitm/status.
+func (s *Server) handleMITMStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, shared.ErrCodeBadRequest, "method not allowed")
+		return
+	}
+	if s.MITMHandler == nil {
+		writeError(w, http.StatusNotFound, shared.ErrCodeNotFound, "MITM not configured")
+		return
+	}
+	resp := shared.MITMStatusResponse{
+		Enabled:       s.MITMHandler.Enabled(),
+		CertInstalled: s.MITMHandler.CertInstalled(),
+		AllowPatterns: s.MITMHandler.Matcher.AllowPatterns(),
+		DenyPatterns:  s.MITMHandler.Matcher.DenyPatterns(),
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleMITMCert responds to GET /v1/mitm/cert.
+func (s *Server) handleMITMCert(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, shared.ErrCodeBadRequest, "method not allowed")
+		return
+	}
+	if s.MITMHandler == nil {
+		writeError(w, http.StatusNotFound, shared.ErrCodeNotFound, "MITM not configured")
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-pem-file")
+	w.Header().Set("Content-Disposition", "attachment; filename=rootCA.pem")
+	w.Write(s.MITMHandler.GetCertPEM())
+}
+
+// handleMITMAllow responds to POST/GET/DELETE /v1/mitm/allow.
+func (s *Server) handleMITMAllow(w http.ResponseWriter, r *http.Request) {
+	if s.MITMHandler == nil {
+		writeError(w, http.StatusNotFound, shared.ErrCodeNotFound, "MITM not configured")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		patterns := s.MITMHandler.Matcher.AllowPatterns()
+		if patterns == nil {
+			patterns = []string{}
+		}
+		writeJSON(w, http.StatusOK, map[string][]string{"patterns": patterns})
+
+	case http.MethodPost:
+		var req shared.MITMDomainRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, shared.ErrCodeBadRequest, "invalid JSON body",
+				shared.ErrorDetail{Field: "body", Message: "expected JSON with pattern field"})
+			return
+		}
+		if req.Pattern == "" {
+			writeError(w, http.StatusBadRequest, shared.ErrCodeBadRequest, "pattern is required",
+				shared.ErrorDetail{Field: "pattern", Message: "must be a non-empty string"})
+			return
+		}
+		s.MITMHandler.Matcher.AddAllow(req.Pattern)
+		writeJSON(w, http.StatusOK, map[string]string{"pattern": req.Pattern, "action": "added"})
+
+	case http.MethodDelete:
+		pattern := r.URL.Query().Get("pattern")
+		if pattern == "" {
+			writeError(w, http.StatusBadRequest, shared.ErrCodeBadRequest, "pattern query parameter is required")
+			return
+		}
+		s.MITMHandler.Matcher.RemoveAllow(pattern)
+		writeJSON(w, http.StatusOK, map[string]string{"pattern": pattern, "action": "removed"})
+
+	default:
+		writeError(w, http.StatusMethodNotAllowed, shared.ErrCodeBadRequest, "method not allowed")
+	}
+}
+
+// handleMITMDeny responds to POST/GET/DELETE /v1/mitm/deny.
+func (s *Server) handleMITMDeny(w http.ResponseWriter, r *http.Request) {
+	if s.MITMHandler == nil {
+		writeError(w, http.StatusNotFound, shared.ErrCodeNotFound, "MITM not configured")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		patterns := s.MITMHandler.Matcher.DenyPatterns()
+		if patterns == nil {
+			patterns = []string{}
+		}
+		writeJSON(w, http.StatusOK, map[string][]string{"patterns": patterns})
+
+	case http.MethodPost:
+		var req shared.MITMDomainRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, shared.ErrCodeBadRequest, "invalid JSON body",
+				shared.ErrorDetail{Field: "body", Message: "expected JSON with pattern field"})
+			return
+		}
+		if req.Pattern == "" {
+			writeError(w, http.StatusBadRequest, shared.ErrCodeBadRequest, "pattern is required",
+				shared.ErrorDetail{Field: "pattern", Message: "must be a non-empty string"})
+			return
+		}
+		s.MITMHandler.Matcher.AddDeny(req.Pattern)
+		writeJSON(w, http.StatusOK, map[string]string{"pattern": req.Pattern, "action": "added"})
+
+	case http.MethodDelete:
+		pattern := r.URL.Query().Get("pattern")
+		if pattern == "" {
+			writeError(w, http.StatusBadRequest, shared.ErrCodeBadRequest, "pattern query parameter is required")
+			return
+		}
+		s.MITMHandler.Matcher.RemoveDeny(pattern)
+		writeJSON(w, http.StatusOK, map[string]string{"pattern": pattern, "action": "removed"})
+
+	default:
+		writeError(w, http.StatusMethodNotAllowed, shared.ErrCodeBadRequest, "method not allowed")
+	}
 }
 
