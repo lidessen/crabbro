@@ -42,6 +42,8 @@ func run() error {
 	switch cmd {
 	case "status":
 		return cmdStatus(cfg, flag.Args()[1:])
+	case "doctor":
+		return cmdDoctor(cfg, flag.Args()[1:])
 	case "listen":
 		return cmdListen(cfg, flag.Args()[1:])
 	case "requests":
@@ -63,6 +65,9 @@ func printUsage() {
 
 Commands:
   status                    Show daemon status
+  doctor                    Check system setup and diagnose issues
+    --fix                     Attempt to fix detected issues
+    --pretty                  Human-readable output
   listen                    Subscribe to live events (SSE stream)
   requests list             List captured requests
   requests get <id>         Get a single request's details
@@ -78,16 +83,18 @@ Commands:
   rules fixture save ...    Save a captured request as a fixture
   rules fixture list        List saved fixtures
   rules fixture delete      Delete a fixture
-t  mitm enable               Enable HTTPS MITM interception
-t  mitm disable              Disable HTTPS MITM interception
-t  mitm status               Show MITM status and domain patterns
-t  mitm cert [--output <f>]  Download the root CA certificate
-t  mitm allow list           List allowed domain patterns
-t  mitm allow add <pattern>  Add a domain to the allowlist
-t  mitm allow remove <pat>   Remove a domain from the allowlist
-t  mitm deny list            List denied domain patterns
-t  mitm deny add <pattern>   Add a domain to the denylist
-t  mitm deny remove <pat>    Remove a domain from the denylist
+  mitm enable               Enable HTTPS MITM interception
+  mitm disable              Disable HTTPS MITM interception
+  mitm status               Show MITM status and domain patterns
+  mitm cert [--output <f>]  Download the root CA certificate
+  mitm install-ca           Install the root CA into the system trust store
+  mitm uninstall-ca         Remove the root CA from the system trust store
+  mitm allow list           List allowed domain patterns
+  mitm allow add <pattern>  Add a domain to the allowlist
+  mitm allow remove <pat>   Remove a domain from the allowlist
+  mitm deny list            List denied domain patterns
+  mitm deny add <pattern>   Add a domain to the denylist
+  mitm deny remove <pat>    Remove a domain from the denylist
 
 Global options:
   --uds-path    Unix domain socket path (default: ~/.chiling/proxy.sock)

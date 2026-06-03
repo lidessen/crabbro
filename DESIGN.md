@@ -966,3 +966,172 @@ All MITM commands communicate with the daemon's control API (same as `status`,
 | Automatic CA rotation | 10-year validity makes this low urgency for a dev tool |
 | OCSP stapling | Adds significant complexity for unlikely-before-2030 benefit in a local proxy |
 | Certificate transparency bypass | Not needed for developer proxy use cases |
+
+---
+
+### Milestone 4: MVP Connectivity (Setup, Doctor, Proxy Wiring)
+
+The following decisions close the gap between the implemented MITM infrastructure and a
+working end-to-end operator experience. They were identified during the MVP design
+review (task_4babbed2-cb2e-4193-9ce2-d62c1c8b6dba).
+
+#### Pre-Mortem — Why This Plan Could Fail
+
+The preferred approach is **direct field assignment** for MITM proxy wiring and
+**OS-native command execution** for CA install/uninstall. Pre-mortem:
+
+- **Security authorization denied**: `security add-trusted-cert` may require
+  Touch ID / admin password and the operator may refuse. *Mitigation:* Always
+  show the exact OS command before execution; if authorization fails, print
+  the manual command the user can run themselves.
+- **Platform variance**: The macOS `security` tool CLI flags could change across
+  OS versions. *Mitigation:* Target the current macOS Sequoia command set; test
+  against the pinned OS version; fall back to printing instructions on failure.
+- **Daemon not running**: The CLI's `install-ca` command needs to inform the
+  daemon that the cert is installed, but the daemon may not be running.
+  *Mitigation:* The install succeeds independently; the daemon flag is a
+  best-effort API call. The `doctor` command re-checks and can resync.
+- **Multiple cert installs**: Running `install-ca` twice should not duplicate or
+  error. *Mitigation:* `security add-trusted-cert` is idempotent (updates the
+  existing entry). Detect already-installed state and report it.
+- **Uninstall removes wrong cert**: If the cert file path used at uninstall time
+  differs from the one installed, removal could fail silently. *Mitigation:*
+  Always use the same `~/.chiling/certs/rootCA.pem` path; verify that the
+  certificate being removed matches the stored PEM fingerprint.
+
+#### Decision: MITM Proxy Wiring
+
+**Approach: Direct public-field assignment in `chilingd/main.go`**
+
+- Add **two lines** after `proxy.New()` in `chilingd/main.go`:
+  ```go
+  pxy.MITMHandler = mitmHandler
+  pxy.MITMEnabled = *mitmEnabled
+  ```
+- The `Proxy.MITMHandler` and `Proxy.MITMEnabled` fields already exist and are
+  already checked in `handleConnect` (`connect.go`). The test code
+  (`testMITMSetup`) already does exactly this.
+- No changes to `proxy.New()` signature, no new setter methods.
+- **MitMHandler must be non-nil** when MITM is used at runtime. Since the handler
+  is nil when neither `--mitm` nor `--mitm-allow`/`--mitm-deny` is set, `install-ca`
+  must also create/load the CA (the `chiling mitm install-ca` CLI command will
+  ensure the CA files exist).
+
+| Pros | Why alternatives rejected |
+|---|---|
+| One-line change per field | Extending `proxy.New()` signature breaks all callers and adds ceremony |
+| Matches pattern used in tests | Setter methods add abstraction without benefit for public fields |
+| No new API surface | The proxy struct fields are already public and documented |
+
+#### Decision: CA Install / Uninstall
+
+**Approach: OS-native command execution with explicit consent**
+
+- **Install**: `chiling mitm install-ca`
+  1. Verify CA file exists at `~/.chiling/certs/rootCA.pem`. If not, download it
+     from the daemon API (`GET /v1/mitm/cert`) or print instructions to generate
+     it by starting the daemon with `--mitm`.
+  2. Print the exact command(s) that will be executed and a warning about
+     modifying the system trust store.
+  3. Ask the user for explicit confirmation (Y/n prompt).
+  4. Execute the OS-specific command:
+     - **macOS**: `security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ~/.chiling/certs/rootCA.pem`
+     - **Linux**: `sudo cp ~/.chiling/certs/rootCA.pem /usr/local/share/ca-certificates/chiling-root.crt && sudo update-ca-certificates`
+  5. On success, call `POST /v1/mitm/cert-installed` on the daemon API (best-effort)
+     to update the `mitmCertInstalled` status flag.
+  6. On failure, print the manual command the user can run.
+
+- **Uninstall**: `chiling mitm uninstall-ca`
+  1. Print the command(s) that will be executed and a warning.
+  2. Ask for explicit confirmation.
+  3. Execute:
+     - **macOS**: `security remove-trusted-cert -d ~/.chiling/certs/rootCA.pem`
+     - **Linux**: `sudo rm /usr/local/share/ca-certificates/chiling-root.crt && sudo update-ca-certificates`
+  4. On success, call `POST /v1/mitm/cert-installed` with `false` (best-effort).
+
+- **API extension**: Add a new API endpoint:
+  - `POST /v1/mitm/cert-installed` with body `{ "installed": bool }`
+  - The daemon sets the `mitmCertInstalled` flag (persisted in-memory only in MVP)
+  - This allows the CLI to update the daemon's status without the daemon having
+    to detect trust store state itself
+
+| Pros | Why alternatives rejected |
+|---|---|
+| Zero-touch for common case | Manual-only mode (Option B) adds friction; for a developer tool the automated flow is expected |
+| Transparent — shows every command | Desktop-native dialogs (Option C) vary by platform and add scriptable auth complexity |
+| Best-effort daemon sync — doesn't require daemon to be running | |
+| Cross-platform with fallback | |
+
+#### Decision: Uno Doctor Command
+
+**Approach: `chiling doctor` — diagnostic and status overview**
+
+A single command an operator runs to check if the system is set up correctly:
+
+```
+chiling doctor [--fix]
+```
+
+Output (JSON by default, `--pretty` for human-readable):
+
+```jsonc
+{
+  "daemonRunning": true,
+  "proxyListening": true,
+  "proxyAddr": "localhost:8080",
+  "mitmConfigured": true,
+  "mitmEnabled": false,
+  "mitmCertExists": true,
+  "mitmCertInstalled": false,
+  "rulesCount": 3,
+  "requestsCaptured": 42,
+  "issues": [
+    "MITM CA certificate is not installed in the system trust store. Run 'chiling mitm install-ca' to install it."
+  ]
+}
+```
+
+- **Detects daemon status**: Try UDS, fall back to TCP. If unreachable, report
+  and show `chilingd` start command.
+- **Checks CA file existence**: Verify `~/.chiling/certs/rootCA.pem` exists.
+- **Checks CA install status**: Query daemon via `GET /v1/status`. If daemon is
+  unreachable, check trust store directly (macOS: `security find-certificate -c "chiling root CA" -p`).
+- **`--fix` flag**: Attempts auto-remediation for fixable issues (start daemon,
+  install CA, enable MITM). Each fix step shows the action and asks confirmation.
+- **JSON output**: Agent-consumable. Use `--pretty` for human operators.
+
+| Pros | Why alternatives rejected |
+|---|---|
+| Single entry point for troubleshooting | Integrating into `chiling status --pretty` (Option B) overloads the status command |
+| Agent-friendly JSON + human pretty | Skipping entirely (Option C) leaves operators without diagnostic tools |
+| `--fix` can automate common issues | |
+
+#### Decision: Updated CLI Help
+
+The usage text in `cmd/chiling/main.go` is updated to include the new commands:
+
+```text
+  mitm install-ca             Install the root CA into the system trust store
+  mitm uninstall-ca           Remove the root CA from the system trust store
+  doctor                      Check system setup and diagnose issues
+    --fix                       Attempt to fix detected issues
+```
+
+#### API Changes
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/v1/mitm/cert-installed` | Notify daemon that CA cert was installed/uninstalled. Body: `{ "installed": bool }` |
+
+No other API changes. The existing `GET /v1/mitm/cert` already serves the CA PEM.
+
+#### Test Plan
+
+| Layer | Scope |
+|---|---|
+| **Wiring test** | Unit test verifying that setting `Proxy.MITMHandler` + `Proxy.MITMEnabled` in `chilingd/main.go` produces a proxy that intercepts CONNECT requests |
+| **CA install unit** | `cmdMITMInstallCA` calls the correct OS command; handles already-installed state; error response formatting |
+| **CA uninstall unit** | `cmdMITMUninstallCA` calls the correct OS command; handles already-removed state |
+| **Doctor unit** | Test daemon-reachable and daemon-unreachable paths; test with and without MITM; test `--fix` flag |
+| **Doctor integration** | Start daemon, run doctor, verify JSON output matches daemon state |
+| **API cert-installed** | Test `POST /v1/mitm/cert-installed` sets/clears the flag |

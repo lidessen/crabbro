@@ -760,6 +760,33 @@ func (s *Server) handleMITMAllow(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleMITMCertInstalled responds to POST /v1/mitm/cert-installed.
+// Body: { "installed": bool }
+// Notifies the daemon that the CA certificate was installed or uninstalled
+// in the system trust store.
+func (s *Server) handleMITMCertInstalled(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, shared.ErrCodeBadRequest, "method not allowed")
+		return
+	}
+	if s.MITMHandler == nil {
+		writeError(w, http.StatusNotFound, shared.ErrCodeNotFound, "MITM not configured")
+		return
+	}
+
+	var req struct {
+		Installed bool `json:"installed"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, shared.ErrCodeBadRequest, "invalid JSON body",
+			shared.ErrorDetail{Field: "body", Message: "expected JSON with installed field"})
+		return
+	}
+
+	s.MITMHandler.SetCertInstalled(req.Installed)
+	writeJSON(w, http.StatusOK, map[string]bool{"certInstalled": req.Installed})
+}
+
 // handleMITMDeny responds to POST/GET/DELETE /v1/mitm/deny.
 func (s *Server) handleMITMDeny(w http.ResponseWriter, r *http.Request) {
 	if s.MITMHandler == nil {

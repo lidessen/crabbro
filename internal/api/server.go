@@ -97,6 +97,7 @@ func (s *Server) registerRoutes() {
 		s.mux.HandleFunc("/v1/mitm/disable", s.handleMITMDisable)
 		s.mux.HandleFunc("/v1/mitm/status", s.handleMITMStatus)
 		s.mux.HandleFunc("/v1/mitm/cert", s.handleMITMCert)
+		s.mux.HandleFunc("/v1/mitm/cert-installed", s.handleMITMCertInstalled)
 		s.mux.HandleFunc("/v1/mitm/allow", s.handleMITMAllow)
 		s.mux.HandleFunc("/v1/mitm/deny", s.handleMITMDeny)
 	}

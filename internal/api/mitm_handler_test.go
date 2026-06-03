@@ -1159,6 +1159,96 @@ func TestMITM_EnableDisable_StateTransitions(t *testing.T) {
 // Edge cases: routes not registered at all
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// cert-installed endpoint
+// ---------------------------------------------------------------------------
+
+func TestMITM_CertInstalled_SetsTrue(t *testing.T) {
+	s := testMITMServer(t)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/mitm/cert-installed", strings.NewReader(`{"installed":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	s.ServeHTTP(w, req)
+
+	resp := w.Result()
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200", resp.StatusCode)
+	}
+
+	if !s.MITMHandler.CertInstalled() {
+		t.Error("CertInstalled should be true after POST")
+	}
+}
+
+func TestMITM_CertInstalled_SetsFalse(t *testing.T) {
+	s := testMITMServer(t)
+	s.MITMHandler.SetCertInstalled(true)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/mitm/cert-installed", strings.NewReader(`{"installed":false}`))
+	req.Header.Set("Content-Type", "application/json")
+	s.ServeHTTP(w, req)
+
+	resp := w.Result()
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200", resp.StatusCode)
+	}
+
+	if s.MITMHandler.CertInstalled() {
+		t.Error("CertInstalled should be false after POST with installed:false")
+	}
+}
+
+func TestMITM_CertInstalled_InvalidBody(t *testing.T) {
+	s := testMITMServer(t)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/mitm/cert-installed", strings.NewReader(`not json`))
+	s.ServeHTTP(w, req)
+
+	resp := w.Result()
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestMITM_CertInstalled_WrongMethod(t *testing.T) {
+	s := testMITMServer(t)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/mitm/cert-installed", nil)
+	s.ServeHTTP(w, req)
+
+	resp := w.Result()
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want 405", resp.StatusCode)
+	}
+}
+
+func TestMITM_CertInstalled_NoHandler(t *testing.T) {
+	s := testMITMServerWithoutHandler(t)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/mitm/cert-installed", strings.NewReader(`{"installed":true}`))
+	s.ServeHTTP(w, req)
+
+	resp := w.Result()
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
 func TestMITM_RoutesNotRegistered(t *testing.T) {
 	s := testMITMServerWithoutHandler(t)
 
@@ -1167,6 +1257,7 @@ func TestMITM_RoutesNotRegistered(t *testing.T) {
 		"/v1/mitm/disable",
 		"/v1/mitm/status",
 		"/v1/mitm/cert",
+		"/v1/mitm/cert-installed",
 		"/v1/mitm/allow",
 		"/v1/mitm/deny",
 	}

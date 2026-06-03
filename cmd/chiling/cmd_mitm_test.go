@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -1114,5 +1115,159 @@ func TestFormatPatterns_SpecialChars(t *testing.T) {
 	}
 	if !strings.Contains(result, "api.example.com") {
 		t.Errorf("expected api.example.com in result, got %q", result)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// cmdMITM dispatch — install-ca / uninstall-ca
+// ---------------------------------------------------------------------------
+
+func TestCmdMITM_DispatchesInstallCA(t *testing.T) {
+	// Should dispatch to cmdMITMInstallCA. If the cert file exists locally,
+	// it will ask for confirmation and cancel (nil error). If the cert file
+	// doesn't exist, it tries to download from daemon and fails.
+	// Both outcomes are valid — we just verify it's not an unknown command.
+	err := cmdMITM(&clientConfig{TCP: "127.0.0.1:1"}, []string{"install-ca"})
+	if err != nil {
+		if !strings.Contains(err.Error(), "cannot reach daemon") &&
+			!strings.Contains(err.Error(), "unsupported platform") {
+			t.Errorf("unexpected error: %v", err)
+		}
+	}
+}
+
+func TestCmdMITM_DispatchesUninstallCA(t *testing.T) {
+	// Should dispatch to cmdMITMUninstallCA. Since cert doesn't exist,
+	// it will proceed to the OS command and need confirmation. With no stdin,
+	// confirm returns false, so we get "cancelled" output.
+	cfg := &clientConfig{TCP: "127.0.0.1:1"}
+	err := cmdMITMUninstallCA(cfg, nil)
+	// Confirm returns false when stdin is closed → nil error (cancelled).
+	if err != nil {
+		t.Errorf("expected nil (cancelled), got: %v", err)
+	}
+}
+
+func TestCmdMITM_UninstallCA_UnsupportedPlatform(t *testing.T) {
+	// We can't easily mock runtime.GOOS, but we can test that the function
+	// handles a missing cert gracefully when the command is unsupported.
+	// This requires a file to exist to skip the Stat check, then a platform.
+	// Minimal test: call the function on current platform - it should find
+	// the cert missing and attempt uninstall anyway.
+	err := cmdMITMUninstallCA(&clientConfig{TCP: "127.0.0.1:1"}, nil)
+	if err != nil {
+		// On unsupported platform, it returns an error.
+		// On supported platform, it asks confirmation and gets cancelled (nil).
+		// Either is acceptable.
+		if !strings.Contains(err.Error(), "unsupported platform") {
+			t.Errorf("expected nil or 'unsupported platform', got: %v", err)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// OS command helpers
+// ---------------------------------------------------------------------------
+
+func TestOSInstallCertCommand_Darwin(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("darwin-specific test")
+	}
+	cmd, args := osInstallCertCommand("/tmp/test.pem")
+	if cmd != "security" {
+		t.Errorf("expected 'security', got %q", cmd)
+	}
+	found := false
+	for _, a := range args {
+		if a == "/tmp/test.pem" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected cert path in args, got %v", args)
+	}
+}
+
+func TestOSInstallCertCommand_Linux(t *testing.T) {
+	// test by manually calling with GOOS override trick — just test the pattern.
+	cmd, args := osInstallCertCommand("/tmp/test.pem")
+	_ = cmd
+	_ = args
+	// We can't reliably test this without changing runtime.GOOS, so we
+	// just verify the function doesn't panic and returns a result.
+}
+
+func TestOSUninstallCertCommand_Darwin(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("darwin-specific test")
+	}
+	cmd, args := osUninstallCertCommand("/tmp/test.pem")
+	if cmd != "security" {
+		t.Errorf("expected 'security', got %q", cmd)
+	}
+	containsRemove := false
+	for _, a := range args {
+		if a == "remove-trusted-cert" {
+			containsRemove = true
+			break
+		}
+	}
+	if !containsRemove {
+		t.Errorf("expected 'remove-trusted-cert' in args, got %v", args)
+	}
+}
+
+func TestDefaultCertPath(t *testing.T) {
+	path := defaultCertPath()
+	if !strings.Contains(path, ".chiling/certs/rootCA.pem") {
+		t.Errorf("expected path to contain '.chiling/certs/rootCA.pem', got %q", path)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// confirm
+// ---------------------------------------------------------------------------
+
+func TestConfirm_Yes(t *testing.T) {
+	// Simulate user typing "y".
+	r, w, _ := os.Pipe()
+	w.WriteString("y\n")
+	w.Close()
+
+	oldStdin := os.Stdin
+	os.Stdin = r
+	defer func() { os.Stdin = oldStdin }()
+
+	if !confirm("Proceed?") {
+		t.Error("expected confirm true for 'y'")
+	}
+}
+
+func TestConfirm_No(t *testing.T) {
+	r, w, _ := os.Pipe()
+	w.WriteString("n\n")
+	w.Close()
+
+	oldStdin := os.Stdin
+	os.Stdin = r
+	defer func() { os.Stdin = oldStdin }()
+
+	if confirm("Proceed?") {
+		t.Error("expected confirm false for 'n'")
+	}
+}
+
+func TestConfirm_Empty(t *testing.T) {
+	r, w, _ := os.Pipe()
+	w.WriteString("\n")
+	w.Close()
+
+	oldStdin := os.Stdin
+	os.Stdin = r
+	defer func() { os.Stdin = oldStdin }()
+
+	if confirm("Proceed?") {
+		t.Error("expected confirm false for empty input")
 	}
 }

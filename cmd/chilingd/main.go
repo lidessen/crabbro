@@ -107,6 +107,13 @@ func run() error {
 
 	// Start proxy.
 	pxy := proxy.New(*proxyAddr, rb, ruleStore, ruleEngine)
+
+	// Wire MITM to proxy (if configured).
+	if mitmHandler != nil {
+		pxy.MITMHandler = mitmHandler
+		pxy.MITMEnabled = *mitmEnabled
+	}
+
 	if err := pxy.Start(); err != nil {
 		return fmt.Errorf("starting proxy: %w", err)
 	}
