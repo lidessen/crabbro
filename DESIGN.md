@@ -1,5 +1,18 @@
 # Chiling (敕令) Design
 
+> Current network data plane, middleware, and rule execution proposal: [NETWORK_PIPELINE_DESIGN.md](./NETWORK_PIPELINE_DESIGN.md). The proposal is not implemented yet. The milestone sections below are retained as historical decision records; use the status notes here and the current source for as-built behavior.
+
+## Document Status (2026-11-04)
+
+This file combines product goals, an original release plan, and implementation-era decisions. Treat them as follows:
+
+- **Current product direction:** daemon-owned semantics, agent-readable CLI/API, isolated declarative rules, and local traffic capture.
+- **Implemented:** Go daemon and CLI, HTTP proxy, CONNECT passthrough, opt-in HTTP/1.1 MITM, request-stage Goja rules, in-memory request/body caches, file-backed fixtures, SSE events, CA commands, and `doctor`.
+- **Not implemented:** SQLite history, response-stage rule actions, and a plugin runtime.
+- **Proposed replacement for HTTP forwarding and rule execution:** [NETWORK_PIPELINE_DESIGN.md](./NETWORK_PIPELINE_DESIGN.md). Its Exchange pipeline, onion middleware, unified MITM path, bounded streaming, and single network-policy snapshot are design targets, not current runtime guarantees.
+
+The M1–M4 sections are historical. Their implementation decisions explain how the current code arrived here; they are not a current work plan or a mandate to preserve those boundaries.
+
 ## Goal
 
 Build a local network proxy for AI agents and human operators.
@@ -37,6 +50,10 @@ semantics.
 
 ## Architecture
 
+The diagram is a product-level sketch from the first design. It is not the
+current package map or the proposed network ownership model; see
+`NETWORK_PIPELINE_DESIGN.md` for the latter.
+
 ```text
                  ┌────────────────────┐
                  │     Desktop UI      │
@@ -60,9 +77,11 @@ semantics.
                            │
                  ┌─────────▼──────────┐
                  │ Event + History     │
-                 │ ring buffer/SQLite  │
+                 │ ring + body cache   │
                  └────────────────────┘
 ```
+
+SQLite remains a possible future history store; it is not in the current implementation.
 
 ## Daemon
 
@@ -74,7 +93,7 @@ semantics.
 - Applying dynamic rules through Goja.
 - Recording rule execution traces.
 - Serving a local control API to CLI and UI.
-- Managing optional HTTPS MITM certificates in later phases.
+- Managing opt-in HTTPS MITM and local CA lifecycle.
 
 The daemon should be able to run without UI.
 
@@ -101,18 +120,19 @@ The API should be versioned from the start, for example `/v1`.
 
 The CLI is agent-first. Commands should default to machine-readable output.
 
-Examples:
+Examples of commands currently available:
 
 ```sh
-chiling listen --json
-chiling requests list --since 5m --json
-chiling requests get <request-id> --include headers,body,rule-trace --json
-chiling requests analyze <request-id> --json
-chiling rules list --json
+chiling status
+chiling doctor --pretty
+chiling listen
+chiling requests list --since req_abc --limit 50
+chiling requests get <request-id> --include headers,body,rule-trace
+chiling rules list
+chiling rules create ./rule.js --name mock-chat --priority 100
 chiling rules enable <rule-id>
-chiling rules disable <rule-id>
-chiling rules generate --from-request <request-id> --intent "mock success"
-chiling rules test ./rule.js --fixture <request-id> --json
+chiling rules test ./rule.js --fixture <fixture-name>
+chiling mitm status
 ```
 
 Human-readable output can exist, but it should be explicit:
@@ -122,12 +142,16 @@ chiling requests list --pretty
 chiling status --pretty
 ```
 
-Live subscriptions should use NDJSON:
+`chiling listen` consumes the daemon's SSE stream and prints each event as one
+JSON line. It is a best-effort live feed; it does not provide replay or durable
+event history.
+
+Example event output:
 
 ```json
-{"type":"request_started","id":"req_123","method":"POST","url":"https://api.example.com/v1/chat"}
+{"type":"request_started","requestId":"req_123","method":"POST","url":"https://api.example.com/v1/chat"}
 {"type":"rule_applied","requestId":"req_123","ruleId":"rule_mock_chat","actions":["mockResponse"]}
-{"type":"response_completed","id":"req_123","status":200,"durationMs":42}
+{"type":"response_completed","requestId":"req_123","status":200,"durationMs":42}
 ```
 
 ## Request Model
@@ -158,9 +182,13 @@ Minimum request fields:
 Body fields should use references instead of embedding large payloads directly
 in list responses.
 
+This is a logical field list, not the current JSON schema. The current header
+type stores one value per name; the network proposal requires preserving
+repeated values and adding original/effective request and tunnel provenance.
+
 ## Event Model
 
-The daemon should emit structured events:
+The daemon currently emits these structured events:
 
 - `request_started`
 - `request_headers`
@@ -172,15 +200,17 @@ The daemon should emit structured events:
 - `response_completed`
 - `request_failed`
 
-Events are append-only observations. They should not be used as the only source
-of persisted state once SQLite history is introduced.
+Events are non-blocking observations delivered through SSE. Slow subscribers
+can miss events, and there is no replay cursor. They are not a durable history
+source; SQLite remains future work.
 
 ## Rule System
 
-Rules are written in JavaScript and executed by Goja.
-
-Rules receive an immutable input snapshot and return a declarative decision.
-They should not directly mutate Go request objects.
+Rules are written in JavaScript and executed by Goja. The current engine builds
+a detached request view and applies the validated actions in Go; scripts do not
+mutate the proxy's `http.Request` directly. The target semantics let inner
+rules observe the effective request after outer middleware patches. See
+[NETWORK_PIPELINE_DESIGN.md](./NETWORK_PIPELINE_DESIGN.md).
 
 Example rule:
 
@@ -210,7 +240,7 @@ export default function rule(ctx) {
 
 Rule outputs should be validated before application.
 
-Supported initial actions:
+Current request-stage actions:
 
 - `tag`
 - `block`
@@ -218,8 +248,10 @@ Supported initial actions:
 - `setRequestHeader`
 - `removeRequestHeader`
 - `rewriteURL`
+- `abort` (legacy behavior; the network proposal replaces it with a typed rejection response)
 
-Later actions:
+Not implemented yet; response-stage hooks and any new action schema are covered
+by the network proposal:
 
 - `setResponseHeader`
 - `removeResponseHeader`
@@ -240,6 +272,10 @@ The Goja runtime must be constrained:
 - Bounded output size.
 - Explicit schema validation for rule results.
 
+The target requires a rule's full result to validate before applying any
+action. The current validator can return valid actions alongside schema errors,
+so this all-or-nothing behavior is not yet guaranteed by the implementation.
+
 Each rule evaluation should record:
 
 - `ruleId`
@@ -253,16 +289,20 @@ This trace is required so agents can explain what happened to a request.
 
 ## Storage
 
-Use two layers:
+Current storage is in-memory for traffic and rules, with fixture files on disk:
 
-1. In-memory ring buffer for live traffic and fast recent queries.
-2. SQLite for durable request history, body references, rule versions, and rule
-   traces.
+- Request summaries and rule definitions use an in-memory ring/map and are lost when the daemon exits.
+- Request and response body previews use a bounded in-memory LRU cache.
+- Rule fixtures are stored as JSON files under `~/.chiling/fixtures/`.
 
-The first implementation can start with only an in-memory ring buffer. SQLite
-should be added once the event and request models are stable.
+SQLite persistence and retention policy are future design work, not current
+storage behavior.
 
 ## UI Direction
+
+This is a historical preference, not an active implementation decision. The
+desktop UI remains unimplemented, and the framework choice is open while the
+current design work focuses on the network layer.
 
 For a macOS-only desktop app, prefer SwiftUI with narrow AppKit interop.
 
@@ -276,7 +316,7 @@ Reasons:
 Use Tauri if cross-platform desktop support becomes a first-class goal or if
 the rule editor and table-heavy UX strongly benefit from a web stack.
 
-## First Implementation Slice
+## Original First Implementation Slice (Historical)
 
 Build the smallest useful agent-facing proxy:
 
@@ -303,7 +343,12 @@ Build the smallest useful agent-facing proxy:
 This slice intentionally excludes HTTPS MITM, response body rewriting, SQLite,
 and desktop UI.
 
-## Later Milestones
+## Original Roadmap (Historical)
+
+The first three milestones were implemented in the current repository. Durable
+SQLite history and the desktop UI remain unimplemented. The networking and
+rule portions of these milestones are superseded by the target in
+`NETWORK_PIPELINE_DESIGN.md`.
 
 ### Milestone 2: Rule Testing
 
@@ -342,7 +387,8 @@ validation, execution timeouts, and output size limits.
 ## Decisions
 
 The following decisions resolve open questions and inconsistencies in the design
-above. They were made during the design review for the first implementation slice.
+above. They were made during the first-slice review and are a historical decision
+record; later sections supersede individual decisions where marked.
 
 ### Go Module Path
 
@@ -370,6 +416,10 @@ Two separate `main` packages in one Go module:
 Plain HTTP over Unix domain socket (primary) or localhost TCP (fallback). No
 custom protocol, no gRPC.
 
+The current TCP listener is localhost-only but unauthenticated, and the Unix
+socket is created with mode `0666`. The network proposal tightens this to an
+owner-only socket and authenticated TCP control access.
+
 ### Control API Routes (v1)
 
 All routes are under `/v1/`:
@@ -378,7 +428,7 @@ All routes are under `/v1/`:
 |---|---|---|
 | `GET` | `/v1/status` | Daemon status and configuration |
 | `GET` | `/v1/events` | Live event subscription (SSE) |
-| `GET` | `/v1/requests` | Request list (pagination: `?since=`, `?limit=`, `?cursor=`) |
+| `GET` | `/v1/requests` | Request list (`?since=<request-id>&limit=`); response includes `nextCursor` |
 | `GET` | `/v1/requests/:id` | Request detail (`?include=headers,body,rule-trace`) |
 
 ### Error Response Format
@@ -406,7 +456,12 @@ Server-Sent Events (SSE) over HTTP. NDJSON event bodies map to SSE `data:` lines
 Events consistently reference requests by the field name `requestId`. The request
 model's primary key is `id`.
 
-### Rule Evaluation Semantics
+### Rule Evaluation Semantics (Original First-Slice Contract; Superseded)
+
+> This records the initial intended semantics, not a guarantee of current
+> behavior. Current implementation details are summarized below; the target
+> onion semantics are defined in
+> [NETWORK_PIPELINE_DESIGN.md](./NETWORK_PIPELINE_DESIGN.md).
 
 - Rules are evaluated in ascending order of a numeric `priority` field (lower
   = first). If no priority is set, the rule is assigned priority 100.
@@ -417,6 +472,31 @@ model's primary key is `id`.
   the **last matching rule wins**.
 - Each evaluation emits a `rule_evaluated` event. If the rule matched and at
   least one action is taken, a `rule_applied` event is also emitted.
+
+The target replaces the shared-input/action-accumulation model with sequential
+middleware: each inner rule sees earlier request patches, and response hooks
+unwind in reverse order.
+
+#### As-Built Rule Behavior
+
+- Enabled rules are sorted by ascending priority. Equal-priority order is
+  unspecified because the current sort is not stable.
+- Each rule receives the same pre-action request view. Actions from earlier
+  rules do not change the input seen by later rules.
+- The validator can keep valid actions from a rule result that also contains
+  invalid actions.
+- Tags accumulate. The last evaluated `block`, `mockResponse`, and `rewriteURL`
+  action of each type is retained. `abort` stops further rule evaluation and
+  terminates handling without a defined proxy-level response contract; client
+  behavior can vary by ingress path. It is legacy behavior that the network
+  proposal replaces with a typed rejection.
+- If both `block` and `mockResponse` are present, the proxy handles `block`
+  first. Header actions are accumulated separately: all removals run before
+  sets, and the last set for a name wins. This does not preserve the original
+  action order when set and remove target the same header.
+
+The network proposal replaces these accumulated-action rules with sequential,
+validated middleware patches and an explicit response contract.
 
 ### Rule Identity and Storage (First Slice)
 
@@ -442,6 +522,12 @@ buffer):
 - Body references (`requestBodyRef`, `responseBodyRef`) point into this cache.
 - If a body has been evicted, the reference resolves to null.
 
+These limits apply only to stored previews. The current handlers read complete
+request and response bodies into memory, so the preview limit does not bound
+proxy-side memory use. The ordinary HTTP handler also consumes and closes the
+request body without restoring it to the upstream request. The network proposal
+replaces this path with bounded streaming and explicit body access.
+
 ### In-Flight Requests
 
 The request detail API returns whatever fields are available for in-flight
@@ -451,10 +537,14 @@ fires.
 
 ### CONNECT Tunnel Metadata
 
-CONNECT requests produce a minimal request record:
+The current implementation records CONNECT as a request with:
 - `method: "CONNECT"`, `host: "target:port"`, `path: ""`, `scheme: "https"`.
 - `status`: 200 on successful tunnel establishment, error status otherwise.
 - No request/response body. `durationMs` captures the tunnel lifetime.
+
+This legacy record shape does not model a tunnel separately. The network
+proposal gives each tunnel its own ID and associates each intercepted HTTP
+exchange with that parent tunnel.
 
 ### Revised First-Slice Actions
 
@@ -469,11 +559,15 @@ agent-facing proxy loop.
 stream). It does NOT start the daemon. Starting the daemon is always via
 `chilingd`.
 
-### Pagination
+### Pagination (Original Contract; Current Time Filtering Is Missing)
 
-Cursor-based pagination for request lists. Responses include a `nextCursor`
-field (absent when there are no more results). The `since` parameter accepts an
-ISO 8601 timestamp or a Go duration string (e.g. `"5m"`, `"1h"`).
+The current endpoint accepts `since` as a request ID cursor and `limit` as a
+count. A response includes `nextCursor` when another page may be available;
+pass that ID back as `since` to continue. The original ISO timestamp and Go
+duration behavior was not implemented. Although the current CLI help also
+mentions durations, it forwards the value unchanged, so `--since 5m` does not
+filter by time. The API and CLI need an explicit time-filter contract if
+relative-time filtering is still a goal.
 
 ### Rule Trace
 
@@ -486,6 +580,10 @@ This trace is attached to the request record and returned in request detail.
 
 ### Milestone 2 Decisions
 
+> Historical implementation record. The Goja engine, action schema, rule CRUD,
+> and fixture flow exist in source. Network forwarding and rule ordering below
+> are not the target architecture; see `NETWORK_PIPELINE_DESIGN.md`.
+
 The following decisions resolve the design for Milestone 2 (Rule Testing). These
 extend the baseline established above.
 
@@ -496,14 +594,19 @@ A new Go package `internal/rule` provides Goja-based rule execution:
 - **Isolated runtimes**: A new Goja VM is created per evaluation. No runtime is
   reused across evaluations or requests.
 - **Sandbox**: The VM has no filesystem, no network, no process spawning, and no
-  host environment access. Only ECMAScript 5.1 built-ins + `console.log` (no-op).
+  host environment access. It exposes the current Goja JavaScript runtime and
+  a no-op `console.log`; it does not install process or host APIs.
 - **Input context**: Each rule receives a `ctx` object — `ctx.request` mirrors
   the Go `Request` struct (method, scheme, host, path, query, url, headers,
-  body, clientAddr). The context is immutable from the rule's perspective.
+  body, clientAddr). This is detached data: script mutations do not alter the
+  Go request, though a script can mutate its own JavaScript copy.
 - **Output contract**: Rules must return `{ match: boolean, actions?: Array<{ type, params }> }`.
   If `match` is false, actions are ignored.
-- **Schema validation**: Every rule output is validated against a strict JSON
-  schema after evaluation. See "Rule Output Validation Schema" below.
+- **Schema validation**: Every rule output is checked against the action schema
+  after evaluation. This is hand-written validation, not a JSON Schema engine.
+  Current validation may retain valid actions when another action is invalid;
+  all-or-nothing application is the target contract in
+  `NETWORK_PIPELINE_DESIGN.md`.
 - **Timeout**: A 500 ms deadline (`DefaultRuleTimeout`) is enforced per rule via
   Goja's interrupt mechanism. Violations produce a timeout error in the trace
   and discard all actions from that rule.
@@ -513,8 +616,9 @@ A new Go package `internal/rule` provides Goja-based rule execution:
 
 #### Actions
 
-Milestone 2 supports all six rule actions. The last three were deferred from
-Milestone 1 per the first-slice decisions.
+The original Milestone 2 contract defined six rule actions. Current code also
+accepts the legacy `abort` action; its response behavior is unspecified and the
+network proposal replaces it with typed rejection.
 
 | Action | Params | Description |
 |---|---|---|
@@ -524,6 +628,7 @@ Milestone 1 per the first-slice decisions.
 | `setRequestHeader` | `{ name: string, value: string }` | Sets a request header before upstream forwarding |
 | `removeRequestHeader` | `{ name: string }` | Removes a request header before upstream forwarding |
 | `rewriteURL` | `{ url: string }` | Changes the upstream URL before forwarding |
+| `abort` | `{}` | Legacy action with no defined response contract; replace with typed rejection in the network redesign |
 
 #### Rule Output Validation Schema
 
@@ -535,7 +640,7 @@ The `default` function's return value must conform to this schema:
   "actions": [                  // optional; required when match=true
     {
       "type": enum,             // required: one of "tag", "block", "mockResponse",
-                                //   "setRequestHeader", "removeRequestHeader", "rewriteURL"
+                                //   "setRequestHeader", "removeRequestHeader", "rewriteURL", "abort"
       "params": { ... }         // required; per-type validation below
     }
   ]
@@ -556,6 +661,7 @@ Per-action `params` validation:
 | `setRequestHeader` | `params.value` | required, must be string |
 | `removeRequestHeader` | `params.name` | required, must be non-empty string |
 | `rewriteURL` | `params.url` | required, must be valid HTTP(S) URL string |
+| `abort` | `params` | no parameters |
 
 #### Rule Storage (Daemon Side)
 
@@ -667,6 +773,11 @@ displays the result (JSON by default, pretty-printed with `--pretty`).
 
 #### Rule Evaluation in the Proxy Pipeline
 
+> Historical intended flow. Its shared-snapshot and last-rule-wins statements
+> describe the original contract, not every current conflict-resolution detail.
+> See “As-Built Rule Behavior” above for current behavior and
+> `NETWORK_PIPELINE_DESIGN.md` for the target.
+
 When a request arrives at the proxy:
 
 1. After creating the request record and reading the body, evaluate all
@@ -706,6 +817,10 @@ changes. Unlike request-scoped events, they carry no `requestId`.
 ---
 
 ### Milestone 3: HTTPS MITM
+
+> Historical implementation design. MITM and its control commands are
+> implemented, but the raw per-request forwarding flow and direct state wiring
+> below are superseded by `NETWORK_PIPELINE_DESIGN.md`.
 
 The following decisions extend the design for Milestone 3 (HTTPS MITM). These
 address certificate generation and lifecycle, TLS interception, domain filtering,
@@ -793,6 +908,12 @@ The `chiling mitm install-ca` command copies the root CA into the OS trust store
 
 #### MITM TLS Interception Flow
 
+> Historical flow, superseded. This design opens an upstream TLS socket per
+> intercepted connection and parses decrypted HTTP manually. Current code
+> parses decrypted HTTP manually and opens an upstream TLS connection per
+> decrypted exchange. The target uses a shared `http.Transport` and the same
+> Exchange pipeline as ordinary HTTP.
+
 The existing `handleConnect` in `internal/proxy` is extended with a branch:
 
 1. CONNECT request arrives for `host:port`.
@@ -841,7 +962,7 @@ The existing `handleConnect` in `internal/proxy` is extended with a branch:
    e. On client disconnect, stream error, or timeout: close both TLS
       connections and exit the loop.
 
-5. **Request records created** during interception:
+5. **Current request records** during interception:
    - A CONNECT record is still created for the tunnel itself (marked
      `Intercepted: true`).
    - Each HTTP exchange within the tunnel gets its own request record (also
@@ -849,15 +970,13 @@ The existing `handleConnect` in `internal/proxy` is extended with a branch:
 
 #### HTTP Version Handling
 
-- **HTTP/1.1 only** in this milestone. The request loop handles one request at
-  a time (no pipelining — each request is fully processed before reading the
-  next). `Connection: keep-alive` is respected for the client connection.
-- **HTTP/2** is deferred. If the client attempts HTTP/2 via ALPN, the proxy
-  cannot inspect it. The proxy's server-side TLS config does not advertise
-  HTTP/2 ALPN, so the client falls back to HTTP/1.1. Upstream HTTP/2 responses
-  are accepted and forwarded as HTTP/1.1 to the client (Go's TLS client
-  negotiates HTTP/2 automatically with the upstream; the response bytes are
-  streamed back through the HTTP/1.1 connection).
+- The current MITM client side handles HTTP/1.1 and does not advertise `h2`.
+- The old statement that the raw upstream TLS connection automatically
+  negotiates HTTP/2 was incorrect: that path uses `tls.Dial` without HTTP/2
+  negotiation and writes HTTP/1.1 itself.
+- The target keeps client-facing MITM at HTTP/1.1 initially. Upstream protocol
+  negotiation belongs to the shared `http.Transport` and must not be described
+  as a raw byte tunnel between client and origin.
 
 #### Domain Allowlist and Denylist
 
@@ -865,29 +984,34 @@ Two independent lists of domain patterns:
 
 ```go
 type DomainMatcher struct {
-    mu       sync.RWMutex
-    patterns []string // each may contain * wildcards
+    mu    sync.RWMutex
+    allow []string
+    deny  []string
 }
 ```
 
-- **Pattern format**: Each pattern is a domain string. `*` matches any sequence
-  of characters except `.`. So `*.example.com` matches `a.example.com` but not
-  `a.b.example.com`. A bare `*` matches all domains.
+- **Current pattern format**: Each pattern is a domain string. A `*` label
+  matches exactly one hostname segment, so `*.example.com` matches
+  `a.example.com` but not `a.b.example.com`. A bare `*` matches all domains.
+  The target proposal still needs to specify whether wildcard depth changes.
 - **Denylist takes precedence**: If a host matches the denylist, MITM is
   skipped regardless of the allowlist.
-- **Empty allowlist** (nil/empty slice) = MITM permitted for all domains
-  (subject to denylist).
+- **Current empty-allowlist behavior** (nil/empty slice) = MITM permitted for
+  all domains (subject to denylist). This behavior is retained here as an
+  as-built fact; the network proposal recommends changing it to deny by
+  default.
 - **Non-empty allowlist** = MITM only for matching domains.
 - Matching is case-insensitive. The host part only (port is stripped).
-- Pattern lists are mutable at runtime via the control API.
+- Pattern lists are mutable at runtime via the control API. The target replaces
+  these independently mutable fields with one immutable policy snapshot.
 
 #### Configuration and Lifecycle
 
 - MITM is **disabled by default** (opt-in).
 - **Startup flags** on `chilingd`:
   - `--mitm`: Enable MITM on startup.
-  - `--mitm-allow <pattern>`: Add an allowlist entry (repeatable).
-  - `--mitm-deny <pattern>`: Add a denylist entry (repeatable).
+  - `--mitm-allow <patterns>`: Comma-separated allowlist patterns.
+  - `--mitm-deny <patterns>`: Comma-separated denylist patterns.
 - **Runtime control** via the control API (see routes below). Toggling MITM
   at runtime affects new connections only; existing intercepted tunnels
   continue until the client disconnects.
@@ -898,14 +1022,16 @@ New routes under `/v1/mitm/`:
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/v1/mitm` | Return MITM status: `{ enabled, certInstalled, allowCount, denyCount }` |
+| `GET` | `/v1/mitm/status` | Return enabled state, CA-install flag, and allow/deny patterns |
 | `POST` | `/v1/mitm/enable` | Enable MITM (body: `{}`). Emits `mitm_enabled` event. |
 | `POST` | `/v1/mitm/disable` | Disable MITM. Emits `mitm_disabled` event. |
-| `GET` | `/v1/mitm/ca` | Return root CA PEM as `application/x-pem-file` |
+| `GET` | `/v1/mitm/cert` | Return root CA PEM as `application/x-pem-file` |
+| `GET` | `/v1/mitm/allow` | List allow patterns |
 | `POST` | `/v1/mitm/allow` | Add to allowlist: `{ "pattern": "*.example.com" }` |
+| `DELETE` | `/v1/mitm/allow?pattern=...` | Remove an allow pattern |
+| `GET` | `/v1/mitm/deny` | List deny patterns |
 | `POST` | `/v1/mitm/deny` | Add to denylist: `{ "pattern": "*.example.com" }` |
-| `DELETE` | `/v1/mitm/allow` | Remove from allowlist: `{ "pattern": "*.example.com" }` |
-| `DELETE` | `/v1/mitm/deny` | Remove from denylist: `{ "pattern": "*.example.com" }` |
+| `DELETE` | `/v1/mitm/deny?pattern=...` | Remove a deny pattern |
 
 #### Status Response Extension
 
@@ -935,11 +1061,14 @@ Intercepted bool `json:"intercepted,omitempty"`
 chiling mitm status [--json|--pretty]
 chiling mitm enable
 chiling mitm disable
+chiling mitm cert [--output <file>]
 chiling mitm install-ca
-chiling mitm allow <pattern>
-chiling mitm deny <pattern>
-chiling mitm allow rm <pattern>
-chiling mitm deny rm <pattern>
+chiling mitm allow list
+chiling mitm allow add <pattern>
+chiling mitm allow remove <pattern>
+chiling mitm deny list
+chiling mitm deny add <pattern>
+chiling mitm deny remove <pattern>
 ```
 
 All MITM commands communicate with the daemon's control API (same as `status`,
@@ -960,16 +1089,20 @@ All MITM commands communicate with the daemon's control API (same as `status`,
 
 | Feature | Reason |
 |---|---|
-| HTTP/2 MITM | Requires HTTP/2 frame parsing or Go's `golang.org/x/net/http2`; keep MVP on HTTP/1.1 only |
-| Response-stage rule evaluation | Intercepted exchanges still only run request-stage rules; response rules added when the rule engine supports response-stage evaluation |
+| HTTP/2 MITM | The current client-facing MITM advertises HTTP/1.1 only. The network proposal keeps that initial boundary; enabling client-facing HTTP/2 requires an h2-capable server pipeline and protocol-specific verification, not a second hand-written HTTP parser. |
+| Response-stage rule evaluation | Still unimplemented. The network proposal defines the response-hook seam; response rule schemas and actions remain a later implementation step. |
 | Persistent host cert cache | Regenerating on restart is fast enough for MVP; persisted cache adds complexity of disk format and staleness checks |
 | Automatic CA rotation | 10-year validity makes this low urgency for a dev tool |
-| OCSP stapling | Adds significant complexity for unlikely-before-2030 benefit in a local proxy |
-| Certificate transparency bypass | Not needed for developer proxy use cases |
+| OCSP stapling | Outside the local inspection MVP; revisit if external trust or interoperability requirements call for it. |
 
 ---
 
 ### Milestone 4: MVP Connectivity (Setup, Doctor, Proxy Wiring)
+
+> Historical implementation decision. CA commands and `doctor` exist in
+> source. The public-field proxy wiring described below is the current
+> as-built arrangement and is explicitly replaced by the single network-policy
+> snapshot in `NETWORK_PIPELINE_DESIGN.md`.
 
 The following decisions close the gap between the implemented MITM infrastructure and a
 working end-to-end operator experience. They were identified during the MVP design
@@ -985,8 +1118,9 @@ The preferred approach is **direct field assignment** for MITM proxy wiring and
   show the exact OS command before execution; if authorization fails, print
   the manual command the user can run themselves.
 - **Platform variance**: The macOS `security` tool CLI flags could change across
-  OS versions. *Mitigation:* Target the current macOS Sequoia command set; test
-  against the pinned OS version; fall back to printing instructions on failure.
+  OS versions. *Mitigation:* Validate against the macOS versions the project
+  currently supports and print manual instructions on failure. The old plan's
+  named Sequoia target is historical, not a current support statement.
 - **Daemon not running**: The CLI's `install-ca` command needs to inform the
   daemon that the cert is installed, but the daemon may not be running.
   *Mitigation:* The install succeeds independently; the daemon flag is a
