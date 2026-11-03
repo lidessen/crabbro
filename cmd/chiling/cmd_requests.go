@@ -21,9 +21,9 @@ func cmdRequests(cfg *clientConfig, args []string) error {
 
 	sub := args[0]
 	switch sub {
-	case "list":
+	case "list", "search":
 		return cmdRequestsList(cfg, args[1:])
-	case "get":
+	case "get", "show":
 		return cmdRequestsGet(cfg, args[1:])
 	default:
 		return fmt.Errorf("unknown requests subcommand: %s", sub)
@@ -34,8 +34,15 @@ func cmdRequests(cfg *clientConfig, args []string) error {
 // requests with optional filtering by time and count.
 func cmdRequestsList(cfg *clientConfig, args []string) error {
 	fs := flag.NewFlagSet("requests list", flag.ContinueOnError)
-	since := fs.String("since", "", "Cursor or duration (e.g., '5m', '1h')")
+	since := fs.String("since", "", "Cursor, RFC3339 time, or duration (e.g., '5m', '1h')")
 	limit := fs.Int("limit", 0, "Maximum number of results")
+	method := fs.String("method", "", "Filter by HTTP method")
+	host := fs.String("host", "", "Filter by host substring")
+	pathFilter := fs.String("path", "", "Filter by path prefix")
+	status := fs.Int("status", 0, "Filter by response status")
+	q := fs.String("q", "", "Substring match on method or URL")
+	tag := fs.String("tag", "", "Filter by tag")
+	session := fs.String("session", "", "Filter by recording session id")
 	pretty := fs.Bool("pretty", false, "Human-readable output")
 	fs.Parse(args)
 
@@ -46,6 +53,27 @@ func cmdRequestsList(cfg *clientConfig, args []string) error {
 	}
 	if *limit > 0 {
 		params = append(params, fmt.Sprintf("limit=%d", *limit))
+	}
+	if *method != "" {
+		params = append(params, "method="+*method)
+	}
+	if *host != "" {
+		params = append(params, "host="+*host)
+	}
+	if *pathFilter != "" {
+		params = append(params, "path="+*pathFilter)
+	}
+	if *status > 0 {
+		params = append(params, fmt.Sprintf("status=%d", *status))
+	}
+	if *q != "" {
+		params = append(params, "q="+*q)
+	}
+	if *tag != "" {
+		params = append(params, "tag="+*tag)
+	}
+	if *session != "" {
+		params = append(params, "session="+*session)
 	}
 	if len(params) > 0 {
 		path += "?" + strings.Join(params, "&")

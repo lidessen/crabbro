@@ -25,12 +25,12 @@ func TestCmdDoctor_DaemonRunning(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(shared.StatusResponse{
-			Version:          "0.1.0",
-			UptimeSeconds:    3600,
-			ProxyAddr:        "localhost:8080",
-			RequestCount:     42,
-			RuleCount:        3,
-			MITMEnabled:      true,
+			Version:           "0.1.0",
+			UptimeSeconds:     3600,
+			ProxyAddr:         "localhost:8080",
+			RequestCount:      42,
+			RuleCount:         3,
+			MITMEnabled:       true,
 			MITMCertInstalled: false,
 		})
 	})
@@ -50,12 +50,12 @@ func TestCmdDoctor_DaemonRunningMITMDisabled(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(shared.StatusResponse{
-			Version:          "0.1.0",
-			UptimeSeconds:    100,
-			ProxyAddr:        "localhost:8080",
-			RequestCount:     5,
-			RuleCount:        0,
-			MITMEnabled:      false,
+			Version:           "0.1.0",
+			UptimeSeconds:     100,
+			ProxyAddr:         "localhost:8080",
+			RequestCount:      5,
+			RuleCount:         0,
+			MITMEnabled:       false,
 			MITMCertInstalled: true,
 		})
 	})

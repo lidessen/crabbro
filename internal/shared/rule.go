@@ -7,13 +7,20 @@ type RuleID string
 
 // Rule represents a single JavaScript rule stored and executed by the daemon.
 type Rule struct {
-	ID        RuleID    `json:"id"`
-	Name      string    `json:"name,omitempty"`
-	Priority  int       `json:"priority"`
-	Enabled   bool      `json:"enabled"`
-	Script    string    `json:"script"`
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	ID       RuleID `json:"id"`
+	Name     string `json:"name,omitempty"`
+	Priority int    `json:"priority"`
+	Enabled  bool   `json:"enabled"`
+	Script   string `json:"script"`
+	// Version increments each time the script changes. Traces record the version
+	// that ran.
+	Version int `json:"version,omitempty"`
+	// FailureMode is "fail-open" (default) or "fail-closed".
+	// fail-open skips a rule whose evaluation or validation fails.
+	// fail-closed returns a defined rejection response instead.
+	FailureMode string    `json:"failureMode,omitempty"`
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
 }
 
 // RuleTrace records one rule evaluation against a request.

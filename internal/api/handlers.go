@@ -92,8 +92,19 @@ func (s *Server) handleRequests(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cursor := r.URL.Query().Get("since")
-	limitStr := r.URL.Query().Get("limit")
+	q := r.URL.Query()
+	cursor := q.Get("since")
+	// A duration or timestamp in --since is a time filter, not an ID cursor.
+	if cursor != "" && !strings.HasPrefix(cursor, "req_") {
+		if _, err := time.ParseDuration(cursor); err == nil {
+			q.Set("sinceTime", cursor)
+			cursor = ""
+		} else if _, err := time.Parse(time.RFC3339, cursor); err == nil {
+			q.Set("sinceTime", cursor)
+			cursor = ""
+		}
+	}
+	limitStr := q.Get("limit")
 
 	limit := 0
 	if limitStr != "" {
@@ -108,9 +119,32 @@ func (s *Server) handleRequests(w http.ResponseWriter, r *http.Request) {
 
 	var requests []*shared.Request
 	if cursor != "" {
-		requests = s.RingBuffer.ListSince(cursor, limit)
+		requests = s.RingBuffer.ListSince(cursor, 0)
 	} else {
-		requests = s.RingBuffer.List(limit)
+		requests = s.RingBuffer.List(0)
+	}
+	filtered, err := filterRequests(requests, map[string]string{
+		"sinceTime": q.Get("sinceTime"),
+		"method":    q.Get("method"),
+		"host":      q.Get("host"),
+		"path":      q.Get("path"),
+		"status":    q.Get("status"),
+		"q":         q.Get("q"),
+		"tag":       q.Get("tag"),
+		"session":   q.Get("session"),
+	})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, shared.ErrCodeBadRequest, "invalid filter",
+			shared.ErrorDetail{Field: "filter", Message: err.Error()})
+		return
+	}
+	requests = filtered
+	if limit > 0 && len(requests) > limit {
+		if cursor != "" {
+			requests = requests[:limit]
+		} else {
+			requests = requests[len(requests)-limit:]
+		}
 	}
 
 	// Convert to summaries.
@@ -159,7 +193,7 @@ func (s *Server) handleRequestDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req := s.RingBuffer.GetByID(shared.RequestID(idStr))
+	req := s.RingBuffer.Resolve(shared.RequestID(idStr))
 	if req == nil {
 		writeError(w, http.StatusNotFound, shared.ErrCodeNotFound, "request not found",
 			shared.ErrorDetail{Field: "id", Message: fmt.Sprintf("no request with ID %s", idStr)})
@@ -172,17 +206,16 @@ func (s *Server) handleRequestDetail(w http.ResponseWriter, r *http.Request) {
 		Request: *req,
 	}
 
-	// Include body if requested.
 	if include["body"] && req.RequestBodyRef != "" {
 		if bc := s.BodyCache.Get(req.RequestBodyRef); bc != nil {
 			bodyStr := string(bc)
 			resp.Body = &bodyStr
 		}
 	}
-	if include["body"] && req.ResponseBodyRef != "" && resp.Body == nil {
+	if include["body"] && req.ResponseBodyRef != "" {
 		if bc := s.BodyCache.Get(req.ResponseBodyRef); bc != nil {
 			bodyStr := string(bc)
-			resp.Body = &bodyStr
+			resp.ResponseBody = &bodyStr
 		}
 	}
 
@@ -403,6 +436,18 @@ func (s *Server) handleRulesCreate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, shared.ErrCodeInternal, fmt.Sprintf("failed to create rule: %v", err))
 		return
 	}
+	if req.FailureMode != "" {
+		if updated, err := s.RuleStore.SetFailureMode(rule.ID, req.FailureMode); err == nil {
+			rule = updated
+		} else {
+			writeError(w, http.StatusBadRequest, shared.ErrCodeBadRequest, err.Error(),
+				shared.ErrorDetail{Field: "failureMode", Message: "must be fail-open or fail-closed"})
+			return
+		}
+	}
+	if s.Sessions != nil {
+		s.Sessions.Note("rule_created", "", "", string(rule.ID), rule.Name)
+	}
 
 	writeJSON(w, http.StatusCreated, rule)
 }
@@ -606,13 +651,13 @@ func (s *Server) resolveFixtureForTest(req shared.TestRuleRequest) (*shared.Requ
 
 	// Convert fixture data to a shared.Request.
 	rec := &shared.Request{
-		Method:     fData.Request.Method,
-		Scheme:     fData.Request.Scheme,
-		Host:       fData.Request.Host,
-		Path:       fData.Request.Path,
-		Query:      fData.Request.Query,
-		URL:        fData.Request.URL,
-		ClientAddr: fData.Request.ClientAddr,
+		Method:         fData.Request.Method,
+		Scheme:         fData.Request.Scheme,
+		Host:           fData.Request.Host,
+		Path:           fData.Request.Path,
+		Query:          fData.Request.Query,
+		URL:            fData.Request.URL,
+		ClientAddr:     fData.Request.ClientAddr,
 		RequestHeaders: fData.Request.RequestHeaders,
 	}
 	if rec.RequestHeaders == nil {
@@ -625,8 +670,8 @@ func (s *Server) resolveFixtureForTest(req shared.TestRuleRequest) (*shared.Requ
 // parseIncludeParam parses the ?include= query parameter into a set of flags.
 func parseIncludeParam(val string) map[string]bool {
 	result := map[string]bool{
-		"headers":   false,
-		"body":      false,
+		"headers":    false,
+		"body":       false,
 		"rule-trace": false,
 	}
 	if val == "" {
@@ -657,6 +702,7 @@ func (s *Server) handleMITMEnable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.MITMHandler.SetEnabled(true)
+	s.publishMITM()
 	s.EventHub.Emit(&shared.Event{
 		Type:      shared.EventMITMEnabled,
 		Timestamp: time.Now(),
@@ -675,6 +721,7 @@ func (s *Server) handleMITMDisable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.MITMHandler.SetEnabled(false)
+	s.publishMITM()
 	s.EventHub.Emit(&shared.Event{
 		Type:      shared.EventMITMDisabled,
 		Timestamp: time.Now(),
@@ -693,10 +740,11 @@ func (s *Server) handleMITMStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := shared.MITMStatusResponse{
-		Enabled:       s.MITMHandler.Enabled(),
-		CertInstalled: s.MITMHandler.CertInstalled(),
-		AllowPatterns: s.MITMHandler.Matcher.AllowPatterns(),
-		DenyPatterns:  s.MITMHandler.Matcher.DenyPatterns(),
+		Enabled:          s.MITMHandler.Enabled(),
+		CertInstalled:    s.MITMHandler.CertInstalled(),
+		AllowPatterns:    s.MITMHandler.Matcher.AllowPatterns(),
+		DenyPatterns:     s.MITMHandler.Matcher.DenyPatterns(),
+		EmptyAllowDenies: true,
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -744,6 +792,7 @@ func (s *Server) handleMITMAllow(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.MITMHandler.Matcher.AddAllow(req.Pattern)
+		s.publishMITM()
 		writeJSON(w, http.StatusOK, map[string]string{"pattern": req.Pattern, "action": "added"})
 
 	case http.MethodDelete:
@@ -753,6 +802,7 @@ func (s *Server) handleMITMAllow(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.MITMHandler.Matcher.RemoveAllow(pattern)
+		s.publishMITM()
 		writeJSON(w, http.StatusOK, map[string]string{"pattern": pattern, "action": "removed"})
 
 	default:
@@ -815,6 +865,7 @@ func (s *Server) handleMITMDeny(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.MITMHandler.Matcher.AddDeny(req.Pattern)
+		s.publishMITM()
 		writeJSON(w, http.StatusOK, map[string]string{"pattern": req.Pattern, "action": "added"})
 
 	case http.MethodDelete:
@@ -824,10 +875,10 @@ func (s *Server) handleMITMDeny(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.MITMHandler.Matcher.RemoveDeny(pattern)
+		s.publishMITM()
 		writeJSON(w, http.StatusOK, map[string]string{"pattern": pattern, "action": "removed"})
 
 	default:
 		writeError(w, http.StatusMethodNotAllowed, shared.ErrCodeBadRequest, "method not allowed")
 	}
 }
-

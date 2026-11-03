@@ -25,6 +25,7 @@ func run() error {
 	// Global flags (must appear before the subcommand).
 	udsPath := flag.String("uds-path", shared.DefaultUDSPath, "Unix domain socket path")
 	tcpAddr := flag.String("tcp-addr", shared.DefaultTCPAddr, "TCP address fallback")
+	apiToken := flag.String("api-token", "", "Control API bearer token (default: api.token next to the socket)")
 	flag.Usage = printUsage
 	flag.Parse()
 
@@ -35,8 +36,9 @@ func run() error {
 
 	cmd := flag.Arg(0)
 	cfg := &clientConfig{
-		UDS: expandPath(*udsPath),
-		TCP: *tcpAddr,
+		UDS:   expandPath(*udsPath),
+		TCP:   *tcpAddr,
+		Token: *apiToken,
 	}
 
 	switch cmd {
@@ -52,6 +54,16 @@ func run() error {
 		return cmdRules(cfg, flag.Args()[1:])
 	case "mitm":
 		return cmdMITM(cfg, flag.Args()[1:])
+	case "daemon":
+		return cmdDaemon(cfg, flag.Args()[1:])
+	case "record":
+		return cmdRecord(cfg, flag.Args()[1:])
+	case "find":
+		return cmdFind(cfg, flag.Args()[1:])
+	case "verify":
+		return cmdVerify(cfg, flag.Args()[1:])
+	case "decision":
+		return cmdDecision(cfg, flag.Args()[1:])
 	case "help", "--help", "-h":
 		printUsage()
 		return nil
@@ -69,10 +81,22 @@ Commands:
     --fix                     Attempt to fix detected issues
     --pretty                  Human-readable output
   listen                    Subscribe to live events (SSE stream)
+  daemon start              Start chilingd in the background
+  daemon stop               Stop the background daemon
+  record start [--name]     Open a recording session
+  record stop               Stop the current recording session
+  record status             Show the current recording session
   requests list             List captured requests
-  requests get <id>         Get a single request's details
+    --method --host --path --status --q --tag --since --limit
+  requests search           Same filters as list
+  requests get <id>         Get a single request (prefix ok if unique)
+  requests show <id>        Alias of get
+  find "<query>"            Natural-language search via Jev or OpenAI
+  verify replay <id>        Replay a captured request through the proxy
   rules list                List rules
   rules create <file>       Create a rule from a JS file
+  rules from <id>           Scaffold a rule from a captured request
+  rules draft "<text>"      Ask the decision API to draft a rule
   rules get <id>            Get a rule's details
   rules enable <id>         Enable a rule
   rules disable <id>        Disable a rule
@@ -99,6 +123,7 @@ Commands:
 Global options:
   --uds-path    Unix domain socket path (default: ~/.chiling/proxy.sock)
   --tcp-addr    TCP address fallback (default: localhost:16379)
+  --api-token   Bearer token for the TCP control API
 
 Use "chiling help" for more information.`)
 }

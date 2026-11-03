@@ -12,7 +12,12 @@ import (
 	"strings"
 	"syscall"
 
+	"crypto/rand"
+	"encoding/hex"
+	"path/filepath"
+
 	"github.com/lidessen/chiling/internal/api"
+	"github.com/lidessen/chiling/internal/decision"
 	"github.com/lidessen/chiling/internal/fixture"
 	"github.com/lidessen/chiling/internal/mitm"
 	"github.com/lidessen/chiling/internal/proxy"
@@ -40,6 +45,9 @@ func run() error {
 	mitmEnabled := flag.Bool("mitm", false, "Enable HTTPS MITM interception on startup")
 	mitmAllow := flag.String("mitm-allow", "", "Comma-separated list of allowed domain patterns for MITM")
 	mitmDeny := flag.String("mitm-deny", "", "Comma-separated list of denied domain patterns for MITM")
+	decisionProvider := flag.String("decision-provider", "", "Decision provider: jev or openai (default from env)")
+	decisionBase := flag.String("decision-base-url", "", "Decision API base URL (default from env)")
+	decisionModel := flag.String("decision-model", "", "Decision model name (default from env)")
 	flag.Parse()
 
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
@@ -108,10 +116,18 @@ func run() error {
 	// Start proxy.
 	pxy := proxy.New(*proxyAddr, rb, ruleStore, ruleEngine)
 
-	// Wire MITM to proxy (if configured).
+	// Wire MITM to proxy (if configured) and publish one policy snapshot.
+	// An empty allowlist denies interception.
 	if mitmHandler != nil {
 		pxy.MITMHandler = mitmHandler
-		pxy.MITMEnabled = *mitmEnabled
+	}
+	if mitmHandler != nil {
+		pxy.PublishFromMITM()
+	} else {
+		pxy.PublishPolicy(proxy.NetworkPolicy{Enabled: false, EmptyAllowDenies: true})
+	}
+	if mitmHandler != nil && *mitmEnabled && len(mitmHandler.Matcher.AllowPatterns()) == 0 {
+		log.Printf("MITM: enabled with an empty allowlist; no host will be intercepted until a pattern is added")
 	}
 
 	if err := pxy.Start(); err != nil {
@@ -135,6 +151,30 @@ func run() error {
 	apiSrv.Version = "0.1.0"
 	apiSrv.RequestCountFn = pxy.RequestCount
 	apiSrv.RuleCountFn = ruleCountFn
+	apiSrv.Sessions = pxy.Sessions
+	apiSrv.PublishMITM = func() { pxy.PublishFromMITM() }
+	apiSrv.Replay = func(req shared.VerifyRequest) (shared.VerifyResult, error) {
+		return pxy.Replay(string(req.RequestID), req.ExpectStatus, req.ExpectBodyContains)
+	}
+	decCfg := decision.FromEnv()
+	if *decisionProvider != "" {
+		decCfg.Provider = *decisionProvider
+	}
+	if *decisionBase != "" {
+		decCfg.BaseURL = *decisionBase
+	}
+	if *decisionModel != "" {
+		decCfg.Model = *decisionModel
+	}
+	apiSrv.Decision = decision.New(decCfg)
+	tokenPath := filepath.Join(filepath.Dir(expandDaemonPath(*udsPath)), "api.token")
+	token, err := loadOrCreateToken(tokenPath)
+	if err != nil {
+		log.Printf("control API token: %v", err)
+	} else {
+		apiSrv.Token = token
+		log.Printf("control API token: %s", tokenPath)
+	}
 
 	if err := apiSrv.Start(); err != nil {
 		pxy.Stop()
@@ -159,4 +199,35 @@ func run() error {
 	log.Printf("chilingd stopped")
 
 	return nil
+}
+
+func expandDaemonPath(path string) string {
+	if len(path) > 1 && path[0] == '~' {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			return filepath.Join(home, path[1:])
+		}
+	}
+	return path
+}
+
+func loadOrCreateToken(path string) (string, error) {
+	if b, err := os.ReadFile(path); err == nil {
+		tok := strings.TrimSpace(string(b))
+		if tok != "" {
+			return tok, nil
+		}
+	}
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	tok := hex.EncodeToString(buf)
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(path, []byte(tok+"\n"), 0600); err != nil {
+		return "", err
+	}
+	return tok, nil
 }

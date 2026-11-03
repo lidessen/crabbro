@@ -46,14 +46,14 @@ func TestSaveAndGet(t *testing.T) {
 	f := FixtureData{
 		CreatedAt: now,
 		Request: FixtureRequest{
-			Method:      "POST",
-			Host:        "example.com",
-			Path:        "/api/test",
-			URL:         "https://example.com/api/test",
+			Method:         "POST",
+			Host:           "example.com",
+			Path:           "/api/test",
+			URL:            "https://example.com/api/test",
 			RequestHeaders: map[string]string{"Content-Type": "application/json"},
-			RequestBody: `{"key":"value"}`,
-			Status:      200,
-			ResponseBody: `{"ok":true}`,
+			RequestBody:    `{"key":"value"}`,
+			Status:         200,
+			ResponseBody:   `{"ok":true}`,
 		},
 	}
 

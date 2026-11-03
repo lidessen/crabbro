@@ -25,9 +25,9 @@ import (
 // domains, subject to the denylist. A non-empty allowlist restricts MITM to
 // only matching domains.
 type DomainMatcher struct {
-	mu     sync.RWMutex
-	allow  []string
-	deny   []string
+	mu    sync.RWMutex
+	allow []string
+	deny  []string
 }
 
 // NewDomainMatcher creates a DomainMatcher with the given initial allow and
@@ -126,6 +126,13 @@ func (dm *DomainMatcher) DenyPatterns() []string {
 	dm.mu.RLock()
 	defer dm.mu.RUnlock()
 	return copySlice(dm.deny)
+}
+
+// HostMatches reports whether host matches pattern. The host may include a
+// port; it is stripped before matching. Matching is case-insensitive. A "*"
+// segment matches one label. A bare "*" matches any host.
+func HostMatches(host, pattern string) bool {
+	return matchDomain(stripPort(host), pattern)
 }
 
 // matchDomain checks whether host matches pattern.

@@ -274,8 +274,8 @@ func TestValidateOutput_MultipleActionsMixedValidity(t *testing.T) {
 	if len(errs) == 0 {
 		t.Error("expected some errors for mixed validity")
 	}
-	// Valid actions should still be returned even with some errors.
-	if len(actions) != 2 {
-		t.Errorf("expected 2 valid actions, got %d", len(actions))
+	// An invalid action discards every action from the result.
+	if len(actions) != 0 {
+		t.Errorf("expected 0 actions when any action is invalid, got %d", len(actions))
 	}
 }

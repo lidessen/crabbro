@@ -3,7 +3,6 @@ package rule
 import (
 	"fmt"
 	"net/url"
-	"strings"
 
 	"github.com/lidessen/chiling/internal/shared"
 )
@@ -22,8 +21,41 @@ type ruleOutput struct {
 }
 
 type ruleAction struct {
-	Type   string         `json:"type"`
-	Params map[string]any `json:"params,omitempty"`
+	Type    string         `json:"type"`
+	Params  map[string]any `json:"params,omitempty"`
+	Status  any            `json:"status,omitempty"`
+	Headers map[string]any `json:"headers,omitempty"`
+	Body    any            `json:"body,omitempty"`
+	Tags    any            `json:"tags,omitempty"`
+	Name    any            `json:"name,omitempty"`
+	Value   any            `json:"value,omitempty"`
+	URL     any            `json:"url,omitempty"`
+}
+
+// liftFlatParams copies design-doc flat action fields into params when the
+// script did not nest them. Both shapes are accepted.
+func (a *ruleAction) liftFlatParams() {
+	if a.Params == nil {
+		a.Params = map[string]any{}
+	}
+	lift := func(key string, v any) {
+		if v == nil {
+			return
+		}
+		if _, exists := a.Params[key]; exists {
+			return
+		}
+		a.Params[key] = v
+	}
+	lift("status", a.Status)
+	if len(a.Headers) > 0 {
+		lift("headers", a.Headers)
+	}
+	lift("body", a.Body)
+	lift("tags", a.Tags)
+	lift("name", a.Name)
+	lift("value", a.Value)
+	lift("url", a.URL)
 }
 
 // ValidateOutput validates a rule evaluation result and converts it into
@@ -46,6 +78,7 @@ func ValidateOutput(out ruleOutput) ([]shared.RuleAction, []string) {
 	validated := make([]shared.RuleAction, 0, len(out.Actions))
 
 	for i, a := range out.Actions {
+		a.liftFlatParams()
 		v, err := validateAction(a)
 		if err != nil {
 			errs = append(errs, fmt.Sprintf("actions[%d]: %v", i, err))
@@ -54,11 +87,23 @@ func ValidateOutput(out ruleOutput) ([]shared.RuleAction, []string) {
 		validated = append(validated, v)
 	}
 
-	if len(validated) == 0 && len(errs) > 0 {
-		return validated, errs
+	// All-or-nothing: a single invalid action discards the whole result.
+	if len(errs) > 0 {
+		return nil, errs
 	}
 
-	return validated, errs
+	terminals := 0
+	for _, a := range validated {
+		switch a.Type {
+		case shared.ActionBlock, shared.ActionMockResponse, shared.ActionAbort:
+			terminals++
+		}
+	}
+	if terminals > 1 {
+		return nil, []string{"multiple terminal actions (block, mockResponse, abort); none applied"}
+	}
+
+	return validated, nil
 }
 
 func validateAction(a ruleAction) (shared.RuleAction, error) {
@@ -231,11 +276,12 @@ func validateRewriteURL(params map[string]any) (shared.RuleAction, error) {
 	if err != nil {
 		return shared.RuleAction{}, fmt.Errorf("rewriteURL action: %v", err)
 	}
-	if !strings.HasPrefix(urlStr, "http://") && !strings.HasPrefix(urlStr, "https://") {
+	parsed, err := url.Parse(urlStr)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 		return shared.RuleAction{}, fmt.Errorf("rewriteURL action params.url must be a valid HTTP(S) URL")
 	}
-	if _, err := url.Parse(urlStr); err != nil {
-		return shared.RuleAction{}, fmt.Errorf("rewriteURL action params.url is not a valid URL: %w", err)
+	if parsed.User != nil {
+		return shared.RuleAction{}, fmt.Errorf("rewriteURL action params.url must not include userinfo")
 	}
 	return shared.RuleAction{
 		Type: shared.ActionRewriteURL,

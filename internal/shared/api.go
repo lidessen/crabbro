@@ -1,18 +1,20 @@
 package shared
 
+import "time"
+
 // ---------------------------------------------------------------------------
 // Control API request / response types
 // ---------------------------------------------------------------------------
 
 // StatusResponse is returned by GET /v1/status.
 type StatusResponse struct {
-	Version          string `json:"version"`
-	UptimeSeconds    int64  `json:"uptimeSeconds"`
-	ProxyAddr        string `json:"proxyAddr"`
-	RequestCount     int64  `json:"requestCount"`
-	RuleCount        int    `json:"ruleCount"`
-	MITMEnabled      bool   `json:"mitmEnabled"`
-	MITMCertInstalled bool  `json:"mitmCertInstalled"`
+	Version           string `json:"version"`
+	UptimeSeconds     int64  `json:"uptimeSeconds"`
+	ProxyAddr         string `json:"proxyAddr"`
+	RequestCount      int64  `json:"requestCount"`
+	RuleCount         int    `json:"ruleCount"`
+	MITMEnabled       bool   `json:"mitmEnabled"`
+	MITMCertInstalled bool   `json:"mitmCertInstalled"`
 }
 
 // ListRequestsResponse is returned by GET /v1/requests.
@@ -34,9 +36,12 @@ type RequestSummary struct {
 
 // RequestDetailResponse is returned by GET /v1/requests/:id.
 type RequestDetailResponse struct {
-	Request Request  `json:"request"`
-	Body    *string  `json:"body,omitempty"`
-	Headers *Headers `json:"headers,omitempty"`
+	Request Request `json:"request"`
+	// Body is the captured request body when include=body.
+	Body *string `json:"body,omitempty"`
+	// ResponseBody is the captured response body when include=body.
+	ResponseBody *string  `json:"responseBody,omitempty"`
+	Headers      *Headers `json:"headers,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
@@ -45,9 +50,10 @@ type RequestDetailResponse struct {
 
 // CreateRuleRequest is the body for POST /v1/rules.
 type CreateRuleRequest struct {
-	Name     string `json:"name,omitempty"`
-	Priority int    `json:"priority,omitempty"`
-	Script   string `json:"script"`
+	Name        string `json:"name,omitempty"`
+	Priority    int    `json:"priority,omitempty"`
+	Script      string `json:"script"`
+	FailureMode string `json:"failureMode,omitempty"`
 }
 
 // UpdateRuleRequest is the body for PUT /v1/rules/:id.
@@ -130,21 +136,21 @@ type FixtureRequest struct {
 
 // TestRuleRequest is the body for POST /v1/rules/test.
 type TestRuleRequest struct {
-	RuleScript   string `json:"ruleScript"`
-	Fixture      string `json:"fixture,omitempty"`
-	FixtureID    string `json:"fixtureId,omitempty"`
-	FixtureFile  string `json:"fixtureFile,omitempty"`
+	RuleScript  string `json:"ruleScript"`
+	Fixture     string `json:"fixture,omitempty"`
+	FixtureID   string `json:"fixtureId,omitempty"`
+	FixtureFile string `json:"fixtureFile,omitempty"`
 }
 
 // TestRuleResponse is returned by POST /v1/rules/test.
 type TestRuleResponse struct {
-	Matched     bool          `json:"matched"`
-	Actions     []RuleAction  `json:"actions,omitempty"`
-	DurationMs  int64         `json:"durationMs"`
-	SchemaValid bool          `json:"schemaValid"`
-	SchemaErrs  []string      `json:"schemaErrors,omitempty"`
-	Error       string        `json:"error,omitempty"`
-	Trace       RuleTrace     `json:"trace"`
+	Matched     bool         `json:"matched"`
+	Actions     []RuleAction `json:"actions,omitempty"`
+	DurationMs  int64        `json:"durationMs"`
+	SchemaValid bool         `json:"schemaValid"`
+	SchemaErrs  []string     `json:"schemaErrors,omitempty"`
+	Error       string       `json:"error,omitempty"`
+	Trace       RuleTrace    `json:"trace"`
 }
 
 // ---------------------------------------------------------------------------
@@ -179,6 +185,11 @@ type MITMStatusResponse struct {
 	CertInstalled bool     `json:"certInstalled"`
 	AllowPatterns []string `json:"allowPatterns,omitempty"`
 	DenyPatterns  []string `json:"denyPatterns,omitempty"`
+	// EmptyAllowDenies reports the network-policy default: an empty allowlist
+	// does not intercept. A wildcard must be configured explicitly.
+	EmptyAllowDenies bool `json:"emptyAllowDenies"`
+	// PolicyGeneration is the snapshot CONNECT routing is using.
+	PolicyGeneration uint64 `json:"policyGeneration,omitempty"`
 }
 
 // MITMDomainRequest is the body for POST /v1/mitm/allow and POST /v1/mitm/deny.
@@ -192,4 +203,47 @@ const (
 	ErrCodeBadRequest    = "BAD_REQUEST"
 	ErrCodeInternal      = "INTERNAL_ERROR"
 	ErrCodeRuleEvalError = "RULE_EVAL_ERROR"
+	ErrCodeUnauthorized  = "UNAUTHORIZED"
 )
+
+// Session is a recording window used by the agent loop and, later, the
+// trajectory UI. Requests captured while a session is recording carry its ID.
+type Session struct {
+	ID         string     `json:"id"`
+	Name       string     `json:"name,omitempty"`
+	StartedAt  time.Time  `json:"startedAt"`
+	StoppedAt  *time.Time `json:"stoppedAt,omitempty"`
+	Recording  bool       `json:"recording"`
+	RequestIDs []string   `json:"requestIds,omitempty"`
+}
+
+// Activity is one entry on the trajectory timeline (recordings, captures,
+// rule edits, and verify results).
+type Activity struct {
+	ID        string    `json:"id"`
+	At        time.Time `json:"at"`
+	Kind      string    `json:"kind"`
+	SessionID string    `json:"sessionId,omitempty"`
+	RequestID string    `json:"requestId,omitempty"`
+	RuleID    string    `json:"ruleId,omitempty"`
+	Summary   string    `json:"summary"`
+}
+
+// VerifyRequest is the body for POST /v1/verify/replay.
+type VerifyRequest struct {
+	RequestID          string `json:"requestId"`
+	ExpectStatus       int    `json:"expectStatus,omitempty"`
+	ExpectBodyContains string `json:"expectBodyContains,omitempty"`
+}
+
+// VerifyResult is the outcome of replaying a captured request through the proxy.
+type VerifyResult struct {
+	OK              bool        `json:"ok"`
+	ReplayRequestID RequestID   `json:"replayRequestId,omitempty"`
+	Status          int         `json:"status,omitempty"`
+	ResponseBody    string      `json:"responseBody,omitempty"`
+	RuleTrace       []RuleTrace `json:"ruleTrace,omitempty"`
+	MatchedRules    []string    `json:"matchedRules,omitempty"`
+	Notes           []string    `json:"notes,omitempty"`
+	Errors          []string    `json:"errors,omitempty"`
+}

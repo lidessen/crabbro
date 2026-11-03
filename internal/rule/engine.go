@@ -112,6 +112,9 @@ func (e *RuleEngine) Evaluate(script string, req *shared.Request, body string, t
 	if err := json.Unmarshal(resultJSON, &out); err != nil {
 		return evalError(start, fmt.Sprintf("result format error: %v", err))
 	}
+	for i := range out.Actions {
+		out.Actions[i].liftFlatParams()
+	}
 
 	// Validate the output against action schemas.
 	actions, errs := ValidateOutput(out)

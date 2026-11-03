@@ -12,18 +12,22 @@ import (
 	"sync"
 	"time"
 
+	"crypto/subtle"
+
+	"github.com/lidessen/chiling/internal/decision"
 	"github.com/lidessen/chiling/internal/fixture"
 	"github.com/lidessen/chiling/internal/mitm"
 	"github.com/lidessen/chiling/internal/proxy"
 	"github.com/lidessen/chiling/internal/ring"
 	"github.com/lidessen/chiling/internal/rule"
+	"github.com/lidessen/chiling/internal/session"
 	"github.com/lidessen/chiling/internal/shared"
 )
 
 // Server is the control API server, accessible over UDS and/or TCP.
 type Server struct {
-	UDS        string
-	TCPAddr    string
+	UDS          string
+	TCPAddr      string
 	RingBuffer   *ring.RequestBuffer
 	BodyCache    *proxy.BodyCache
 	EventHub     *proxy.EventHub
@@ -40,6 +44,18 @@ type Server struct {
 
 	// MITMHandler is optional — if set, MITM control endpoints are registered.
 	MITMHandler *mitm.MITMHandler
+
+	// Sessions is the trajectory log. Nil disables session routes' data.
+	Sessions *session.Store
+	// Decision is the optional Jev / OpenAI client. Nil means unconfigured.
+	Decision *decision.Client
+	// Replay runs a captured request back through the proxy.
+	Replay func(shared.VerifyRequest) (shared.VerifyResult, error)
+	// PublishMITM republishes the network policy after a control-plane change.
+	PublishMITM func()
+	// Token is required on TCP control connections. Unix sockets are owner-only
+	// and do not need it. Empty disables the check.
+	Token string
 
 	httpServer  *http.Server
 	mux         *http.ServeMux
@@ -91,6 +107,15 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/v1/fixtures", s.handleFixturesListOrSave)
 	s.mux.HandleFunc("/v1/fixtures/", s.handleFixtureByName)
 
+	s.mux.HandleFunc("/v1/sessions/current", s.handleSessionCurrent)
+	s.mux.HandleFunc("/v1/sessions", s.handleSessions)
+	s.mux.HandleFunc("/v1/sessions/", s.handleSessionByID)
+	s.mux.HandleFunc("/v1/activity", s.handleActivity)
+	s.mux.HandleFunc("/v1/verify/replay", s.handleVerifyReplay)
+	s.mux.HandleFunc("/v1/find", s.handleFind)
+	s.mux.HandleFunc("/v1/decision", s.handleDecisionStatus)
+	s.mux.HandleFunc("/v1/rules/draft", s.handleRulesDraft)
+
 	// Milestone 3: MITM routes (registered only when a MITMHandler is set).
 	if s.MITMHandler != nil {
 		s.mux.HandleFunc("/v1/mitm/enable", s.handleMITMEnable)
@@ -102,8 +127,27 @@ func (s *Server) registerRoutes() {
 		s.mux.HandleFunc("/v1/mitm/deny", s.handleMITMDeny)
 	}
 
-	// Wrap with middleware: recovery (outermost) → logging → routes.
-	s.handler = wrapMiddleware(s.mux)
+	// Wrap with middleware: recovery (outermost) → auth → logging → routes.
+	s.handler = wrapMiddleware(s.authMiddleware(s.mux))
+}
+
+type connClassKeyType struct{}
+
+var connClassKey connClassKeyType
+
+func (s *Server) authMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		class, _ := r.Context().Value(connClassKey).(string)
+		if class == "tcp" && s.Token != "" {
+			got := r.Header.Get("Authorization")
+			want := "Bearer " + s.Token
+			if subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
+				writeError(w, http.StatusUnauthorized, shared.ErrCodeUnauthorized, "control API token required")
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // Start begins listening on UDS and/or TCP. It returns once all listeners are
@@ -113,7 +157,15 @@ func (s *Server) Start() error {
 	s.startOnce.Do(func() {
 		s.startedAt = time.Now()
 
-		s.httpServer = &http.Server{Handler: s.handler}
+		s.httpServer = &http.Server{
+			Handler: s.handler,
+			ConnContext: func(ctx context.Context, c net.Conn) context.Context {
+				if _, ok := c.(*net.UnixConn); ok {
+					return context.WithValue(ctx, connClassKey, "unix")
+				}
+				return context.WithValue(ctx, connClassKey, "tcp")
+			},
+		}
 
 		// Start UDS listener.
 		if s.UDS != "" {
@@ -127,7 +179,7 @@ func (s *Server) Start() error {
 					log.Printf("api: failed to listen on UDS %s: %v", udsPath, err)
 				} else {
 					s.udsListener = lis
-					os.Chmod(udsPath, 0666)
+					os.Chmod(udsPath, 0600)
 					go s.httpServer.Serve(lis)
 					log.Printf("api: listening on UDS %s", udsPath)
 				}
@@ -187,6 +239,12 @@ func writeError(w http.ResponseWriter, status int, code, message string, details
 		body.Error.Details = details
 	}
 	writeJSON(w, status, body)
+}
+
+func (s *Server) publishMITM() {
+	if s.PublishMITM != nil {
+		s.PublishMITM()
+	}
 }
 
 // expandPath expands ~ to the user's home directory.

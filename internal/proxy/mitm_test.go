@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -83,18 +84,14 @@ func doMITMExchange(t *testing.T, proxyAddr, upstreamHost string) *tls.Conn {
 		t.Fatalf("write CONNECT: %v", err)
 	}
 
-	// Read just enough to verify 200, without buffering extra TLS data.
-	// We MUST NOT use bufio/http.ReadResponse here because the proxy starts
-	// the TLS handshake immediately after sending "200 Connection Established",
-	// and buffered reads would consume TLS handshake bytes.
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	lineBuf := make([]byte, 200)
-	n, err := conn.Read(lineBuf)
+	// Read only the CONNECT response header. A buffered read would swallow
+	// the TLS handshake that follows.
+	header, err := readConnectHeader(conn)
 	if err != nil {
 		t.Fatalf("read CONNECT response: %v", err)
 	}
-	if !strings.Contains(string(lineBuf[:n]), "200") {
-		t.Fatalf("CONNECT expected 200, got: %s", string(lineBuf[:n]))
+	if !strings.Contains(header, "200") {
+		t.Fatalf("CONNECT expected 200, got: %s", header)
 	}
 
 	// Now establish TLS over the tunneled connection.
@@ -107,6 +104,25 @@ func doMITMExchange(t *testing.T, proxyAddr, upstreamHost string) *tls.Conn {
 		t.Fatalf("client TLS handshake: %v", err)
 	}
 	return clientTLS
+}
+
+func readConnectHeader(conn net.Conn) (string, error) {
+	var buf []byte
+	one := make([]byte, 1)
+	for !bytes.Contains(buf, []byte("\r\n\r\n")) {
+		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		n, err := conn.Read(one)
+		if n > 0 {
+			buf = append(buf, one[:n]...)
+		}
+		if err != nil {
+			return string(buf), err
+		}
+		if len(buf) > 8192 {
+			return string(buf), fmt.Errorf("CONNECT header too long")
+		}
+	}
+	return string(buf), nil
 }
 
 // testMITMSetupWithRuleStore creates a Proxy with MITM enabled, configured with
@@ -239,25 +255,25 @@ func TestHandleMITMExchange_UpstreamFailure(t *testing.T) {
 	}
 	defer pxy.Stop()
 
-	badHost := "192.0.2.1:9"
+	badHost := "127.0.0.1:1"
 	clientTLS := doMITMExchange(t, pxy.Addr(), badHost)
 	defer clientTLS.Close()
 
-	// Send request — should get a Bad Gateway response.
+	// Send request. Nothing is listening, so the proxy returns a gateway error.
 	_, err := clientTLS.Write([]byte("GET / HTTP/1.1\r\nHost: " + badHost + "\r\n\r\n"))
 	if err != nil {
 		t.Fatalf("write request failed: %v", err)
 	}
 
-	clientTLS.SetReadDeadline(time.Now().Add(30 * time.Second))
+	clientTLS.SetReadDeadline(time.Now().Add(5 * time.Second))
 	resp, err := http.ReadResponse(bufio.NewReader(clientTLS), nil)
 	if err != nil {
 		t.Fatalf("read response failed: %v", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusBadGateway {
-		t.Errorf("expected 502 Bad Gateway, got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusGatewayTimeout && resp.StatusCode != http.StatusBadGateway {
+		t.Errorf("expected 504 or 502, got %d", resp.StatusCode)
 	}
 }
 
@@ -408,6 +424,7 @@ done4:
 		t.Error("expected EventResponseCompleted or EventRequestFailed event")
 	}
 }
+
 // ---------------------------------------------------------------------------
 // Tests — Concurrency safety
 // ---------------------------------------------------------------------------
@@ -532,7 +549,6 @@ func TestHandleMITMExchange_BodyCached(t *testing.T) {
 		}
 	}
 }
-
 
 // ---------------------------------------------------------------------------
 // Tests — Keep-alive / multiple requests
@@ -766,8 +782,8 @@ func TestHandleMITMExchange_RuleBlock(t *testing.T) {
 	// Verify the request record is in the ring buffer with a completed status.
 	var foundReq *shared.Request
 	for _, r := range pxy.RingBuffer.List(100) {
-			if r.Intercepted && r.Method == "GET" {
-				foundReq = r
+		if r.Intercepted && r.Method == "GET" {
+			foundReq = r
 			break
 		}
 	}
@@ -822,7 +838,7 @@ func TestHandleMITMExchange_RuleMock(t *testing.T) {
 	// Verify the request is in the ring buffer with the mock status.
 	var foundReq *shared.Request
 	for _, r := range pxy.RingBuffer.List(100) {
-			if r.Intercepted && r.Method == "GET" {
+		if r.Intercepted && r.Method == "GET" {
 			foundReq = r
 			break
 		}
@@ -864,14 +880,15 @@ func TestHandleMITMExchange_RuleAbort(t *testing.T) {
 		t.Fatalf("write request: %v", err)
 	}
 
-	// Reading should fail — the abort action returns without writing a response,
-	// then Connection: close causes the proxy to close the connection.
+	// abort is a typed rejection: the client gets a defined 403 response.
 	clientTLS.SetReadDeadline(time.Now().Add(5 * time.Second))
-	_, readErr := http.ReadResponse(bufio.NewReader(clientTLS), nil)
-	if readErr == nil {
-		t.Error("expected error reading response after abort, got nil")
-	} else {
-		t.Logf("got expected read error: %v", readErr)
+	resp, readErr := http.ReadResponse(bufio.NewReader(clientTLS), nil)
+	if readErr != nil {
+		t.Fatalf("read rejection response: %v", readErr)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("abort status = %d, want 403", resp.StatusCode)
 	}
 
 	// Verify EventRequestFailed was emitted for the aborted request.
@@ -997,14 +1014,14 @@ func TestHandleMITMExchange_FullEventEmission(t *testing.T) {
 	// produce: Started, Headers, BodyAvailable, RuleEvaluated, RuleApplied,
 	// ResponseHeaders, ResponseBodyAvailable, ResponseCompleted.
 	wantTypes := map[shared.EventType]bool{
-		shared.EventRequestStarted:          false,
-		shared.EventRequestHeaders:          false,
-		shared.EventRequestBodyAvailable:    false,
-		shared.EventRuleEvaluated:           false,
-		shared.EventRuleApplied:             false,
-		shared.EventResponseHeaders:         false,
-		shared.EventResponseBodyAvailable:   false,
-		shared.EventResponseCompleted:       false,
+		shared.EventRequestStarted:        false,
+		shared.EventRequestHeaders:        false,
+		shared.EventRequestBodyAvailable:  false,
+		shared.EventRuleEvaluated:         false,
+		shared.EventRuleApplied:           false,
+		shared.EventResponseHeaders:       false,
+		shared.EventResponseBodyAvailable: false,
+		shared.EventResponseCompleted:     false,
 	}
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {

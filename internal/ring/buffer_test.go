@@ -456,9 +456,9 @@ func TestGetAfterOverwriteSequence(t *testing.T) {
 	}
 	// Buffer has [7,8,9] (oldest to newest)
 	tests := []struct {
-		idx      int
-		wantVal  int
-		wantOK   bool
+		idx     int
+		wantVal int
+		wantOK  bool
 	}{
 		{0, 7, true},
 		{1, 8, true},

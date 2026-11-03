@@ -15,9 +15,10 @@ import (
 //
 // Rules are lost on daemon restart — no file or database persistence.
 type RuleStore struct {
-	mu     sync.RWMutex
-	rules  map[shared.RuleID]*shared.Rule
-	nextID atomic.Int64
+	mu         sync.RWMutex
+	rules      map[shared.RuleID]*shared.Rule
+	nextID     atomic.Int64
+	generation atomic.Uint64
 }
 
 // NewRuleStore creates an empty RuleStore.
@@ -74,17 +75,20 @@ func (s *RuleStore) Create(name string, priority int, script string) (*shared.Ru
 	id := shared.RuleID(fmt.Sprintf("rule_%d", s.nextID.Add(1)))
 
 	rule := &shared.Rule{
-		ID:        id,
-		Name:      name,
-		Priority:  priority,
-		Enabled:   true,
-		Script:    script,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:          id,
+		Name:        name,
+		Priority:    priority,
+		Enabled:     true,
+		Script:      script,
+		Version:     1,
+		FailureMode: "fail-open",
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 
 	s.mu.Lock()
 	s.rules[id] = rule
+	s.generation.Add(1)
 	s.mu.Unlock()
 
 	return rule, nil
@@ -112,9 +116,11 @@ func (s *RuleStore) Update(id shared.RuleID, name *string, priority *int, script
 			return nil, fmt.Errorf("rule script must not be empty")
 		}
 		r.Script = *script
+		r.Version++
 	}
 
 	r.UpdatedAt = time.Now().UTC()
+	s.generation.Add(1)
 	return r, nil
 }
 
@@ -128,6 +134,7 @@ func (s *RuleStore) Delete(id shared.RuleID) error {
 	}
 
 	delete(s.rules, id)
+	s.generation.Add(1)
 	return nil
 }
 
@@ -143,7 +150,48 @@ func (s *RuleStore) SetEnabled(id shared.RuleID, enabled bool) (*shared.Rule, er
 
 	r.Enabled = enabled
 	r.UpdatedAt = time.Now().UTC()
+	s.generation.Add(1)
 	return r, nil
+}
+
+// SetFailureMode sets fail-open or fail-closed. Unknown values are rejected.
+func (s *RuleStore) SetFailureMode(id shared.RuleID, mode string) (*shared.Rule, error) {
+	if mode != "fail-open" && mode != "fail-closed" {
+		return nil, fmt.Errorf("failureMode must be fail-open or fail-closed")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.rules[id]
+	if !ok {
+		return nil, fmt.Errorf("rule %q not found", id)
+	}
+	r.FailureMode = mode
+	r.UpdatedAt = time.Now().UTC()
+	s.generation.Add(1)
+	return r, nil
+}
+
+// Snapshot returns a stable copy of the enabled rules and the generation that
+// produced them. Order is ascending priority, then rule ID. Callers must not
+// share the slice with later mutations; the pointers are copies.
+func (s *RuleStore) Snapshot() (uint64, []*shared.Rule) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]*shared.Rule, 0, len(s.rules))
+	for _, r := range s.rules {
+		if !r.Enabled {
+			continue
+		}
+		cp := *r
+		out = append(out, &cp)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Priority != out[j].Priority {
+			return out[i].Priority < out[j].Priority
+		}
+		return out[i].ID < out[j].ID
+	})
+	return s.generation.Load(), out
 }
 
 // EnabledRules returns all currently enabled rules sorted by priority
@@ -160,7 +208,10 @@ func (s *RuleStore) EnabledRules() []*shared.Rule {
 		}
 	}
 	sort.Slice(result, func(i, j int) bool {
-		return result[i].Priority < result[j].Priority
+		if result[i].Priority != result[j].Priority {
+			return result[i].Priority < result[j].Priority
+		}
+		return result[i].ID < result[j].ID
 	})
 	return result
 }
