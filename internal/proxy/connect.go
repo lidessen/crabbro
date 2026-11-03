@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/net/http2"
+
 	"github.com/lidessen/chiling/internal/shared"
 )
 
@@ -218,6 +220,10 @@ func (p *Proxy) handleMITMExchange(clientConn net.Conn, connectReq *shared.Reque
 	defer tlsConn.Close()
 
 	sni := tlsConn.ConnectionState().ServerName
+	if tlsConn.ConnectionState().NegotiatedProtocol == "h2" {
+		p.serveMITMH2(tlsConn, connectReq, host, sni, connectStartTime)
+		return
+	}
 	lis := &singleConnListener{conn: tlsConn}
 	var finishOnce sync.Once
 	finished := make(chan struct{})
@@ -237,8 +243,6 @@ func (p *Proxy) handleMITMExchange(clientConn net.Conn, connectReq *shared.Reque
 		}),
 		ReadHeaderTimeout: 30 * time.Second,
 		IdleTimeout:       30 * time.Second,
-		// Already-decrypted conn; do not negotiate HTTP/2.
-		TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
 		ConnState: func(c net.Conn, state http.ConnState) {
 			if state == http.StateClosed || state == http.StateHijacked {
 				finish()
@@ -252,6 +256,31 @@ func (p *Proxy) handleMITMExchange(clientConn net.Conn, connectReq *shared.Reque
 	<-finished
 	_ = srv.Close()
 
+	completeRequest(connectReq, connectStartTime, http.StatusOK)
+	p.EventHub.Emit(&shared.Event{
+		Type:      shared.EventResponseCompleted,
+		RequestID: connectReq.ID,
+		Timestamp: time.Now(),
+	})
+}
+
+func (p *Proxy) serveMITMH2(tlsConn *tls.Conn, connectReq *shared.Request, host, sni string, connectStartTime time.Time) {
+	h2 := &http2.Server{}
+	h2.ServeConn(tlsConn, &http2.ServeConnOpts{
+		BaseConfig: &http.Server{IdleTimeout: 60 * time.Second},
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			reqHost := r.Host
+			if reqHost == "" && r.URL != nil {
+				reqHost = r.URL.Host
+			}
+			if !authorityMatches(host, reqHost, sni) {
+				http.Error(w, "Bad Request", http.StatusBadRequest)
+				return
+			}
+			r.Proto = "HTTP/2.0"
+			p.serveClientExchange(w, r, "mitm", connectReq.ID, host)
+		}),
+	})
 	completeRequest(connectReq, connectStartTime, http.StatusOK)
 	p.EventHub.Emit(&shared.Event{
 		Type:      shared.EventResponseCompleted,

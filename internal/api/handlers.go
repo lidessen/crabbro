@@ -117,11 +117,19 @@ func (s *Server) handleRequests(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	var requests []*shared.Request
+	requests := s.collectRequests()
 	if cursor != "" {
-		requests = s.RingBuffer.ListSince(cursor, 0)
-	} else {
-		requests = s.RingBuffer.List(0)
+		filtered := requests[:0]
+		seen := false
+		for _, req := range requests {
+			if seen {
+				filtered = append(filtered, req)
+			}
+			if string(req.ID) == cursor {
+				seen = true
+			}
+		}
+		requests = filtered
 	}
 	filtered, err := filterRequests(requests, map[string]string{
 		"sinceTime": q.Get("sinceTime"),
@@ -193,7 +201,7 @@ func (s *Server) handleRequestDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req := s.RingBuffer.Resolve(shared.RequestID(idStr))
+	req := s.lookupRequest(shared.RequestID(idStr))
 	if req == nil {
 		writeError(w, http.StatusNotFound, shared.ErrCodeNotFound, "request not found",
 			shared.ErrorDetail{Field: "id", Message: fmt.Sprintf("no request with ID %s", idStr)})
@@ -206,15 +214,14 @@ func (s *Server) handleRequestDetail(w http.ResponseWriter, r *http.Request) {
 		Request: *req,
 	}
 
-	if include["body"] && req.RequestBodyRef != "" {
-		if bc := s.BodyCache.Get(req.RequestBodyRef); bc != nil {
-			bodyStr := string(bc)
+	if include["body"] {
+		rb, sb := s.bodiesFor(req)
+		if len(rb) > 0 {
+			bodyStr := string(rb)
 			resp.Body = &bodyStr
 		}
-	}
-	if include["body"] && req.ResponseBodyRef != "" {
-		if bc := s.BodyCache.Get(req.ResponseBodyRef); bc != nil {
-			bodyStr := string(bc)
+		if len(sb) > 0 {
+			bodyStr := string(sb)
 			resp.ResponseBody = &bodyStr
 		}
 	}

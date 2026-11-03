@@ -32,4 +32,17 @@ const (
 
 	// MaxBodyCacheBytes is the maximum total body cache size (~10 MB).
 	MaxBodyCacheBytes = 10 * 1024 * 1024
+
+	// MaxTransformBody is the largest response body a rewrite may read.
+	// Larger bodies are left unchanged.
+	MaxTransformBody = 256 * 1024
+
+	// DefaultHistoryRetention is how long completed exchanges are kept.
+	DefaultHistoryRetention = 7 * 24 * time.Hour
+
+	// DefaultHistoryMaxRows is the cap on stored exchanges.
+	DefaultHistoryMaxRows = 10000
+
+	// MaxDelay is the longest response delay a rule may request.
+	MaxDelay = 30 * time.Second
 )

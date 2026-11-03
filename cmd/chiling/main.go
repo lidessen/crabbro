@@ -64,6 +64,8 @@ func run() error {
 		return cmdVerify(cfg, flag.Args()[1:])
 	case "decision":
 		return cmdDecision(cfg, flag.Args()[1:])
+	case "history":
+		return cmdHistory(cfg, flag.Args()[1:])
 	case "help", "--help", "-h":
 		printUsage()
 		return nil
@@ -93,6 +95,9 @@ Commands:
   requests show <id>        Alias of get
   find "<query>"            Natural-language search via Jev or OpenAI
   verify replay <id>        Replay a captured request through the proxy
+  decision status           Show whether a decision API is configured
+  history status            Show the SQLite history
+  history prune             Drop expired exchanges
   rules list                List rules
   rules create <file>       Create a rule from a JS file
   rules from <id>           Scaffold a rule from a captured request

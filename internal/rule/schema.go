@@ -1,8 +1,11 @@
 package rule
 
 import (
+	"encoding/base64"
 	"fmt"
 	"net/url"
+	"strings"
+	"time"
 
 	"github.com/lidessen/chiling/internal/shared"
 )
@@ -21,15 +24,20 @@ type ruleOutput struct {
 }
 
 type ruleAction struct {
-	Type    string         `json:"type"`
-	Params  map[string]any `json:"params,omitempty"`
-	Status  any            `json:"status,omitempty"`
-	Headers map[string]any `json:"headers,omitempty"`
-	Body    any            `json:"body,omitempty"`
-	Tags    any            `json:"tags,omitempty"`
-	Name    any            `json:"name,omitempty"`
-	Value   any            `json:"value,omitempty"`
-	URL     any            `json:"url,omitempty"`
+	Type           string         `json:"type"`
+	Params         map[string]any `json:"params,omitempty"`
+	Status         any            `json:"status,omitempty"`
+	Headers        map[string]any `json:"headers,omitempty"`
+	Body           any            `json:"body,omitempty"`
+	Tags           any            `json:"tags,omitempty"`
+	Name           any            `json:"name,omitempty"`
+	Value          any            `json:"value,omitempty"`
+	URL            any            `json:"url,omitempty"`
+	Find           any            `json:"find,omitempty"`
+	Replace        any            `json:"replace,omitempty"`
+	Milliseconds   any            `json:"milliseconds,omitempty"`
+	BytesPerSecond any            `json:"bytesPerSecond,omitempty"`
+	Payload        any            `json:"payload,omitempty"`
 }
 
 // liftFlatParams copies design-doc flat action fields into params when the
@@ -56,6 +64,11 @@ func (a *ruleAction) liftFlatParams() {
 	lift("name", a.Name)
 	lift("value", a.Value)
 	lift("url", a.URL)
+	lift("find", a.Find)
+	lift("replace", a.Replace)
+	lift("milliseconds", a.Milliseconds)
+	lift("bytesPerSecond", a.BytesPerSecond)
+	lift("payload", a.Payload)
 }
 
 // ValidateOutput validates a rule evaluation result and converts it into
@@ -124,6 +137,22 @@ func validateAction(a ruleAction) (shared.RuleAction, error) {
 		return validateAbort(a.Params)
 	case shared.ActionRewriteURL:
 		return validateRewriteURL(a.Params)
+	case shared.ActionSetResponseHeader:
+		return validateHeaderAction(shared.ActionSetResponseHeader, a.Params)
+	case shared.ActionRemoveResponseHeader:
+		return validateHeaderAction(shared.ActionRemoveResponseHeader, a.Params)
+	case shared.ActionRewriteResponseBody:
+		return validateRewriteBody(a.Params)
+	case shared.ActionSetResponseStatus:
+		return validateStatusAction(a.Params)
+	case shared.ActionDelay:
+		return validateDelay(a.Params)
+	case shared.ActionThrottle:
+		return validateThrottle(a.Params)
+	case shared.ActionReplaceFrame:
+		return validateReplaceFrame(a.Params)
+	case shared.ActionDropFrame:
+		return shared.RuleAction{Type: shared.ActionDropFrame}, nil
 	default:
 		return shared.RuleAction{}, fmt.Errorf("unknown action type %q", a.Type)
 	}
@@ -294,6 +323,83 @@ func validateRewriteURL(params map[string]any) (shared.RuleAction, error) {
 // ---------------------------------------------------------------------------
 // Validation helpers
 // ---------------------------------------------------------------------------
+
+func validateHeaderAction(kind shared.RuleActionType, params map[string]any) (shared.RuleAction, error) {
+	name, err := extractStringParam(params, "name")
+	if err != nil || strings.TrimSpace(name) == "" || strings.ContainsAny(name, "\r\n:") {
+		return shared.RuleAction{}, fmt.Errorf("%s action requires a header name", kind)
+	}
+	out := shared.RuleAction{Type: kind, Params: map[string]any{"name": name}}
+	if kind == shared.ActionRemoveResponseHeader {
+		return out, nil
+	}
+	value, err := extractStringParam(params, "value")
+	if err != nil || strings.ContainsAny(value, "\r\n") {
+		return shared.RuleAction{}, fmt.Errorf("%s action requires a header value", kind)
+	}
+	out.Params["value"] = value
+	return out, nil
+}
+
+func validateRewriteBody(params map[string]any) (shared.RuleAction, error) {
+	body, hasBody := params["body"].(string)
+	find, hasFind := params["find"].(string)
+	repl, _ := params["replace"].(string)
+	if hasBody {
+		if len(body) > MaxMockResponseBodyLen {
+			return shared.RuleAction{}, fmt.Errorf("rewriteResponseBody body exceeds max size")
+		}
+		return shared.RuleAction{Type: shared.ActionRewriteResponseBody, Params: map[string]any{"body": body}}, nil
+	}
+	if !hasFind {
+		return shared.RuleAction{}, fmt.Errorf("rewriteResponseBody requires params.body or params.find")
+	}
+	return shared.RuleAction{Type: shared.ActionRewriteResponseBody, Params: map[string]any{"find": find, "replace": repl}}, nil
+}
+
+func validateStatusAction(params map[string]any) (shared.RuleAction, error) {
+	status, err := extractIntParam(params, "status", 100, 599)
+	if err != nil {
+		return shared.RuleAction{}, fmt.Errorf("setResponseStatus action: %v", err)
+	}
+	return shared.RuleAction{Type: shared.ActionSetResponseStatus, Params: map[string]any{"status": status}}, nil
+}
+
+func validateDelay(params map[string]any) (shared.RuleAction, error) {
+	ms, err := extractIntParam(params, "milliseconds", 0, int(shared.MaxDelay/time.Millisecond))
+	if err != nil {
+		return shared.RuleAction{}, fmt.Errorf("delay action: %v", err)
+	}
+	return shared.RuleAction{Type: shared.ActionDelay, Params: map[string]any{"milliseconds": ms}}, nil
+}
+
+func validateThrottle(params map[string]any) (shared.RuleAction, error) {
+	bps, err := extractIntParam(params, "bytesPerSecond", 1, 100_000_000)
+	if err != nil {
+		return shared.RuleAction{}, fmt.Errorf("throttle action: %v", err)
+	}
+	return shared.RuleAction{Type: shared.ActionThrottle, Params: map[string]any{"bytesPerSecond": bps}}, nil
+}
+
+func validateReplaceFrame(params map[string]any) (shared.RuleAction, error) {
+	if payload, ok := params["payload"].(string); ok {
+		if len(payload) > MaxMockResponseBodyLen {
+			return shared.RuleAction{}, fmt.Errorf("replaceFrame payload exceeds max size")
+		}
+		return shared.RuleAction{Type: shared.ActionReplaceFrame, Params: map[string]any{"payload": payload}}, nil
+	}
+	if b64, ok := params["payloadBase64"].(string); ok {
+		raw, err := base64.StdEncoding.DecodeString(b64)
+		if err != nil {
+			return shared.RuleAction{}, fmt.Errorf("replaceFrame payloadBase64 is not valid base64")
+		}
+		if len(raw) > MaxMockResponseBodyLen {
+			return shared.RuleAction{}, fmt.Errorf("replaceFrame payload exceeds max size")
+		}
+		return shared.RuleAction{Type: shared.ActionReplaceFrame, Params: map[string]any{"payloadBase64": b64}}, nil
+	}
+	return shared.RuleAction{}, fmt.Errorf("replaceFrame requires params.payload or params.payloadBase64")
+}
 
 func extractIntParam(params map[string]any, key string, min, max int) (int, error) {
 	raw, ok := params[key]

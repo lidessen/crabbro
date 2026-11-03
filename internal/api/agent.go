@@ -9,8 +9,117 @@ import (
 	"time"
 
 	"github.com/lidessen/chiling/internal/decision"
+	"github.com/lidessen/chiling/internal/history"
 	"github.com/lidessen/chiling/internal/shared"
 )
+
+func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, shared.ErrCodeBadRequest, "method not allowed")
+		return
+	}
+	if s.History == nil {
+		writeJSON(w, http.StatusOK, history.Status{Enabled: false})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.History.Status())
+}
+
+func (s *Server) handleHistoryPrune(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, shared.ErrCodeBadRequest, "method not allowed")
+		return
+	}
+	if s.History == nil {
+		writeError(w, http.StatusBadRequest, shared.ErrCodeBadRequest, "history is not enabled")
+		return
+	}
+	n, err := s.History.Prune()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, shared.ErrCodeInternal, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"pruned": n, "requests": s.History.Count()})
+}
+
+func (s *Server) collectRequests() []*shared.Request {
+	seen := map[shared.RequestID]*shared.Request{}
+	var order []shared.RequestID
+	if s.History != nil {
+		if rows, err := s.History.List(0); err == nil {
+			for _, row := range rows {
+				seen[row.ID] = row
+				order = append(order, row.ID)
+			}
+		}
+	}
+	if s.RingBuffer != nil {
+		for _, row := range s.RingBuffer.List(0) {
+			if _, ok := seen[row.ID]; ok {
+				seen[row.ID] = row
+				continue
+			}
+			seen[row.ID] = row
+			order = append(order, row.ID)
+		}
+	}
+	out := make([]*shared.Request, 0, len(order))
+	for _, id := range order {
+		out = append(out, seen[id])
+	}
+	return out
+}
+
+func (s *Server) lookupRequest(id shared.RequestID) *shared.Request {
+	if s.RingBuffer != nil {
+		if req := s.RingBuffer.Resolve(id); req != nil {
+			return req
+		}
+	}
+	if s.History == nil {
+		return nil
+	}
+	if req, _, _, err := s.History.Get(id); err == nil && req != nil {
+		return req
+	}
+	rows, err := s.History.List(0)
+	if err != nil {
+		return nil
+	}
+	var match *shared.Request
+	for _, row := range rows {
+		if strings.HasPrefix(string(row.ID), string(id)) {
+			if match != nil {
+				return nil
+			}
+			match = row
+		}
+	}
+	return match
+}
+
+func (s *Server) bodiesFor(req *shared.Request) ([]byte, []byte) {
+	var rb, sb []byte
+	if req == nil {
+		return nil, nil
+	}
+	if s.BodyCache != nil {
+		rb = s.BodyCache.Get(req.RequestBodyRef)
+		sb = s.BodyCache.Get(req.ResponseBodyRef)
+	}
+	if s.History != nil && (len(rb) == 0 || len(sb) == 0) {
+		hb, hs, err := s.History.Bodies(req.ID)
+		if err == nil {
+			if len(rb) == 0 {
+				rb = hb
+			}
+			if len(sb) == 0 {
+				sb = hs
+			}
+		}
+	}
+	return rb, sb
+}
 
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	if s.Sessions == nil {

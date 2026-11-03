@@ -16,6 +16,7 @@ import (
 
 	"github.com/lidessen/chiling/internal/decision"
 	"github.com/lidessen/chiling/internal/fixture"
+	"github.com/lidessen/chiling/internal/history"
 	"github.com/lidessen/chiling/internal/mitm"
 	"github.com/lidessen/chiling/internal/proxy"
 	"github.com/lidessen/chiling/internal/ring"
@@ -47,6 +48,8 @@ type Server struct {
 
 	// Sessions is the trajectory log. Nil disables session routes' data.
 	Sessions *session.Store
+	// History is the durable exchange log. Nil keeps the in-memory ring only.
+	History *history.Store
 	// Decision is the optional Jev / OpenAI client. Nil means unconfigured.
 	Decision *decision.Client
 	// Replay runs a captured request back through the proxy.
@@ -114,6 +117,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/v1/verify/replay", s.handleVerifyReplay)
 	s.mux.HandleFunc("/v1/find", s.handleFind)
 	s.mux.HandleFunc("/v1/decision", s.handleDecisionStatus)
+	s.mux.HandleFunc("/v1/history", s.handleHistory)
+	s.mux.HandleFunc("/v1/history/prune", s.handleHistoryPrune)
 	s.mux.HandleFunc("/v1/rules/draft", s.handleRulesDraft)
 
 	// Milestone 3: MITM routes (registered only when a MITMHandler is set).

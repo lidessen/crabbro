@@ -47,14 +47,33 @@ func NewRuleEngine() *RuleEngine {
 // req      — the captured HTTP request metadata.
 // body     — the request body content (empty string if unavailable).
 // timeout  — per-rule execution deadline; 0 means no timeout.
+// Phase is an optional response or WebSocket frame passed to a later evaluation.
+type Phase struct {
+	HasResponse           bool
+	ResponseStatus        int
+	ResponseHeaders       map[string]string
+	ResponseBody          string
+	ResponseBodyTruncated bool
+	Frame                 *shared.FrameView
+}
+
+// EvaluatePhase is Evaluate with a response view or a WebSocket frame.
+func (e *RuleEngine) EvaluatePhase(script string, req *shared.Request, body string, phase *Phase, timeout time.Duration) Result {
+	return e.evaluate(script, req, body, phase, timeout)
+}
+
 func (e *RuleEngine) Evaluate(script string, req *shared.Request, body string, timeout time.Duration) Result {
+	return e.evaluate(script, req, body, nil, timeout)
+}
+
+func (e *RuleEngine) evaluate(script string, req *shared.Request, body string, phase *Phase, timeout time.Duration) Result {
 	start := time.Now()
 
 	vm := goja.New()
 	setupSandbox(vm)
 
 	// Build the immutable JS context and inject as global.
-	ctx := buildContext(req, body)
+	ctx := buildContext(req, body, phase)
 	if err := vm.Set("ctx", ctx); err != nil {
 		return evalError(start, fmt.Sprintf("failed to set context: %v", err))
 	}
@@ -177,12 +196,14 @@ func setupSandbox(vm *goja.Runtime) {
 
 // buildContext constructs the JS context object from a Request and optional body.
 // Returns a map so Goja creates the exact property structure we need.
-func buildContext(req *shared.Request, body string) map[string]any {
+func buildContext(req *shared.Request, body string, phase *Phase) map[string]any {
 	headers := make(map[string]any)
-	for k, v := range req.RequestHeaders {
-		headers[k] = v
+	if req != nil {
+		for k, v := range req.RequestHeaders {
+			headers[k] = v
+		}
 	}
-	return map[string]any{
+	ctx := map[string]any{
 		"request": map[string]any{
 			"method":     req.Method,
 			"scheme":     req.Scheme,
@@ -195,6 +216,27 @@ func buildContext(req *shared.Request, body string) map[string]any {
 			"clientAddr": req.ClientAddr,
 		},
 	}
+	if phase != nil && phase.HasResponse {
+		rh := make(map[string]any, len(phase.ResponseHeaders))
+		for k, v := range phase.ResponseHeaders {
+			rh[k] = v
+		}
+		ctx["response"] = map[string]any{
+			"status":        phase.ResponseStatus,
+			"headers":       rh,
+			"body":          phase.ResponseBody,
+			"bodyTruncated": phase.ResponseBodyTruncated,
+		}
+	}
+	if phase != nil && phase.Frame != nil {
+		ctx["frame"] = map[string]any{
+			"direction": phase.Frame.Direction,
+			"opcode":    phase.Frame.Opcode,
+			"payload":   phase.Frame.Payload,
+			"fin":       phase.Frame.Fin,
+		}
+	}
+	return ctx
 }
 
 // evalError constructs a Result for a failed evaluation.

@@ -87,6 +87,7 @@ func (h *MITMHandler) Intercept(clientConn net.Conn, host string) (*tls.Conn, er
 
 	tlsConfig := &tls.Config{
 		Certificates: []tls.Certificate{*cert},
+		NextProtos:   []string{"h2", "http/1.1"},
 	}
 	if h.minTLSVersion != 0 {
 		tlsConfig.MinVersion = h.minTLSVersion
