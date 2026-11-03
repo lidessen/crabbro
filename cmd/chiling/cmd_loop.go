@@ -219,6 +219,20 @@ func cmdVerify(cfg *clientConfig, args []string) error {
 	return printAPI(cfg, http.MethodPost, "/v1/verify/replay", bytes.NewReader(body))
 }
 
+func cmdHistory(cfg *clientConfig, args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: chiling history <status|prune>")
+	}
+	switch args[0] {
+	case "status":
+		return printAPI(cfg, http.MethodGet, "/v1/history", nil)
+	case "prune":
+		return printAPI(cfg, http.MethodPost, "/v1/history/prune", nil)
+	default:
+		return fmt.Errorf("unknown history command: %s", args[0])
+	}
+}
+
 func cmdDecision(cfg *clientConfig, args []string) error {
 	if len(args) > 0 && args[0] != "status" {
 		return fmt.Errorf("usage: chiling decision status")

@@ -31,6 +31,8 @@ type RuleTrace struct {
 	Actions     []RuleAction `json:"actions,omitempty"`
 	DurationMs  int64        `json:"durationMs"`
 	Error       string       `json:"error,omitempty"`
+	// Phase is "request", "response", or "frame".
+	Phase string `json:"phase,omitempty"`
 }
 
 // RuleActionType enumerates the supported rule action types.
@@ -51,7 +53,31 @@ const (
 	ActionTag RuleActionType = "tag"
 	// ActionRewriteURL changes the upstream URL before forwarding.
 	ActionRewriteURL RuleActionType = "rewriteURL"
+	// ActionSetResponseHeader sets a response header on the way back to the client.
+	ActionSetResponseHeader RuleActionType = "setResponseHeader"
+	// ActionRemoveResponseHeader removes a response header.
+	ActionRemoveResponseHeader RuleActionType = "removeResponseHeader"
+	// ActionRewriteResponseBody replaces or rewrites the response body.
+	ActionRewriteResponseBody RuleActionType = "rewriteResponseBody"
+	// ActionSetResponseStatus changes the response status.
+	ActionSetResponseStatus RuleActionType = "setResponseStatus"
+	// ActionDelay waits before the response is written.
+	ActionDelay RuleActionType = "delay"
+	// ActionThrottle limits the response body rate.
+	ActionThrottle RuleActionType = "throttle"
+	// ActionReplaceFrame replaces a WebSocket frame payload.
+	ActionReplaceFrame RuleActionType = "replaceFrame"
+	// ActionDropFrame drops a WebSocket frame.
+	ActionDropFrame RuleActionType = "dropFrame"
 )
+
+// FrameView is one WebSocket data frame shown to a rule.
+type FrameView struct {
+	Direction string `json:"direction"`
+	Opcode    string `json:"opcode"`
+	Payload   string `json:"payload"`
+	Fin       bool   `json:"fin"`
+}
 
 // RuleAction is a declarative action returned by a rule evaluation.
 type RuleAction struct {

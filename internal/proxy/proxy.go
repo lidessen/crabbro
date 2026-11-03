@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/lidessen/chiling/internal/history"
 	"github.com/lidessen/chiling/internal/mitm"
 	"github.com/lidessen/chiling/internal/ring"
 	"github.com/lidessen/chiling/internal/rule"
@@ -39,6 +40,7 @@ type Proxy struct {
 
 	Policy   PolicyStore
 	Sessions *session.Store
+	History  *history.Store
 
 	// DialTLS allows injecting a custom TLS dialer for upstream connections
 	// in tests. If nil, the shared transport verifies server certificates.

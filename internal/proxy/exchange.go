@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lidessen/chiling/internal/rule"
 	"github.com/lidessen/chiling/internal/shared"
 )
 
@@ -37,6 +38,10 @@ type Exchange struct {
 
 	decision     string
 	failureStage string
+
+	matched       []*shared.Rule
+	upgradeConn   net.Conn
+	clientPreface []byte
 }
 
 // ExchangeHandler runs one stage of the onion and returns the response outer
@@ -115,6 +120,10 @@ func (p *Proxy) serveClientExchange(w http.ResponseWriter, r *http.Request, ingr
 		p.finishExchange(ex, http.StatusBadGateway, textResponse(http.StatusBadGateway, "Bad Gateway"), w, "request_failed")
 		return
 	}
+	if ex.upgradeConn != nil && resp.StatusCode == http.StatusSwitchingProtocols {
+		p.bridgeWebSocket(w, ex, resp)
+		return
+	}
 	kind := "response_completed"
 	if ex.decision == "reject" {
 		kind = "request_failed"
@@ -179,6 +188,9 @@ func (p *Proxy) newExchange(r *http.Request, ingress string, tunnelID shared.Req
 	}
 	out.Header = r.Header.Clone()
 	stripHopByHop(out.Header)
+	if isWebSocketUpgrade(r) {
+		restoreWebSocketHeaders(out.Header, r.Header)
+	}
 	out.Host = target.Host
 	out.ContentLength = r.ContentLength
 	if r.Body != nil {
@@ -333,8 +345,10 @@ func (m *ruleMiddleware) Wrap(next ExchangeHandler) ExchangeHandler {
 			return next(ex)
 		}
 
+		trace.Phase = "request"
 		trace.Actions = result.Actions
 		ex.traces = append(ex.traces, trace)
+		ex.matched = append(ex.matched, m.rule)
 		m.proxy.emit(shared.EventRuleEvaluated, ex.record.ID, map[string]any{
 			"ruleId": m.rule.ID, "matched": true,
 		})
@@ -342,17 +356,83 @@ func (m *ruleMiddleware) Wrap(next ExchangeHandler) ExchangeHandler {
 			"ruleId": m.rule.ID, "actions": result.Actions,
 		})
 
-		synthetic, err := applyRequestPatch(ex, result.Actions)
+		reqActions, respActions := splitStage(result.Actions)
+		synthetic, err := applyRequestPatch(ex, reqActions)
 		if err != nil {
 			return nil, err
 		}
 		if synthetic != nil {
 			ex.decision = "respond"
+			if err := applyResponseActions(synthetic, respActions); err != nil {
+				return nil, err
+			}
 			return synthetic, nil
 		}
-		// Response-stage actions are a later schema. Unwind is this return.
-		return next(ex)
+		resp, err := next(ex)
+		if err != nil || resp == nil {
+			return resp, err
+		}
+		if len(respActions) > 0 {
+			if err := applyResponseActions(resp, respActions); err != nil {
+				if m.rule.FailureMode == "fail-closed" {
+					ex.decision = "reject"
+					return nil, &errReject{status: http.StatusForbidden, body: "response rule failed closed"}
+				}
+				ex.traces = append(ex.traces, shared.RuleTrace{
+					RuleID: m.rule.ID, RuleVersion: m.rule.Version, Phase: "response", Error: err.Error(),
+				})
+				return resp, nil
+			}
+			return resp, nil
+		}
+		return m.applyResponsePhase(ex, resp)
 	}
+}
+
+func (m *ruleMiddleware) applyResponsePhase(ex *Exchange, resp *http.Response) (*http.Response, error) {
+	preview, truncated := previewResponse(resp)
+	_, flat := headerFields(resp.Header)
+	phase := &rule.Phase{
+		HasResponse:           true,
+		ResponseStatus:        resp.StatusCode,
+		ResponseHeaders:       flat,
+		ResponseBody:          string(preview),
+		ResponseBodyTruncated: truncated,
+	}
+	result := m.proxy.RuleEngine.EvaluatePhase(m.rule.Script, ex.viewRequest(), string(ex.preview), phase, shared.DefaultRuleTimeout)
+	trace := shared.RuleTrace{
+		RuleID: m.rule.ID, RuleVersion: m.rule.Version, Phase: "response",
+		DurationMs: result.DurationMs, Error: result.Error,
+		Matched: result.Matched && result.SchemaValid && result.Error == "",
+	}
+	if result.Error != "" || !result.SchemaValid || !result.Matched {
+		trace.Matched = false
+		ex.traces = append(ex.traces, trace)
+		if result.Error != "" && m.rule.FailureMode == "fail-closed" {
+			ex.decision = "reject"
+			return nil, &errReject{status: http.StatusForbidden, body: "response rule failed closed"}
+		}
+		return resp, nil
+	}
+	_, respActions := splitStage(result.Actions)
+	trace.Actions = respActions
+	ex.traces = append(ex.traces, trace)
+	if len(respActions) == 0 {
+		return resp, nil
+	}
+	if err := applyResponseActions(resp, respActions); err != nil {
+		trace.Error = err.Error()
+		trace.Matched = false
+		if m.rule.FailureMode == "fail-closed" {
+			ex.decision = "reject"
+			return nil, &errReject{status: http.StatusForbidden, body: "response rule failed closed"}
+		}
+		return resp, nil
+	}
+	m.proxy.emit(shared.EventRuleApplied, ex.record.ID, map[string]any{
+		"ruleId": m.rule.ID, "phase": "response", "actions": respActions,
+	})
+	return resp, nil
 }
 
 func applyRequestPatch(ex *Exchange, actions []shared.RuleAction) (*http.Response, error) {
@@ -424,6 +504,9 @@ func (p *Proxy) upstreamTerminal(ex *Exchange) (*http.Response, error) {
 		ex.outbound.ContentLength = 0
 	}
 	ex.outbound.RequestURI = ""
+	if isWebSocketUpgrade(ex.outbound) {
+		return p.websocketRoundTrip(ex)
+	}
 	resp, err := p.roundTripper().RoundTrip(ex.outbound.WithContext(ex.ctx))
 	if err != nil {
 		if ex.failureStage == "" {
@@ -505,6 +588,7 @@ func (p *Proxy) finishExchange(ex *Exchange, status int, resp *http.Response, w 
 	if p.Sessions != nil && ex.record.SessionID != "" {
 		p.Sessions.Note("request_completed", ex.record.SessionID, string(ex.record.ID), "", ex.record.Method+" "+ex.record.URL)
 	}
+	p.persist(ex.record)
 }
 
 func (p *Proxy) emit(typ shared.EventType, id shared.RequestID, payload any) {
@@ -531,7 +615,7 @@ func (p *Proxy) roundTripper() http.RoundTripper {
 		tr := &http.Transport{
 			Proxy:                 nil,
 			DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
-			ForceAttemptHTTP2:     false,
+			ForceAttemptHTTP2:     true,
 			TLSHandshakeTimeout:   10 * time.Second,
 			ResponseHeaderTimeout: 60 * time.Second,
 			IdleConnTimeout:       90 * time.Second,
@@ -545,7 +629,7 @@ func (p *Proxy) roundTripper() http.RoundTripper {
 					host = addr
 				}
 				d := &net.Dialer{Timeout: 10 * time.Second}
-				return dialTLS(d, network, addr, &tls.Config{ServerName: host})
+				return dialTLS(d, network, addr, &tls.Config{ServerName: host, NextProtos: []string{"h2", "http/1.1"}})
 			}
 		}
 		p.httpTransport = tr

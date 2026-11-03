@@ -19,6 +19,7 @@ import (
 	"github.com/lidessen/chiling/internal/api"
 	"github.com/lidessen/chiling/internal/decision"
 	"github.com/lidessen/chiling/internal/fixture"
+	"github.com/lidessen/chiling/internal/history"
 	"github.com/lidessen/chiling/internal/mitm"
 	"github.com/lidessen/chiling/internal/proxy"
 	"github.com/lidessen/chiling/internal/ring"
@@ -48,6 +49,9 @@ func run() error {
 	decisionProvider := flag.String("decision-provider", "", "Decision provider: jev or openai (default from env)")
 	decisionBase := flag.String("decision-base-url", "", "Decision API base URL (default from env)")
 	decisionModel := flag.String("decision-model", "", "Decision model name (default from env)")
+	historyPath := flag.String("history", "", "SQLite history path (default: history.db next to the socket; 'off' disables)")
+	historyRetention := flag.Duration("history-retention", shared.DefaultHistoryRetention, "How long to keep captured exchanges")
+	historyMax := flag.Int("history-max-rows", shared.DefaultHistoryMaxRows, "Maximum stored exchanges")
 	flag.Parse()
 
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
@@ -167,6 +171,17 @@ func run() error {
 		decCfg.Model = *decisionModel
 	}
 	apiSrv.Decision = decision.New(decCfg)
+	if histPath := resolveHistoryPath(*historyPath, *udsPath); histPath != "" {
+		hist, err := history.Open(histPath, *historyRetention, *historyMax)
+		if err != nil {
+			log.Printf("history: %v", err)
+		} else {
+			pxy.History = hist
+			apiSrv.History = hist
+			log.Printf("history: %s (retention %s, max %d)", histPath, historyRetention.String(), *historyMax)
+			defer hist.Close()
+		}
+	}
 	tokenPath := filepath.Join(filepath.Dir(expandDaemonPath(*udsPath)), "api.token")
 	token, err := loadOrCreateToken(tokenPath)
 	if err != nil {
@@ -199,6 +214,17 @@ func run() error {
 	log.Printf("chilingd stopped")
 
 	return nil
+}
+
+func resolveHistoryPath(flagPath, uds string) string {
+	switch strings.ToLower(strings.TrimSpace(flagPath)) {
+	case "off", "none", "disabled":
+		return ""
+	}
+	if flagPath != "" {
+		return flagPath
+	}
+	return filepath.Join(filepath.Dir(expandDaemonPath(uds)), "history.db")
 }
 
 func expandDaemonPath(path string) string {

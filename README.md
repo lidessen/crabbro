@@ -85,6 +85,13 @@ root CA (`chiling root CA`) into the system trust store on macOS or Linux.
 Domains on the denylist stay opaque TCP tunnels. A failed MITM handshake is
 not downgraded to a tunnel.
 
+Decrypted TLS advertises `h2` and `http/1.1`. When the client negotiates
+HTTP/2, that tunnel is served as HTTP/2 and each stream still goes through the
+same exchange pipeline. Clients that do not offer `h2` stay on HTTP/1.1.
+WebSocket upgrades (`ws://` and `wss://`) are relayed after the 101, with
+optional frame rules. WebSocket over HTTP/2 (extended CONNECT) is not
+implemented.
+
 ## Decision API
 
 Natural-language find and rule draft call an optional decision API. With no
@@ -158,6 +165,8 @@ reads the token file itself.
 | `rules draft "TEXT" [--from ID] [--apply]` | Decision-API draft |
 | `rules fixture save\|list\|delete` | Saved fixtures |
 | `decision status` | Whether a decision provider is configured |
+| `history status` | SQLite history path, count, retention |
+| `history prune` | Delete expired or overflow rows |
 | `mitm status\|enable\|disable\|cert\|install-ca\|uninstall-ca` | MITM and CA |
 | `mitm allow\|deny list\|add\|remove` | Domain patterns |
 
@@ -166,7 +175,8 @@ reads the token file itself.
 
 `chilingd` flags: `--proxy-addr`, `--uds-path`, `--tcp-addr`, `--ring-buffer-size`,
 `--fixture-dir`, `--mitm`, `--mitm-allow`, `--mitm-deny`, `--decision-provider`,
-`--decision-base-url`, `--decision-model`. The API key stays in the environment.
+`--decision-base-url`, `--decision-model`, `--history`, `--history-retention`,
+`--history-max-rows`. The API key stays in the environment.
 
 ## Rule format
 
@@ -207,11 +217,42 @@ next to `type`) are accepted and lifted into `params`.
 | `rewriteURL` | `url` (http/https, no userinfo) | Change URL, dial host, TLS name, and Host together |
 | `mockResponse` | `status`, optional `headers`, optional `body` | Skip upstream |
 | `block` | `status`, optional `body` | Skip upstream with that status |
-| `abort` | none | Reject with HTTP 403. Replaces the old silent close |
+| `abort` | none | Reject with HTTP 403 |
+| `setResponseHeader` | `name`, `value` | Set a response header on the way back |
+| `removeResponseHeader` | `name` | Remove a response header |
+| `setResponseStatus` | `status` | Change the response status |
+| `rewriteResponseBody` | `body`, or `find` + `replace` | Replace the body, or substitute within it. Bodies over 256 KiB are left unchanged |
+| `delay` | `milliseconds` (max 30000) | Wait before the response is written |
+| `throttle` | `bytesPerSecond` | Limit how fast the response body is copied |
+| `replaceFrame` | `payload` or `payloadBase64` | Replace a WebSocket text/binary frame |
+| `dropFrame` | none | Drop a WebSocket text/binary frame |
 
 A rule cannot return more than one of `mockResponse`, `block`, and `abort`.
 `failureMode` on the stored rule is `fail-open` (default) or `fail-closed`.
 fail-open skips a rule that errors. fail-closed answers 403.
+
+Response actions returned with the request-phase result are applied on the way
+back out, after inner rules. If that result has no response actions, and the
+rule matched, the function runs again with `ctx.response` (`status`, `headers`,
+`body`, `bodyTruncated`). A WebSocket rule should match the HTTP upgrade first
+(for example with `tag`), then handle `ctx.frame`:
+
+```js
+export default function rule(ctx) {
+  if (ctx.frame) {
+    if (ctx.frame.direction === "client" && ctx.frame.opcode === "text") {
+      return { match: true, actions: [{ type: "replaceFrame", params: { payload: "rewritten" } }] };
+    }
+    return { match: false };
+  }
+  if (ctx.request.path !== "/ws") return { match: false };
+  return { match: true, actions: [{ type: "tag", params: { tags: ["ws"] } }] };
+}
+```
+
+`ctx.frame` is `{direction, opcode, payload, fin}`. `direction` is `client` or
+`server`. Control frames (ping, pong, close) are relayed unchanged. Rules see
+each data frame on its own, not a reassembled message.
 
 Create from a file or inline JSON:
 
@@ -238,6 +279,8 @@ chiling rules create ./rule.js --name mock-login --priority 100
 | `POST` | `/v1/verify/replay` | Replay a capture |
 | `POST` | `/v1/find` | Decision search. `{query, limit}` |
 | `GET` | `/v1/decision` | Provider status, no secret |
+| `GET` | `/v1/history` | History status |
+| `POST` | `/v1/history/prune` | Apply retention |
 | `POST` | `/v1/rules/draft` | Decision draft. `{description, requestId, apply}` |
 | CRUD | `/v1/rules`, `/v1/fixtures`, `/v1/mitm/...` | Rules, fixtures, MITM |
 
@@ -249,8 +292,13 @@ Errors:
 
 Events are best-effort. Slow subscribers can miss them. The request list is
 the source for recent traffic. Bodies are previews (64 KiB each, 10 MiB
-shared). Forwarding is not truncated to that cap. In-memory state is dropped
-when the daemon exits.
+shared). Forwarding is not truncated to that cap.
+
+Completed exchanges are also written to SQLite (`history.db` next to the
+control socket, unless `--history off`). `chiling requests list` and
+`requests show` read that store, so a restart keeps them. Retention defaults
+to 7 days and 10000 rows. `chiling history status` and `chiling history prune`
+report and apply that policy.
 
 ## How a UI plugs in
 
@@ -267,27 +315,14 @@ this API, not a second proxy:
 The UI should not apply rules by editing proxy state locally. It calls the
 same routes the CLI calls.
 
-## What the network design defers
+## What is still not in this tree
 
-`NETWORK_PIPELINE_DESIGN.md` is the data-plane target. This tree implements
-the parts the agent loop needs:
-
-- One exchange pipeline for plain HTTP and decrypted HTTP, with onion rule middleware.
-- Immutable MITM policy snapshots. An empty allowlist denies interception.
-- Bounded body capture that does not truncate the forwarded body.
-- All-or-nothing rule validation, stable priority-then-id order, and a typed `abort` rejection.
-- Shared upstream transport. `rewriteURL` changes dial target, TLS server name, and Host together.
-- Owner-only Unix socket and a bearer token on TCP.
-
-Still deferred, on purpose:
-
-- Response-stage actions (`setResponseHeader`, body rewrite, delay, throttle).
-- WebSocket frame inspection. Upgrades are not rewritten; opaque CONNECT still carries them.
-- HTTP/2 MITM.
-- SQLite history and retention.
-- A plugin runtime.
-- Full IDNA edge cases beyond `golang.org/x/net/idna` lookup, and a separate per-exchange memory budget beyond the capture caps.
-- Automatic trust-store detection. `mitmCertInstalled` is still set by the CLI after install.
+- A plugin runtime. Rules stay sandboxed Goja.
+- A separate per-exchange memory budget beyond the capture and 256 KiB transform caps.
+- Trust-store detection. `mitmCertInstalled` is still whatever the CLI reports after install.
+- WebSocket message reassembly. Frame rules see one data frame at a time and do not run on ping, pong, or close.
+- WebSocket over HTTP/2 (extended CONNECT).
+- Response rewrites of bodies larger than 256 KiB. Those responses are forwarded unchanged and the rule records an error.
 
 ## Layout
 
@@ -301,4 +336,5 @@ Still deferred, on purpose:
 | `internal/decision` | Jev and OpenAI-compatible decision calls |
 | `internal/api` | `/v1` control API |
 | `internal/session` | Recording sessions and trajectory |
+| `internal/history` | SQLite exchange log |
 | `internal/ring` | Recent flows |
