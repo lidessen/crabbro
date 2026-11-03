@@ -13,8 +13,31 @@ import (
 
 // clientConfig holds the connection configuration for the control API.
 type clientConfig struct {
-	UDS string
-	TCP string
+	UDS   string
+	TCP   string
+	Token string
+}
+
+func (cfg *clientConfig) apiToken() string {
+	if cfg.Token != "" {
+		return cfg.Token
+	}
+	if env := os.Getenv("CHILING_API_TOKEN"); env != "" {
+		return env
+	}
+	candidates := []string{}
+	if cfg.UDS != "" {
+		candidates = append(candidates, filepath.Join(filepath.Dir(cfg.UDS), "api.token"))
+	}
+	candidates = append(candidates, expandPath("~/.chiling/api.token"))
+	for _, p := range candidates {
+		if b, err := os.ReadFile(p); err == nil {
+			if tok := strings.TrimSpace(string(b)); tok != "" {
+				return tok
+			}
+		}
+	}
+	return ""
 }
 
 // doRequest performs an HTTP request to the control API, trying UDS first then
@@ -35,6 +58,9 @@ func doRequest(cfg *clientConfig, method, path string, body io.Reader) (*http.Re
 		if err != nil {
 			return nil, err
 		}
+		if tok := cfg.apiToken(); tok != "" {
+			req.Header.Set("Authorization", "Bearer "+tok)
+		}
 		resp, err := client.Do(req)
 		if err == nil {
 			return resp, nil
@@ -53,6 +79,9 @@ func doRequest(cfg *clientConfig, method, path string, body io.Reader) (*http.Re
 		req, err := http.NewRequest(method, url, body)
 		if err != nil {
 			return nil, err
+		}
+		if tok := cfg.apiToken(); tok != "" {
+			req.Header.Set("Authorization", "Bearer "+tok)
 		}
 		resp, err := client.Do(req)
 		if err != nil {

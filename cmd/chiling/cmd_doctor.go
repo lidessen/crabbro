@@ -15,16 +15,16 @@ import (
 
 // doctorResult holds all diagnostic information collected by the doctor.
 type doctorResult struct {
-	DaemonRunning    bool     `json:"daemonRunning"`
-	ProxyListening   bool     `json:"proxyListening"`
-	ProxyAddr        string   `json:"proxyAddr,omitempty"`
-	MITMConfigured   bool     `json:"mitmConfigured"`
-	MITMEnabled      bool     `json:"mitmEnabled"`
-	MITMCertExists   bool     `json:"mitmCertExists"`
-	MITMCertInstalled bool   `json:"mitmCertInstalled"`
-	RulesCount       int      `json:"rulesCount,omitempty"`
-	RequestsCaptured int64    `json:"requestsCaptured,omitempty"`
-	Issues           []string `json:"issues"`
+	DaemonRunning     bool     `json:"daemonRunning"`
+	ProxyListening    bool     `json:"proxyListening"`
+	ProxyAddr         string   `json:"proxyAddr,omitempty"`
+	MITMConfigured    bool     `json:"mitmConfigured"`
+	MITMEnabled       bool     `json:"mitmEnabled"`
+	MITMCertExists    bool     `json:"mitmCertExists"`
+	MITMCertInstalled bool     `json:"mitmCertInstalled"`
+	RulesCount        int      `json:"rulesCount,omitempty"`
+	RequestsCaptured  int64    `json:"requestsCaptured,omitempty"`
+	Issues            []string `json:"issues"`
 }
 
 // cmdDoctor implements the "doctor" command.
@@ -223,4 +223,3 @@ func runDoctorFixes(cfg *clientConfig, result doctorResult) error {
 	}
 	return nil
 }
-

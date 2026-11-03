@@ -3,12 +3,14 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"strings"
 
+	"github.com/lidessen/chiling/internal/rule"
 	"github.com/lidessen/chiling/internal/shared"
 )
 
@@ -41,6 +43,10 @@ func cmdRules(cfg *clientConfig, args []string) error {
 		return cmdRulesTest(cfg, subArgs)
 	case "fixture":
 		return cmdRulesFixture(cfg, subArgs)
+	case "from":
+		return cmdRulesFrom(cfg, subArgs)
+	case "draft":
+		return cmdRulesDraft(cfg, subArgs)
 	default:
 		return fmt.Errorf("unknown rules command: %s", sub)
 	}
@@ -445,6 +451,66 @@ func cmdFixtureDelete(cfg *clientConfig, args []string) error {
 
 	fmt.Printf("Fixture %q deleted\n", name)
 	return nil
+}
+
+func cmdRulesFrom(cfg *clientConfig, args []string) error {
+	fs := flag.NewFlagSet("rules from", flag.ContinueOnError)
+	action := fs.String("action", "mock", "mock, block, header, rewrite, or tag")
+	name := fs.String("name", "", "Rule name")
+	apply := fs.Bool("apply", true, "Create the rule on the daemon")
+	fs.Parse(args)
+	if fs.NArg() < 1 {
+		return fmt.Errorf("usage: chiling rules from <request-id> [--action mock] [--name n] [--apply=false]")
+	}
+	id := fs.Arg(0)
+	resp, err := doRequest(cfg, http.MethodGet, "/v1/requests/"+id+"?include=body", nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("API error: %s", readBody(resp.Body))
+	}
+	var detail shared.RequestDetailResponse
+	if err := json.NewDecoder(resp.Body).Decode(&detail); err != nil {
+		return err
+	}
+	body := ""
+	if detail.ResponseBody != nil {
+		body = *detail.ResponseBody
+	}
+	ctype := ""
+	if detail.Request.ResponseHeaders != nil {
+		ctype = detail.Request.ResponseHeaders["Content-Type"]
+	}
+	script := rule.Scaffold(&detail.Request, *action, body, ctype)
+	ruleName := *name
+	if ruleName == "" {
+		ruleName = "from-" + string(detail.Request.ID)
+	}
+	if !*apply {
+		fmt.Print(script)
+		return nil
+	}
+	payload, _ := json.Marshal(shared.CreateRuleRequest{Name: ruleName, Script: script})
+	return printAPI(cfg, http.MethodPost, "/v1/rules", bytes.NewReader(payload))
+}
+
+func cmdRulesDraft(cfg *clientConfig, args []string) error {
+	fs := flag.NewFlagSet("rules draft", flag.ContinueOnError)
+	from := fs.String("from", "", "Captured request id to use as context")
+	apply := fs.Bool("apply", false, "Create the drafted rule")
+	fs.Parse(args)
+	desc := strings.TrimSpace(strings.Join(fs.Args(), " "))
+	if desc == "" {
+		return fmt.Errorf("usage: chiling rules draft \"<description>\" [--from <id>] [--apply]")
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"description": desc,
+		"requestId":   *from,
+		"apply":       *apply,
+	})
+	return printAPI(cfg, http.MethodPost, "/v1/rules/draft", bytes.NewReader(payload))
 }
 
 // ---------------------------------------------------------------------------

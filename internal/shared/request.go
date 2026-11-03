@@ -33,6 +33,38 @@ type Request struct {
 	// Intercepted is true when the request was MITM-decrypted (as opposed to a
 	// raw TCP CONNECT tunnel passthrough).
 	Intercepted bool `json:"intercepted,omitempty"`
+
+	// TunnelID is the parent CONNECT tunnel for a decrypted HTTP exchange.
+	TunnelID RequestID `json:"tunnelId,omitempty"`
+	// SessionID is the recording session that was active when this exchange was captured.
+	SessionID string `json:"sessionId,omitempty"`
+
+	// OriginalURL is the URL as the client sent it. EffectiveURL is the URL
+	// after rule patches. URL remains the original client URL so agents can
+	// find the request they sent.
+	OriginalURL  string `json:"originalURL,omitempty"`
+	EffectiveURL string `json:"effectiveURL,omitempty"`
+
+	// Repeated header values. RequestHeaders / ResponseHeaders keep a
+	// compatibility map (joined values, except Set-Cookie which keeps the
+	// first value so cookies are not comma-joined).
+	RequestHeaderList  []HeaderField `json:"requestHeaderList,omitempty"`
+	ResponseHeaderList []HeaderField `json:"responseHeaderList,omitempty"`
+
+	RequestBodyBytes      int64 `json:"requestBodyBytes,omitempty"`
+	RequestBodyTruncated  bool  `json:"requestBodyTruncated,omitempty"`
+	ResponseBodyBytes     int64 `json:"responseBodyBytes,omitempty"`
+	ResponseBodyTruncated bool  `json:"responseBodyTruncated,omitempty"`
+
+	FailureStage     string `json:"failureStage,omitempty"`
+	PolicyGeneration uint64 `json:"policyGeneration,omitempty"`
+	RuleGeneration   uint64 `json:"ruleGeneration,omitempty"`
+}
+
+// HeaderField is one header name and every value received for it, in order.
+type HeaderField struct {
+	Name   string   `json:"name"`
+	Values []string `json:"values"`
 }
 
 // Headers is a map of header name to its first value.

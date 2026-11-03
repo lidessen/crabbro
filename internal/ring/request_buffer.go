@@ -1,6 +1,7 @@
 package ring
 
 import (
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -43,6 +44,26 @@ func (rb *RequestBuffer) Add(method, scheme, host, path, query, url, clientAddr 
 	}
 	rb.buf.Push(req)
 	return req
+}
+
+// Resolve returns an exact ID match, or a unique prefix match.
+func (rb *RequestBuffer) Resolve(id shared.RequestID) *shared.Request {
+	if id == "" {
+		return nil
+	}
+	if exact := rb.GetByID(id); exact != nil {
+		return exact
+	}
+	var match *shared.Request
+	for _, req := range rb.List(0) {
+		if strings.HasPrefix(string(req.ID), string(id)) {
+			if match != nil {
+				return nil
+			}
+			match = req
+		}
+	}
+	return match
 }
 
 // GetByID returns the request with the given ID, or nil if not found.

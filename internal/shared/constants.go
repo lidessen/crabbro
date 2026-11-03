@@ -20,6 +20,9 @@ const (
 	// DefaultRuleTimeout is the maximum execution time per rule evaluation.
 	DefaultRuleTimeout = 500 * time.Millisecond
 
+	// DefaultRuleBudget is the total rule-evaluation budget for one exchange.
+	DefaultRuleBudget = 2 * time.Second
+
 	// DefaultRulePriority is the priority assigned to a rule when none is set.
 	DefaultRulePriority = 100
 

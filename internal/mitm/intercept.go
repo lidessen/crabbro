@@ -26,17 +26,17 @@ type MITMStats struct {
 // with clients using dynamically-generated certificates, tracks active connections
 // for graceful shutdown, and provides domain filtering via DomainMatcher.
 type MITMHandler struct {
-	CA            *CAStore
-	CertManager   *CertManager
-	Matcher       *DomainMatcher
+	CA          *CAStore
+	CertManager *CertManager
+	Matcher     *DomainMatcher
 
 	mu            sync.RWMutex
 	enabled       bool
 	certInstalled bool
 
 	// Connection tracking for graceful shutdown.
-	conns   map[*tls.Conn]struct{}
-	connMu  sync.Mutex
+	conns  map[*tls.Conn]struct{}
+	connMu sync.Mutex
 
 	// Cumulative statistics (accessed atomically).
 	totalHandshakes      int64
