@@ -1,14 +1,18 @@
 package shared
 
-import "time"
+import (
+	"time"
+
+	"github.com/lidessen/chiling/pkg/api"
+)
 
 // Default configuration values for the proxy daemon and CLI.
 const (
 	// DefaultUDSPath is the default Unix domain socket path for the control API.
-	DefaultUDSPath = "~/.chiling/proxy.sock"
+	DefaultUDSPath = api.DefaultUDSPath
 
 	// DefaultTCPAddr is the default TCP address for the control API.
-	DefaultTCPAddr = "localhost:16379"
+	DefaultTCPAddr = api.DefaultTCPAddr
 
 	// DefaultProxyAddr is the default address for the HTTP proxy listener.
 	DefaultProxyAddr = "localhost:8080"

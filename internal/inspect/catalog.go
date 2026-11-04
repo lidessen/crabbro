@@ -6,35 +6,6 @@ import (
 	"time"
 )
 
-// Source is one local app the proxy has seen.
-type Source struct {
-	ID         string    `json:"id"`
-	Kind       string    `json:"kind"`
-	Name       string    `json:"name"`
-	Executable string    `json:"executable,omitempty"`
-	PID        int       `json:"pid,omitempty"`
-	HelperPID  int       `json:"helperPid,omitempty"`
-	Platform   string    `json:"platform,omitempty"`
-	Seen       int       `json:"seen"`
-	InScope    int       `json:"inScope"`
-	Hidden     int       `json:"hidden"`
-	LastSeen   time.Time `json:"lastSeen"`
-	PageIDs    []string  `json:"pageIds,omitempty"`
-}
-
-// Page is a header-derived document grouped under a source.
-type Page struct {
-	ID         string    `json:"id"`
-	SourceID   string    `json:"sourceId"`
-	Origin     string    `json:"origin,omitempty"`
-	URL        string    `json:"url,omitempty"`
-	Confidence string    `json:"confidence,omitempty"`
-	Seen       int       `json:"seen"`
-	InScope    int       `json:"inScope"`
-	Hidden     int       `json:"hidden"`
-	LastSeen   time.Time `json:"lastSeen"`
-}
-
 // Catalog is the in-memory source and page index for this daemon process.
 type Catalog struct {
 	mu      sync.Mutex

@@ -206,6 +206,36 @@ func (s *Server) handleActivity(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"activity": items})
 }
 
+func (s *Server) handleTrajectory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, shared.ErrCodeBadRequest, "method not allowed")
+		return
+	}
+	q := r.URL.Query()
+	limit := 0
+	if raw := q.Get("limit"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, shared.ErrCodeBadRequest, "invalid limit")
+			return
+		}
+		limit = n
+	}
+	if s.Sessions == nil {
+		writeJSON(w, http.StatusOK, shared.TrajectoryPage{Items: []shared.Activity{}})
+		return
+	}
+	items, next, err := s.Sessions.Trajectory(q.Get("session"), q.Get("cursor"), limit)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, shared.ErrCodeBadRequest, err.Error())
+		return
+	}
+	if items == nil {
+		items = []shared.Activity{}
+	}
+	writeJSON(w, http.StatusOK, shared.TrajectoryPage{Items: items, NextCursor: next})
+}
+
 func (s *Server) handleVerifyReplay(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, shared.ErrCodeBadRequest, "method not allowed")

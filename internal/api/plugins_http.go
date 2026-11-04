@@ -107,6 +107,15 @@ func (s *Server) handleConfigCommit(w http.ResponseWriter, r *http.Request) {
 		if s.Sessions != nil {
 			s.Sessions.Note("scope_committed", "", "", "", "committed "+id)
 		}
+		if s.Inspect != nil {
+			sid := ""
+			if s.Sessions != nil {
+				if cur := s.Sessions.Current(); cur != nil {
+					sid = cur.ID
+				}
+			}
+			s.emitScope(s.Inspect.Status(sid, false))
+		}
 		writeJSON(w, http.StatusOK, map[string]any{"id": id, "committed": true})
 		return
 	}

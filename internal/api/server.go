@@ -136,6 +136,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/v1/sessions", s.handleSessions)
 	s.mux.HandleFunc("/v1/sessions/", s.handleSessionByID)
 	s.mux.HandleFunc("/v1/activity", s.handleActivity)
+	s.mux.HandleFunc("/v1/trajectory", s.handleTrajectory)
 	s.mux.HandleFunc("/v1/verify/replay", s.handleVerifyReplay)
 	s.mux.HandleFunc("/v1/find", s.handleFind)
 	s.mux.HandleFunc("/v1/decision", s.handleDecisionStatus)

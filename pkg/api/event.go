@@ -1,4 +1,4 @@
-package shared
+package api
 
 import "time"
 
@@ -30,11 +30,20 @@ const (
 	EventMITMEnabled EventType = "mitm_enabled"
 	// EventMITMDisabled is emitted when MITM is disabled on the daemon.
 	EventMITMDisabled EventType = "mitm_disabled"
+
+	// EventScopeChanged is emitted after a scope pick, omit, bypass, reset, or commit.
+	// Payload is a ScopeState.
+	EventScopeChanged EventType = "scope_changed"
+	// EventActivity is emitted when a trajectory step is appended.
+	// Payload is an Activity.
+	EventActivity EventType = "activity"
 )
 
 // Event is a structured observation emitted by the daemon. Events are
 // append-only and delivered via SSE on the control API.
 type Event struct {
+	// ID is a monotonic cursor. Clients resume a stream with the last ID they saw.
+	ID        int64     `json:"id"`
 	Type      EventType `json:"type"`
 	RequestID RequestID `json:"requestId"`
 	Timestamp time.Time `json:"timestamp"`

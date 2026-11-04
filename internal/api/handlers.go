@@ -62,7 +62,30 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
-	sub := s.EventHub.Subscribe()
+	after := int64(-1)
+	if raw := r.URL.Query().Get("after"); raw != "" {
+		n, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || n < 0 {
+			writeError(w, http.StatusBadRequest, shared.ErrCodeBadRequest, "invalid after cursor")
+			return
+		}
+		after = n
+	} else if raw := strings.TrimSpace(r.Header.Get("Last-Event-ID")); raw != "" {
+		if n, err := strconv.ParseInt(raw, 10, 64); err == nil && n >= 0 {
+			after = n
+		}
+	}
+	want := map[string]struct{}{}
+	for _, raw := range r.URL.Query()["type"] {
+		for _, part := range strings.Split(raw, ",") {
+			part = strings.TrimSpace(part)
+			if part != "" {
+				want[part] = struct{}{}
+			}
+		}
+	}
+
+	sub := s.EventHub.SubscribeAfter(after)
 	defer s.EventHub.Unsubscribe(sub)
 
 	ctx := r.Context()
@@ -74,11 +97,16 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
+			if len(want) > 0 {
+				if _, ok := want[string(event.Type)]; !ok {
+					continue
+				}
+			}
 			data, err := json.Marshal(event)
 			if err != nil {
 				continue
 			}
-			fmt.Fprintf(w, "data: %s\n\n", data)
+			fmt.Fprintf(w, "id: %d\ndata: %s\n\n", event.ID, data)
 			flusher.Flush()
 		}
 	}

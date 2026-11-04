@@ -134,6 +134,16 @@ func run() error {
 
 	// Start proxy.
 	pxy := proxy.New(*proxyAddr, rb, ruleStore, ruleEngine)
+	if pxy.Sessions != nil && pxy.EventHub != nil {
+		pxy.Sessions.SetObserver(func(a shared.Activity) {
+			pxy.EventHub.Emit(&shared.Event{
+				Type:      shared.EventActivity,
+				RequestID: shared.RequestID(a.RequestID),
+				Timestamp: a.At,
+				Payload:   a,
+			})
+		})
+	}
 
 	// Wire MITM to proxy (if configured) and publish one policy snapshot.
 	// An empty allowlist denies interception.

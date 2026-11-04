@@ -1,41 +1,37 @@
 package main
 
 import (
-	"bufio"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
-	"strings"
+	"os"
+	"os/signal"
+	"syscall"
 
-	"github.com/lidessen/chiling/internal/shared"
+	"github.com/lidessen/chiling/pkg/client"
 )
 
-// cmdListen implements the "listen" command, subscribing to the daemon's live
-// SSE event stream and printing each event as JSON on stdout.
+// cmdListen prints the daemon's live event stream as JSON. It reconnects
+// until interrupted, resuming from the last event id it printed.
 func cmdListen(cfg *clientConfig, args []string) error {
 	fs := flag.NewFlagSet("listen", flag.ContinueOnError)
-	fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 
-	resp, err := doRequest(cfg, "GET", "/v1/events", nil)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	events, err := cfg.apiClient().Subscribe(ctx, client.EventFilter{})
 	if err != nil {
 		return fmt.Errorf("failed to connect to daemon: %w", err)
 	}
-	defer resp.Body.Close()
-
-	// SSE parsing: read lines, look for "data:" prefixed lines, parse JSON.
-	scanner := bufio.NewScanner(resp.Body)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "data: ") {
+	for event := range events {
+		data, err := json.Marshal(event)
+		if err != nil {
 			continue
 		}
-		payload := strings.TrimPrefix(line, "data: ")
-		var event shared.Event
-		if err := json.Unmarshal([]byte(payload), &event); err != nil {
-			continue
-		}
-		data, _ := json.Marshal(event)
 		fmt.Println(string(data))
 	}
-	return scanner.Err()
+	return nil
 }

@@ -72,7 +72,7 @@ func (rt *Runtime) scope() *Scope {
 }
 
 // Status is the JSON shape of GET /v1/scope.
-func (rt *Runtime) Status(sessionID string, implicit bool) map[string]any {
+func (rt *Runtime) Status(sessionID string, implicit bool) shared.ScopeState {
 	var pick, omit, bypass []string
 	if sc := rt.scope(); sc != nil {
 		pick, omit, bypass = sc.raw()
@@ -98,14 +98,14 @@ func (rt *Runtime) Status(sessionID string, implicit bool) map[string]any {
 	if deny == nil {
 		deny = []string{}
 	}
-	return map[string]any{
-		"sessionId":       sessionID,
-		"implicitSession": implicit,
-		"pick":            pick,
-		"omit":            omit,
-		"bypass":          bypass,
-		"configDeny":      deny,
-		"configAllow":     allow,
-		"restricting":     snap.AllowRestricts,
+	return shared.ScopeState{
+		SessionID:       sessionID,
+		ImplicitSession: implicit,
+		Pick:            pick,
+		Omit:            omit,
+		Bypass:          bypass,
+		ConfigDeny:      deny,
+		ConfigAllow:     allow,
+		Restricting:     snap.AllowRestricts,
 	}
 }

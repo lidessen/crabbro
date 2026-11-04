@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/lidessen/chiling/internal/shared"
 )
@@ -14,12 +15,18 @@ func (s *Server) scopeActive() bool {
 		return false
 	}
 	st := s.Inspect.Status("", false)
-	for _, key := range []string{"pick", "omit", "bypass", "configDeny", "configAllow"} {
-		if list, ok := st[key].([]string); ok && len(list) > 0 {
-			return true
-		}
+	return len(st.Pick)+len(st.Omit)+len(st.Bypass)+len(st.ConfigDeny)+len(st.ConfigAllow) > 0
+}
+
+func (s *Server) emitScope(st shared.ScopeState) {
+	if s == nil || s.EventHub == nil {
+		return
 	}
-	return false
+	s.EventHub.Emit(&shared.Event{
+		Type:      shared.EventScopeChanged,
+		Timestamp: time.Now().UTC(),
+		Payload:   st,
+	})
 }
 
 func (s *Server) handleSources(w http.ResponseWriter, r *http.Request) {
@@ -103,6 +110,7 @@ func (s *Server) handleScope(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Sessions.Note(kind, sess.ID, "", "", summary)
 	st := s.Inspect.Status(sess.ID, implicit)
+	s.emitScope(st)
 	writeJSON(w, http.StatusOK, st)
 }
 

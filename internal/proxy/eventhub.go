@@ -6,17 +6,25 @@ import (
 	"github.com/lidessen/chiling/internal/shared"
 )
 
+const eventRingCap = 512
+
 // subscriber represents a single event subscription.
 type subscriber struct {
 	ch    chan *shared.Event
-	done  chan struct{}
 	close sync.Once
 }
 
-// EventHub manages event subscriptions and broadcasts events to all
-// subscribers. It is safe for concurrent use.
+// EventHub broadcasts events and retains a short ring so a client can resume
+// after a dropped stream. It is safe for concurrent use.
+//
+// IDs start at 1. Subscribe (and SubscribeAfter with a negative cursor) is
+// live-only. SubscribeAfter(n) with n >= 0 replays events whose ID is greater
+// than n, then continues live. The ring keeps the last 512 events; a longer
+// gap needs a fresh snapshot from the list endpoints.
 type EventHub struct {
-	mu          sync.RWMutex
+	mu          sync.Mutex
+	next        int64
+	ring        []*shared.Event
 	subscribers []*subscriber
 }
 
@@ -25,56 +33,93 @@ func NewEventHub() *EventHub {
 	return &EventHub{}
 }
 
-// Subscribe creates a new event subscription. The returned channel receives
-// events as they are emitted. The subscription is automatically removed when
-// the channel is closed or the context is cancelled.
+// Subscribe creates a live-only subscription. Events emitted before this call
+// are not replayed. Slow subscribers miss events rather than blocking the proxy.
 func (eh *EventHub) Subscribe() <-chan *shared.Event {
+	return eh.SubscribeAfter(-1)
+}
+
+// SubscribeAfter replays retained events with ID > after when after >= 0,
+// then delivers live events. A negative after is live-only.
+func (eh *EventHub) SubscribeAfter(after int64) <-chan *shared.Event {
 	eh.mu.Lock()
 	defer eh.mu.Unlock()
 
-	sub := &subscriber{
-		ch:   make(chan *shared.Event, 256),
-		done: make(chan struct{}),
+	sub := &subscriber{ch: make(chan *shared.Event, eventRingCap)}
+	if after >= 0 {
+		for _, ev := range eh.sinceLocked(after) {
+			sub.ch <- ev
+		}
 	}
 	eh.subscribers = append(eh.subscribers, sub)
 	return sub.ch
 }
 
-// Unsubscribe removes a subscription by closing its channel.
+// Unsubscribe removes a subscription and closes its channel.
 func (eh *EventHub) Unsubscribe(ch <-chan *shared.Event) {
 	eh.mu.Lock()
 	defer eh.mu.Unlock()
 
 	for i, sub := range eh.subscribers {
 		if sub.ch == ch {
-			sub.close.Do(func() {
-				close(sub.ch)
-				close(sub.done)
-			})
+			sub.close.Do(func() { close(sub.ch) })
 			eh.subscribers = append(eh.subscribers[:i], eh.subscribers[i+1:]...)
 			return
 		}
 	}
 }
 
-// Emit broadcasts an event to all active subscribers. Slow subscribers that
-// don't read from their channel may miss events (non-blocking send).
+// Emit assigns a monotonic ID, stores the event, and broadcasts it.
+// A nil event is ignored. Slow subscribers drop the event.
 func (eh *EventHub) Emit(event *shared.Event) {
-	eh.mu.RLock()
-	defer eh.mu.RUnlock()
+	if event == nil {
+		return
+	}
+	eh.mu.Lock()
+	defer eh.mu.Unlock()
+
+	eh.next++
+	cp := *event
+	cp.ID = eh.next
+	event.ID = cp.ID
+	if eh.ring == nil {
+		eh.ring = make([]*shared.Event, eventRingCap)
+	}
+	stored := cp
+	eh.ring[int((eh.next-1)%eventRingCap)] = &stored
 
 	for _, sub := range eh.subscribers {
 		select {
-		case sub.ch <- event:
+		case sub.ch <- &stored:
 		default:
-			// Subscriber is too slow; drop the event.
 		}
 	}
 }
 
 // Len returns the number of active subscribers.
 func (eh *EventHub) Len() int {
-	eh.mu.RLock()
-	defer eh.mu.RUnlock()
+	eh.mu.Lock()
+	defer eh.mu.Unlock()
 	return len(eh.subscribers)
+}
+
+func (eh *EventHub) sinceLocked(after int64) []*shared.Event {
+	if eh.next == 0 {
+		return nil
+	}
+	start := int64(1)
+	if eh.next > eventRingCap {
+		start = eh.next - eventRingCap + 1
+	}
+	if after+1 > start {
+		start = after + 1
+	}
+	out := make([]*shared.Event, 0, eh.next-start+1)
+	for id := start; id <= eh.next; id++ {
+		ev := eh.ring[int((id-1)%int64(eventRingCap))]
+		if ev != nil && ev.ID == id {
+			out = append(out, ev)
+		}
+	}
+	return out
 }
