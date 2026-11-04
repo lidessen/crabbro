@@ -317,7 +317,7 @@ same routes the CLI calls.
 
 ## What is still not in this tree
 
-- A plugin runtime. Rules stay sandboxed Goja. The proposal is [docs/design/plugins.md](docs/design/plugins.md). It is not implemented.
+- A plugin runtime. Rules stay sandboxed Goja. The proposal is [docs/design/plugins.md](docs/design/plugins.md): one lazy Node host, a worker per active plugin, not one process per plugin. It is not implemented.
 - A separate per-exchange memory budget beyond the capture and 256 KiB transform caps.
 - Trust-store detection. `mitmCertInstalled` is still whatever the CLI reports after install.
 - WebSocket message reassembly. Frame rules see one data frame at a time and do not run on ping, pong, or close.
