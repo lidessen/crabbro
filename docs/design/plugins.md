@@ -5,7 +5,9 @@ Date: 2026-11-04
 Revised: plugins contribute middleware, hooks, and tools. Rules are YAML pathways, specified in [rules.md](./rules.md). The host runtime is unchanged: one lazy Node host, a worker per active plugin.
 Scope: JS plugins distributed as npm packages.
 
-`NETWORK_PIPELINE_DESIGN.md` decision 7 kept plugin installation, manifests, host capabilities, and command registration out of the network work. This document is that follow-on. Agents author rules as YAML. Goja remains only for an optional `run` pipeline stage. The private repo `lidessen/workcells` was not readable from this environment (GitHub 404), so this draft does not copy its code. The pathway idea is the owner's: an ordered list of functions, callable from a rule and from an agent.
+`NETWORK_PIPELINE_DESIGN.md` decision 7 kept plugin installation, manifests, host capabilities, and command registration out of the network work. This document is that follow-on. Agents author rules as YAML ([rules.md](./rules.md)). Goja remains only for an optional `run` pipeline stage.
+
+Workcells (`lidessen/workcells`, read from the attached main-branch docs) is the owner's other runtime. Chiling borrows its names where they mean the same thing: `uses`, `with`, `if`, `env`, `instance`, Tools versus `uses`, explicit `middleware`, plugin instances, `config draft/validate/commit`, `preview`, per-file isolation, and a host that performs Decision calls. It does not borrow ScriptC, just-bash, durable Runs, or one OS process per plugin instance. The host here stays one Node process and a worker per active plugin.
 
 ## 1. Decision summary
 
@@ -14,7 +16,7 @@ Scope: JS plugins distributed as npm packages.
 3. Node is the plugin runtime. The daemon supervises **one** host process, not one process per plugin. The host starts lazily and exits when nothing is active.
 4. Each activated plugin runs in its own `worker_threads` worker. A timeout terminates that worker. Native code, or `isolation: process`, gets a child process. WASM is not the npm runtime.
 5. A pipeline stage names a built-in (`chiling/...`) or a plugin action (`npm:<package>@<version>#<action>`). Go checks inputs and outputs against the plugin's schema. Plugin code never receives `http.Request` or a socket.
-6. Built-in action names are reserved. A plugin cannot replace `chiling/mock-response`.
+6. Built-in action names are reserved. A plugin cannot replace `chiling.mock-response`.
 7. Default permissions are none. `worker_threads` is not a security boundary. See section 10.
 8. Tools are `chiling plugin run <pkg> <tool>`. They are the same functions a pipeline stage can `uses`. They do not add top-level `chiling` verbs.
 9. Install, enable, and traces go through the daemon. The CLI is a client. Output is JSON.
@@ -261,31 +263,58 @@ With `history:read`, `ctx.history.list` and `ctx.history.get` call the daemon ov
 
 ### Actions a rule can call
 
-The wire form is one new built-in action:
+Public names follow workcells. A builtin is `chiling.<capability>`. A plugin capability is `<plugin>.<capability>`, from the `path` segments on a `uses` entry (`["headers"]` on plugin `redact` is `redact.headers`). A rule does not pass `package` and `action` as a fake action type. Each action declares `effect: "mutate"` or `effect: "observe"`. Only `observe` is legal inside `parallel`. See [rules.md](./rules.md). The handler returns built-in mutations or outputs. In v1 those mutations are built-ins, not another plugin `uses`.
 
-```json
-{ "type": "plugin", "params": { "package": "@example/chiling-redact", "action": "redact", "names": ["authorization"] } }
+The stage is:
+
+```yaml
+- id: redact
+  uses: redact.headers
+  instance: local
+  with:
+    names: ["authorization"]
 ```
 
-`params.package` and `params.action` select the handler. Other params are validated against that action's JSON Schema before the handler runs. Each action declares `effect: "mutate"` or `effect: "observe"`. Only `observe` actions are legal inside a rule's `parallel` block. See [rules.md](./rules.md). The handler returns more actions, which Go validates again. In v1 those actions must be built-ins, not another `plugin` action. That forbids plugin-to-plugin chains until there is a cycle rule.
+`instance` defaults to `local`. The install record pins the package digest. The handler returns built-in mutations or outputs. In v1 a handler's returned mutations are built-ins, not another plugin `uses`. That forbids plugin-to-plugin chains until there is a cycle rule.
 
-```js
-export default function rule(ctx) {
-  if (ctx.request.host !== "api.example.com") return { match: false };
-  return {
-    match: true,
-    actions: [
-      { type: "plugin", params: { package: "@example/chiling-redact", action: "redact", names: ["authorization"] } }
-    ]
-  };
-}
+### Tools, uses, and middleware
+
+These are three catalogs, as in workcells. They may share one function. They do not imply each other.
+
+| Catalog | Invoked by | Creates a proxied exchange? |
+|---|---|---|
+| `tools` | `chiling plugin invoke <plugin> <instance> <tool>` | No |
+| `uses` | A pipeline stage `uses: <plugin>.<capability>` | Only as part of the request already in flight |
+| `middleware` | A stage's `middleware:` list, or `context.assemble`-style explicit selection | No, until a stage selects it |
+
+Registering a plugin does not insert it into the onion. The host checks the named instance's permissions on every reference. A stage that selects middleware:
+
+```yaml
+- id: policy
+  uses: chiling.pass
+  middleware:
+    - { plugin: redact, instance: local, name: strip-auth }
 ```
 
-The rule runs in Goja. The daemon sends `action` to the host, which routes it to that package's worker, activating it if needed.
+Always-on middleware from an earlier draft is dropped. Install must not change traffic the author did not name.
+
+### Instances and credentials
+
+`chiling plugin instance add/configure/list/enable/disable/remove`. One package, many named instances (`local`, `primary`), each with its own non-secret config and credential refs. The host injects credentials at call time. They are not accepted in `vars`, `env`, `with`, or instance config files. `chiling plugin invoke` calls a Tool and does not create a rule run.
+
+Plain `plugin list` and `--help` read manifests and do not start workers. Tool discovery (`plugin tools`, `plugin inspect`) does run trusted plugin code. Instances activate on demand and are reused. A call does not spawn a process.
+
+### Install
+
+`chiling plugin install ./pkg` requires a complete `package-lock.json`. The installer runs `npm ci --ignore-scripts` and does not run lifecycle scripts or the repo's build script. Unlike workcells, it does not compile with ScriptC. The result is the JS entry the Node host loads into a worker. Help text and manifest listing still do not start that worker.
+
+### Decision
+
+Workcells' Decision plugin is the model for chiling's existing Jev and OpenAI calls. The plugin exposes `decision.ask` as a Tool and as a `uses`. The host performs HTTP, holds the credential ref, and returns a validated `choice` or `noul`. The pipeline cannot set the endpoint, headers, or API key. A sink file (mode `0600`, not a symlink) binds instance, package digest, principal, endpoint, and model. Chiling keeps both Jev and an OpenAI-compatible endpoint. It does not adopt workcells' lock to `api.commandcode.ai` or Keyref. Diagnostics (`decisionDiagnostic`) carry a fixed category, `requestMayHaveBeenSent`, and optional status and duration. They never carry the credential, request headers, or upstream body. One System One or chat call per plugin call. A timeout does not prove the provider did not charge, and the host does not retry automatically.
 
 ### Commands
 
-`commands` are not hooks. They may be async. Their return value is JSON and is printed as-is. They do not change proxy state inside the worker. A command that wants a rule returns a script, and the agent runs `chiling rules create`.
+Tools are not hooks. Their return value is JSON. They do not change proxy state inside the worker. A tool that wants a rule returns YAML, and the agent runs `chiling rules commit`.
 
 ### Config
 
@@ -324,20 +353,28 @@ There is not a socket per plugin. `installed.json` is the source of truth for en
 Commands, JSON by default, `--pretty` for a short table:
 
 ```text
-chiling plugin add <npm-pkg>[@version] [--enable]
-chiling plugin add --path <dir> [--enable]
+chiling plugin install <path> [--enable]
+chiling plugin upgrade <id>
+chiling plugin uninstall <id>
 chiling plugin list
-chiling plugin info <pkg>
-chiling plugin enable <pkg>
-chiling plugin disable <pkg>
-chiling plugin remove <pkg>
-chiling plugin config <pkg>
-chiling plugin config set <pkg> <file.json>
-chiling plugin run <pkg> <command> [--param k=v]
+chiling plugin inspect <id> --json
+chiling plugin tools <id>
+chiling plugin instance add <plugin> <instance> --config <file>
+chiling plugin instance configure <plugin> <instance> --config <file>
+chiling plugin instance list <plugin>
+chiling plugin instance enable <plugin> <instance>
+chiling plugin instance disable <plugin> <instance>
+chiling plugin instance remove <plugin> <instance>
+chiling plugin invoke <plugin> <instance> <tool> --arguments <json> --json
+chiling config status
+chiling config draft <file>
+chiling config validate <file> --json
+chiling config commit <file>
+chiling config discard <file>
 chiling plugin host status
 ```
 
-`add` is `POST /v1/plugins`. The daemon runs `npm install --ignore-scripts --omit=dev` with `npm_config_ignore_scripts=true`. It pins the resolved version. `--enable` marks it enabled. It does not start Node until an activation event. `remove` deactivates the worker, deletes the directory, and drops the record. If that was the last active worker, the host is stopped.
+`install` requires `package-lock.json` and runs `npm ci --ignore-scripts`. It does not run lifecycle scripts. It does not start a worker. `inspect` and `tools` do run trusted plugin code for discovery. `list` and `--help` do not. `invoke` calls a Tool and does not open a proxy exchange. `uninstall` stops that plugin's worker and drops the package. If it was the last worker, the host exits.
 
 `plugin list` rows include `{ package, version, enabled, state, api, isolation, permissions, hooks, actions, commands }`. `state` is `idle`, `running`, or `poisoned`. `plugin host status` is `{ running, pid, rssBytes, workers }`.
 

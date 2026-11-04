@@ -2,26 +2,23 @@
 
 Status: Proposal, not implemented
 Date: 2026-11-04
-Scope: A rule is match patterns plus a `pipeline` of stages. Plugins are specified in [plugins.md](./plugins.md). The JSON Schema is [schemas/rule.v1.json](../../schemas/rule.v1.json). Goja remains only for an optional `run` stage.
+Scope: A rule is match patterns plus a `pipeline` of stages. Plugins are specified in [plugins.md](./plugins.md). The JSON Schema is [schemas/rule.v1.json](../../schemas/rule.v1.json). Inline JavaScript is only a fallback `run` stage.
 
-## Workcells
+## What was read
 
-`https://github.com/lidessen/workcells` is private. This environment's GitHub credential gets 404 for it, so this document does not copy that repo's types, file names, or code. The idea taken from its description ("Pathway orchestration for functions and agents") and from the owner's note is:
+The workcells docs in the agent store (`workcells-ref/`, copied from `lidessen/workcells` main) were readable this time. In particular `docs-actions.md`, `docs-design-actions-redesign.md`, `docs-design-plugins.md`, `docs-design-plugin-installation.md`, `internal-plugin-PROTOCOL.md`, `sdk-plugin-README.md`, `builtin-plugins-decision-README.md`, and `examples-implement-slice.yaml.txt`.
 
-- A pathway is an ordered pipeline of function stages.
-- A function is registered once. A pipeline stage can call it, and an agent can call the same function as a tool.
-- A stage has inputs and may publish outputs for later stages.
+Workcells is a durable orchestration runtime. Chiling is a hot-path proxy. Shared names are used when the meaning is the same. Durable-run machinery is not copied. The list key is `pipeline`, not workcells' `steps`, because that is the owner's decision for chiling. Each entry is a pipeline stage.
 
-The concrete syntax follows GitHub Actions: `on` for the match, `uses` for the function, `with` for inputs, `if` for a condition. The list key is `pipeline`, not `steps`. Each entry is a pipeline stage.
+## 1. File and identity
 
-## 1. What a rule is
-
-A rule is one pathway the daemon compiles into one middleware in the existing onion (`ruleMiddleware` in `internal/proxy`). It is not re-parsed on each request. Publish validates it and stores a snapshot, the same way rule edits already publish a snapshot. An in-flight exchange keeps the snapshot it started with.
-
-Request, response, and frame are phases of the exchange. Each phase holds one `pipeline`. A pipeline stage is one entry in that list: an action (`uses` or `run`), a `switch`, or a `parallel` block.
+One rule is one file in `rules/`. The filename without `.yaml` is the `id`, and the file's `id` must match. Files are not nested. A bad file does not invalidate the others. Diagnostics name the file and a path such as `$.request.pipeline[1].if`. They do not repeat values, so a secret in a bad expression is not echoed.
 
 ```yaml
-name: mock-login
+version: 1
+id: mock-login
+description: Synthetic login response
+enabled: true
 on:
   request:
     method: POST
@@ -29,7 +26,8 @@ on:
     path: /v1/login
 request:
   pipeline:
-    - uses: chiling/mock-response
+    - id: mock
+      uses: chiling.mock-response
       with:
         status: 200
         headers:
@@ -37,151 +35,107 @@ request:
         body: '{"ok":true,"token":"mocked"}'
 ```
 
-`chiling/...` stages are built-ins implemented in Go. They do not start Node. A plugin stage names an npm package:
+`enabled: false` still loads. It does not run. `chiling rules preview` counts it separately.
 
-```yaml
-name: sign-search
-on:
-  request:
-    method: POST
-    host: api.example.com
-    pathPrefix: /v1/
-request:
-  pipeline:
-    - id: body
-      uses: chiling/read-body
-    - id: sign
-      uses: npm:@example/request-sign@2.1.0
-      with:
-        secret: "${{ secrets.hmac }}"
-        payload: "${{ pipeline.body.outputs.bytes }}"
-      if: pipeline.body.outputs.truncated == false
-```
+Drafts sit beside the live file as `mock-login.yaml.draft`. Drafts are not loaded into the proxy. `chiling config status` lists live files and drafts. `config validate` checks the draft if present, otherwise the live file. `config commit` promotes the draft. `config discard` deletes it. One file is committed even if another file in the directory is invalid.
 
-`secrets.hmac` is a name. The daemon resolves it from `~/.chiling/secrets/` and does not write the value into the trace.
+Limits, from workcells' per-file isolation and tightened for a proxy: 256 KiB per file, 8 MiB and 128 files in the directory. Symlinks, dotfiles, and a file whose name disagrees with `id` are invalid items. They do not hide the valid files.
 
-## 2. Document shape
+## 2. What runs where
 
-| Field | Required | Meaning |
+| | Workcells | Chiling |
 |---|---|---|
-| `name` | yes | Stable name. The daemon still assigns `rule_<n>` as the id. |
-| `on` | yes | Match. `method`, `host` (MITM-style pattern), `path`, `pathPrefix`. All listed fields must match. |
-| `priority` | no | Integer, default 100. Lower runs earlier, then rule id. Same order as today. |
-| `failureMode` | no | `fail-open` (default) or `fail-closed`. Does not apply to `parallel` stages. |
-| `request`, `response`, `frame` | at least one | A phase. Each has a `pipeline`. |
-| `on.hook` | no | A plugin-defined hook. See section 6. |
+| Unit of config | Action, durable Run | Rule, one exchange. No Run log beyond the existing request trace and SQLite history. |
+| List key | `steps` | `pipeline` |
+| Call | `uses: task.get` plus `instance` | `uses: protobuf.decode` plus `instance` |
+| Inline script | `run:` is literal just-bash. `${{ }}` is not expanded into the script. Dynamic values use stdin. | `run` is literal Goja. `${{ }}` is not expanded into the script. Inputs arrive as a frozen object. |
+| Branch | `select`, then `branch:` on later steps, then `join` | `select` whose cases contain their own `pipeline`. No scattered `branch:` and no `join`. |
+| Parallel | Not in the current runtime. The redesign wants parallel paths that join. | `parallel` is observe-only and does not join. |
+| Queue | `concurrency: {mode: queue}` | Not used. A proxy does not queue the client. |
 
-A pipeline stage is one of three shapes. `if` is allowed on all three.
+A rule compiles to one middleware in the onion (`ruleMiddleware`). Priority, then `id`, decides order. Lower runs first on the way in. Response pipelines unwind in reverse. Stages of two rules are not interleaved.
 
-### Action
+`chiling.*` stages are Go. They do not start Node. A plugin stage starts that plugin's worker on first use and reuses it.
 
-| Field | Required | Meaning |
+## 3. Stages
+
+An action stage:
+
+| Field | Meaning |
+|---|---|
+| `id` | Required if a later stage reads `pipeline.<id>.outputs`. |
+| `uses` | `chiling.<capability>` or `<plugin>.<capability>`. |
+| `instance` | Default `local`. May be a whole-value expression. Empty or non-string fails the stage. It does not fall back to `local`. The resolved name is what the trace records. |
+| `with` | Inputs. Each value is a literal or a whole-value `${{ }}`. No embedded expressions in `with`. Build text in `vars` first, and `vars` cannot see stage outputs, so a header that must be composed is returned whole by the plugin. |
+| `env` | Strings, numbers, or bools, or a whole-value expression that resolves to one of those. Not a secret store. Max 32 entries. `select` and `parallel` do not take `env`. |
+| `middleware` | Explicit list of `{plugin, instance, name}`, at most 8. Registering the plugin does not apply it. |
+| `if` | Skip when false. |
+| `continueOnError` | Default false. A failed stage stops the rest of that pipeline. |
+| `timeoutMs` | Default 500, max 2000. The phase still shares the 2 s exchange budget. |
+
+`vars` are read-only, resolved once before the first stage, and stored on the trace. They may reference `request.*` and other vars. They may not reference `pipeline.*` outputs or secrets. Cycles fail at validate time. Limits: 64 vars, 64 KiB, depth 16. A whole-value expression keeps its JSON type. An expression embedded in a string becomes text. Lists and objects have no text form and are rejected. Secrets never go in `vars`. The trace can contain vars, so they are not credentials.
+
+Built-ins:
+
+| `uses` | Phase | Effect |
 |---|---|---|
-| `id` | no | Required if a later stage reads `pipeline.<id>.outputs`. |
-| `uses` | one of `uses` or `run` | `chiling/<builtin>` or `npm:<package>@<version>#<action>`. The version must be the installed pin. |
-| `run` | one of `uses` or `run` | Inline JavaScript. See section 8. |
-| `with` | no | Inputs. String values may contain `${{ }}`. |
-| `if` | no | Skip this stage when false. |
-| `continueOnError` | no | Default false. A failed stage stops the rest of that pipeline. |
-| `timeoutMs` | no | Default 500 (`DefaultRuleTimeout`), max 2000. The phase still shares the 2 s exchange budget. |
+| `chiling.tag` | request | mutate |
+| `chiling.set-request-header` | request | mutate |
+| `chiling.remove-request-header` | request | mutate |
+| `chiling.rewrite-url` | request | mutate |
+| `chiling.mock-response` | request | mutate. Later stages in that pipeline do not run. The response pipeline of this rule still runs on the synthetic response. |
+| `chiling.block` | request | mutate. Same short-circuit. |
+| `chiling.abort` | request | mutate. HTTP 403. |
+| `chiling.set-response-header` | response | mutate |
+| `chiling.remove-response-header` | response | mutate |
+| `chiling.set-response-status` | response | mutate |
+| `chiling.rewrite-response-body` | response | mutate |
+| `chiling.delay` | response | mutate. It changes when the client is released. |
+| `chiling.throttle` | response | mutate. Same reason. |
+| `chiling.replace-frame` | frame | mutate |
+| `chiling.drop-frame` | frame | mutate |
+| `chiling.read-body` | request or response | observe. Outputs `bytes` and `truncated`. |
+| `chiling.log` | any | observe |
+| `chiling.metric` | any | observe |
+| `chiling.notify` | any | observe |
+| `chiling.tee` | any | observe. Copies the snapshot, including at most the body preview. |
 
-### Switch
+`mock-response` and `block` in one pipeline are a validation error. A plugin action without `effect` is `mutate`.
 
-| Field | Required | Meaning |
-|---|---|---|
-| `switch` | yes | Expression compared as a string. |
-| `cases` | yes | Map of value to a nested `pipeline`. |
-| `default` | no | Pipeline used when no case matches. |
-| `if` | no | Skip the whole switch when false. |
-
-Exactly one arm runs. There is no fall-through. No match and no `default` skips the switch. It is not an error.
-
-### Parallel
-
-| Field | Required | Meaning |
-|---|---|---|
-| `parallel.stages` | yes | Action stages only. Each must be effect `observe`. |
-| `parallel.timeoutMs` | no | Budget for the whole block. Default 500, max 2000. |
-| `if` | no | Skip the block when false. |
-
-Built-in names:
-
-| `uses` | Phase | Effect | Effect today |
-|---|---|---|---|
-| `chiling/tag` | request | mutate | `tag` |
-| `chiling/set-request-header` | request | mutate | `setRequestHeader` |
-| `chiling/remove-request-header` | request | mutate | `removeRequestHeader` |
-| `chiling/rewrite-url` | request | mutate | `rewriteURL` |
-| `chiling/mock-response` | request | mutate | `mockResponse`. Later stages in that pipeline do not run. Response pipeline of this rule still runs on the synthetic response. |
-| `chiling/block` | request | mutate | `block`. Same short-circuit as mock. |
-| `chiling/abort` | request | mutate | `abort`, HTTP 403. |
-| `chiling/set-response-header` | response | mutate | `setResponseHeader` |
-| `chiling/remove-response-header` | response | mutate | `removeResponseHeader` |
-| `chiling/set-response-status` | response | mutate | `setResponseStatus` |
-| `chiling/rewrite-response-body` | response | mutate | `rewriteResponseBody` |
-| `chiling/delay` | response | mutate | `delay`. It changes when the client is released, so it is not observe. |
-| `chiling/throttle` | response | mutate | `throttle`. Same reason. |
-| `chiling/replace-frame` | frame | mutate | `replaceFrame` |
-| `chiling/drop-frame` | frame | mutate | `dropFrame` |
-| `chiling/read-body` | request or response | observe | No mutation. Outputs `bytes` and `truncated`. |
-| `chiling/log` | any | observe | Trace row plus daemon log. No exchange change. |
-| `chiling/metric` | any | observe | Counter or histogram. Name and labels in `with`. |
-| `chiling/notify` | any | observe | Deliver `with` to a configured sink. Does not wait for the sink past `timeoutMs`. |
-| `chiling/tee` | any | observe | Copy the snapshot (headers and body preview) to `with.url`. Not the live body. |
-
-`mock-response` and `block` in one pipeline are a validation error.
-
-A plugin action's `effect` is `mutate` or `observe` in its manifest. Missing `effect` means `mutate`, so it is rejected inside `parallel`.
-
-## 3. Examples
+## 4. Examples
 
 ### Mock a login
 
-```yaml
-name: mock-login
-on:
-  request:
-    method: POST
-    host: api.example.com
-    path: /v1/login
-request:
-  pipeline:
-    - uses: chiling/mock-response
-      with:
-        status: 200
-        headers:
-          content-type: application/json
-        body: '{"ok":true,"token":"mocked"}'
-```
+The example in section 1. No plugin worker starts.
 
-No plugin is activated. The compiled middleware is the current `mockResponse` action.
-
-### Rewrite a field in the response
+### Rewrite a response field
 
 ```yaml
-name: hide-internal-role
+version: 1
+id: hide-internal-role
 on:
   request:
     host: api.example.com
     pathPrefix: /v1/users
 response:
   pipeline:
-    - uses: chiling/rewrite-response-body
+    - uses: chiling.rewrite-response-body
       with:
         find: '"role":"internal"'
         replace: '"role":"member"'
-    - uses: chiling/set-response-header
+    - uses: chiling.set-response-header
       with:
         name: X-Chiling
         value: role-rewritten
 ```
 
-The body rewrite still refuses bodies over `MaxTransformBody` (256 KiB) and leaves the original stream in place.
+Bodies over 256 KiB (`MaxTransformBody`) are left unchanged.
 
-### Branch on a decoded body
+### Decode protobuf, then select a path
 
 ```yaml
-name: decode-login-body
+version: 1
+id: decode-login-body
 on:
   request:
     method: POST
@@ -190,204 +144,136 @@ on:
 request:
   pipeline:
     - id: decoded
-      uses: npm:@example/protobuf@1.4.0#decode
+      uses: protobuf.decode
+      instance: local
       with:
         message: login.LoginRequest
         encoding: protobuf
-    - switch: "${{ pipeline.decoded.outputs.kind }}"
-      cases:
-        password:
-          - uses: chiling/tag
-            with:
-              tags: [password-login]
-        sso:
-          - uses: chiling/set-request-header
-            with:
-              name: X-Login-Kind
-              value: sso
-      default:
-        - uses: chiling/tag
-          if: pipeline.decoded.outputs.ok == true
-          with:
-            tags: [other-login]
+    - id: route
+      select:
+        cases:
+          - name: password
+            if: pipeline.decoded.outputs.kind == "password"
+            pipeline:
+              - uses: chiling.tag
+                with:
+                  tags: ["password-login"]
+          - name: sso
+            if: pipeline.decoded.outputs.kind == "sso"
+            pipeline:
+              - uses: chiling.set-request-header
+                with:
+                  name: X-Login-Kind
+                  value: sso
+        default:
+          pipeline:
+            - uses: chiling.tag
+              if: pipeline.decoded.outputs.ok == true
+              with:
+                tags: ["other-login"]
     - parallel:
         timeoutMs: 200
         stages:
-          - uses: chiling/log
+          - uses: chiling.log
             with:
-              message: "decoded login"
-          - uses: chiling/metric
+              message: decoded-login
+          - uses: chiling.metric
             with:
               name: login_decoded
-              labels:
-                ok: "${{ pipeline.decoded.outputs.ok }}"
 ```
 
-`switch` runs one arm, in order, on the exchange. `parallel` does not. The log and the metric see `decoded` because that stage finished before the block. They do not see each other, and nothing after the block may read their outputs.
+`select` replaces the earlier `switch`. The arm's stages sit inside the case, which is what workcells' redesign wants and what its current `branch:` annotations do not guarantee. A forgotten `branch:` on a later step would mutate live traffic. That is unacceptable on a proxy, so chiling does not use `branch:` or a separate `join`. The taken arm's stage outputs are in scope for later stages of this pipeline. Outputs of untaken arms are not. Referencing one fails the rule.
 
-### Sign the request
+The first matching case wins. A condition error fails the rule. It is not treated as false and it does not fall through to `default`. The chosen case, and the skipped state of the other arms, is written to the trace before any stage in an arm runs.
+
+### Sign a request
 
 ```yaml
-name: sign-upstream
+version: 1
+id: sign-upstream
 on:
   request:
     method: POST
     host: api.partner.test
     pathPrefix: /v1/
+vars:
+  host: api.partner.test
 request:
   pipeline:
     - id: signed
-      uses: npm:@example/hmac-sign@2.1.0#sign
+      uses: hmac.sign
+      instance: primary
       with:
         secret: "${{ secrets.partner_hmac }}"
         algorithm: sha256
-    - uses: chiling/set-request-header
+    - uses: chiling.set-request-header
       if: pipeline.signed.outputs.ok == true
       with:
         name: X-Signature
         value: "${{ pipeline.signed.outputs.header }}"
 ```
 
-The plugin returns the header value as an output. The built-in stage applies it. The plugin does not set the header itself, so the mutation stays in the Go applier and shows up as its own trace row.
+`with.value` is a whole-value expression, so it keeps the string type. The plugin returns the finished header. The rule does not concatenate. `secrets.partner_hmac` is a credential ref on the `hmac/primary` instance. The host injects it. It is not a var.
 
-## 4. Branching
+## 5. Branching and parallel
 
-`if` may appear on an action, a `switch`, or a `parallel` block. False means that stage is skipped. The trace records `skipped`. A skipped stage publishes no outputs.
+`if` may appear on an action, a `select`, or a `parallel` block. False skips that stage. The trace records `skipReason: if`. A skipped stage publishes no outputs.
 
-`switch` is equality dispatch, not a parallel fan-out. The expression is evaluated once and compared as a string to the case keys. The matching case's pipeline runs as a normal sequential pipeline. `default` runs when nothing matches. Cases do not fall through, and two cases never run for one value.
+`select` is the multi-way branch. It is not a parallel fan-out. No match and no `default` skips every arm (`skipReason: unselected`). Nested `select` is rejected, matching workcells' current "no nested select". A case pipeline may contain actions and `parallel`, not another `select`.
 
-Nested `switch` and `parallel` inside a case are allowed. A `parallel` block's `stages` list cannot contain `switch` or another `parallel`. That keeps the schema one level deep and the observe-only check local.
+`parallel` is only for `effect: observe`. It does not join, which is the opposite of the parallel block in workcells' redesign. That redesign is for a durable run that waits for lint and tests. Waiting would hold the HTTP client. Chiling's block snapshots the view and the outputs of stages that already finished, then continues. Stages inside the block do not see each other. Later stages cannot read `pipeline.<id>.outputs` for an id declared inside the block. Those outputs are trace-only.
 
-`if` and `switch` overlap on purpose. `if` is a predicate. `switch` is one value, many arms. There is no `else` chain. An `else` is a `switch` with two cases, or a second stage whose `if` is the negation.
+`timeoutMs` cancels the block. Timeout and error never fail the exchange and never trigger `fail-closed`. `delay` and `throttle` are mutate because they change when the client sees bytes. `tee` copies the snapshot, at most the body preview, not the live stream.
 
-## 5. Parallelism
-
-Stages that mutate the request or response stay strictly sequential. Header order, body replacement, and short-circuit are deterministic only if one stage finishes before the next reads the exchange.
-
-A `parallel` block is for work that must not change the exchange: log, metric, notify, tee, or a plugin action declared `effect: observe`. The block is concurrent and non-blocking.
-
-Semantics:
-
-- When the block is reached, the daemon takes a snapshot of the fields those stages are allowed to read: the request or response view already captured, and outputs of stages that finished before the block. Later mutations are invisible to the block. The block does not read the live body stream. `chiling/tee` copies that snapshot, including at most the body preview, so a tee cannot force a full buffer onto the hot path.
-- The pipeline continues immediately. Upstream is not held for the block. The client is not held for it.
-- Stages inside the block do not see each other's outputs. A later stage in the same pipeline cannot reference `pipeline.<id>.outputs` for an id declared inside the block. Those outputs exist only on the trace, after the block finishes or times out.
-- `timeoutMs` covers the block. When it fires, in-flight observe work is cancelled. The trace row is `timeout`. The exchange is unchanged.
-- An error or a timeout in the block never fails the exchange and never triggers `fail-closed`. `continueOnError` is ignored inside `parallel` because the exchange has already moved on.
-- `delay` and `throttle` are mutate. They change when bytes reach the client. They are rejected inside `parallel`.
-
-If the agent needs "notify, then forward only if notify succeeded", that notify is a normal sequential stage, not a `parallel` stage. Waiting is the definition of blocking.
+If the agent needs "notify, then forward only if it succeeded", that notify is a normal sequential stage.
 
 ## 6. Expressions
 
-`${{ }}` is not JavaScript. The grammar is small so the schema plus a walker can reject it:
+Allowed roots: `request`, `response`, `frame`, `pipeline.<id>.outputs`, `vars`, `hook.outputs`, `secrets` (whole value only).
 
-- `request.<field>`, `response.<field>`, `frame.<field>` for fields already on the exchange (`method`, `host`, `path`, `url`, `status`, `body`, `truncated`, `opcode`, `direction`, `payload`).
-- `pipeline.<id>.outputs.<name>` for an earlier stage in the same pipeline, not one declared inside a `parallel` block.
-- `secrets.<name>` only as a whole `with` value, never concatenated. The trace stores the name, not the value.
-- Comparisons in `if` and in `switch`: `==`, `!=`, `&&`, `||`, and parentheses. No calls, no arithmetic, no templates inside `if` or `switch`.
+`if` and `select` case conditions use `==`, `!=`, `&&`, `||`, and parentheses. No calls and no arithmetic. A condition error fails the rule.
 
-Anything else is a validation error. If a stage needs real logic, it is a plugin action or a `run` stage, not an expression.
+`with` and `env` values are literals or a single whole-value expression. Embedded expressions are not accepted there. Concatenate in `vars` when the pieces are known before the pipeline starts. Pieces that come from an earlier stage must be returned as one value by that stage.
 
-## 7. Order and hooks
+## 7. Hooks and phases
 
-One rule is one middleware. Its pipeline is not interleaved with another rule's pipeline. Priority orders rules and always-on plugin middleware together. Lower priority runs first on the way in. Response pipelines unwind in reverse. A pathway that must run "A, then B, then A's next stage" is one rule, not two.
+1. Match `on.request` in Go. Do not start a worker if every matched stage is `chiling.*` or `run`.
+2. Activate the instances those stages name.
+3. Request phase, outer middleware to inner. Each rule runs `request.pipeline`. A stage's `emits` runs subscriber rules before the next stage. Depth one. Cycles fail at validate time.
+4. Upstream, unless mock, block, or abort short-circuited.
+5. Response phase, inner to outer.
+6. WebSocket data frames use `frame.pipeline` of rules whose request phase matched the upgrade. Ping, pong, and close are not a phase.
 
-Inside a pipeline, stages run in source order. Outputs of stage N are visible to stage N+1, except outputs born inside `parallel`. They are not visible to other rules. Cross-rule data stays on the request (headers, URL, body, tags).
+`chiling rules preview --request <id> --json` runs the matcher and reports which rules would run. It does not create an exchange and does not call plugins. The same operation is the tool `rules.preview`. `rules.diagnose` lists files that failed to load without echoing values. `complete: false` means at least one file is unreadable, so a match result may be partial.
 
-Plugin-defined hooks are named points, not a second onion:
+## 8. Validation and migration
 
-```yaml
-name: after-decode-audit
-on:
-  hook: example.protobuf.decoded
-request:
-  pipeline:
-    - uses: chiling/tag
-      with:
-        tags: ["decoded:${{ hook.outputs.message }}"]
-```
+`chiling rules validate <file>` checks [schemas/rule.v1.json](../../schemas/rule.v1.json), then the walker: expression grammar, phase versus `uses`, observe-only `parallel`, no reference to parallel outputs, installed instance, `with` against the action schema, terminal-action exclusivity, and hook cycles. `--offline` skips the instance lookup. Field paths look like `request.pipeline[2].select.cases[0].pipeline[0].uses`.
 
-A stage emits a hook only by declaring it. The protobuf plugin's `decode` action declares `emits: [example.protobuf.decoded]`. After that stage succeeds, subscribers run, in their priority order, before the next stage of the same pipeline. A subscriber cannot emit the hook it is handling. The daemon rejects a cycle when the snapshot is published. Hook depth is one.
+`chiling rules from <id>` emits this YAML, not JavaScript. `--uses protobuf.decode` emits a stage whose `with` keys come from that action's schema.
 
-Phase order for one exchange:
+Existing JS rules remain loadable as one `run` stage. `chiling rules migrate <file.js>` prints that wrapper. It does not recover `uses` from arbitrary JS. New authoring is YAML. `run.runtime` must be `goja`. The script is literal. `run` is `mutate`, so it cannot sit in `parallel`.
 
-1. Match `on.request` in Go. Do not start Node if every matched stage is `chiling/...` or `run`.
-2. Activate plugins whose `uses` was matched, or whose always-on middleware matches.
-3. Request phase, outer to inner. Each pathway runs its `request.pipeline`, then any hooks those stages emit. `parallel` blocks are spawned and not awaited.
-4. Upstream, unless a stage short-circuited with mock, block, or abort.
-5. Response phase, inner to outer: `response.pipeline` and their hooks.
-6. For a WebSocket data frame, `frame.pipeline` of pathways whose request phase matched the upgrade. Ping, pong, and close are not a phase.
+## 9. What was not taken, and why
 
-## 8. Authoring and validation
-
-The YAML document is JSON after parse. [schemas/rule.v1.json](../../schemas/rule.v1.json) is the draft 2020-12 schema. It checks shape: `pipeline` is an array of action, `switch`, or `parallel`; `if` is a string; `switch` requires `cases`; `parallel.stages` is a list of actions, not nested `switch` or `parallel`; `uses` and `run` are mutually exclusive; `run.runtime` is `goja`.
-
-`chiling rules validate <file>` runs that schema, then a walker the schema cannot express:
-
-- Expression grammar, including the ban on reading outputs that were declared inside `parallel`.
-- `uses` phase matches the phase the stage sits in (`chiling/mock-response` only under `request`, and so on).
-- `parallel` stages are effect `observe`. Built-ins use the table in section 2. Plugin actions use the manifest. Missing `effect` is `mutate`.
-- Every `npm:` package is installed at that version, and `with` matches the action schema. `rules validate --offline` skips this resolve.
-- `mock-response` and `block` are not both in one pipeline.
-- Hook `emits` graphs have no cycle.
-
-Errors use the existing envelope. The field path looks like `request.pipeline[1].parallel.stages[0].uses`.
-
-`chiling rules from <request-id>` emits YAML with a `pipeline`, not JavaScript. Default is one `chiling/mock-response` stage. `--action rewrite`, `header`, `block`, and `tag` select other built-ins. `--uses npm:@example/protobuf@1.4.0#decode` emits a plugin stage whose `with` keys come from that action's schema.
-
-`chiling rules create <file.yaml>` stores the YAML. `rules get` returns it. `rules test` runs the compiled pathway against a fixture and returns the trace without forwarding. `parallel` stages run, but the test waits for them up to `timeoutMs` so the trace is complete.
-
-Each stage is one `RuleTrace` row: `ruleId`, phase, stage `id`, `uses`, duration, error, skipped, and outputs with secrets redacted. A `parallel` stage is a row too, with `async: true`. `chiling requests show <id> --include rule-trace` is how an agent debugs a pathway.
-
-## 9. Migration from JavaScript
-
-Today's rule is a Goja function (`internal/rule`) returning `{ match, actions }`. That stays loadable.
-
-A stored JS rule is treated as a pathway with one `run` stage. New `rules from` output is YAML. `rules create` accepts `.yaml`, `.yml`, and, during migration, `.js`.
-
-Inline JS is a pipeline stage, not the document:
-
-```yaml
-name: one-off
-on:
-  request:
-    path: /v1/special
-request:
-  pipeline:
-    - run:
-        runtime: goja
-        script: |
-          export default function(ctx) {
-            return { match: true, actions: [{ type: "tag", params: { tags: ["special"] } }] };
-          }
-```
-
-`runtime` must be `goja`. The script is the current sandbox: no `import`, no npm, 500 ms, validated actions. A `run` stage does not start the plugin host. `effect` for `run` is `mutate`, so it cannot sit inside `parallel`. A stage that only logs should call `chiling/log`.
-
-`chiling rules migrate <file.js>` prints the wrapped YAML. It does not recover structured `uses` from arbitrary JS.
+| Workcells | Chiling choice |
+|---|---|
+| `steps` | `pipeline`. Owner's name. |
+| `select` plus `branch:` on each later step plus `join` | `select` with the pipeline inside the case. Workcells' own redesign wants stages inside the branch for the same reason: a missed annotation runs the stage on the wrong path. On a proxy that path mutates a live request. `join` is unnecessary because the taken arm is inline. |
+| Parallel paths that join | Not taken. That waits. Observe-only `parallel` does not. |
+| `concurrency` queue, cron, misfire, durable Run store, exactly-once | Not taken. The client is waiting. History already stores the exchange. |
+| `run` as just-bash, dynamic values on stdin | `run` as Goja. Same rule: the script text is not an expansion site. |
+| ScriptC native binary per plugin | Not taken. Chiling's host is Node, one process, a worker per active plugin. |
+| Human text by default, `--json` for machines | `--json` is accepted and is the default. `--pretty` is the human form. Agents are the primary operator. The shared part is the contract: bounded output, stable field names, diagnostics that do not echo values. |
+| Decision locked to `api.commandcode.ai` and Keyref | The sink pattern is taken (host calls, credential ref, no key in the rule, `decisionDiagnostic`). The endpoint may be Jev or OpenAI-compatible. |
+| Task, delegate, Herdr, resources, MCP | Not part of the proxy. |
 
 ## 10. Critique
 
-The match is data, so the daemon can skip Node and can index rules without executing them. The pipeline is data, so `rules from` and `rules validate` can be mechanical. The trace is one row per stage. Plugin and built-in stages look the same to the agent.
+Structured `select` is safer than both a flat `switch` on one string and workcells' current scattered `branch` tags. The cost is that an exclusive branch cannot share a trailing stage without duplicating it or placing it after the `select`. Duplication is the right default. A stage after the `select` runs for every arm that did not short-circuit, which is the join-by-falling-through that `join` made explicit. Authors who need "only the taken arm's object" should read a stage id that exists only in that arm and accept the failure if they reference the other arm.
 
-Branching with `if` is necessary and cheap. `switch` is the same control flow with one value and several arms, which stays validatable. It should not run arms in parallel. Exclusive and sequential is the whole point. If two arms must both do work, they are two stages with `if`, or two observe stages in `parallel`.
+`parallel` without a join will be misused by people who learned the word from CI. The validator has to reject mutate stages and references to parallel outputs, or the feature becomes a race. Non-blocking also means a failed notify is invisible to the client. That is acceptable only because the trace still records it.
 
-Limiting `parallel` to observe-only stages is the right cut. Mutating the exchange on two goroutines makes header order and body replacement races, and it makes a trace impossible to replay. The part that is easy to get wrong is "non-blocking". If later stages could read parallel outputs, the pipeline would wait, and the feature would be a join with extra syntax. Those outputs are trace-only. A stage that the rest of the pipeline depends on is sequential, even if the author thinks of it as a side effect.
+`with` accepting only whole-value expressions will annoy agents who want `` `user ${{ pipeline.decoded.outputs.userId }}` ``. Forcing the plugin to return the finished string is the workcells rule and the right one here: string assembly inside `with` is how a secret gets concatenated into a header and then into a trace. `vars` cannot see stage outputs, so they are not a back door.
 
-`delay` and `throttle` look like side effects and are not. They change when the client sees bytes. Classifying them as mutate is deliberate.
-
-Tee is the other trap. Copying the live body would either block the hot path or race a later rewrite. The snapshot is the preview the proxy already kept. A plugin that needs the full body says so as a sequential mutate stage and pays the transform limit.
-
-The other risks from the pathway design still hold.
-
-**Ordering.** Two pathways at the same priority do not interleave. `rules validate` should print the compiled order: priority, rule id, phase, pipeline index, stage id.
-
-**Hot path.** Built-in stages must compile to the same Go calls as today's actions. Plugin stages pay worker startup on first use and a JSON round trip after that. `${{ }}` is a small interpreter in Go, not a call into Node or Goja.
-
-**Debuggability.** A skipped `if` or an unmatched `switch` has to be a trace row. A `parallel` timeout has to name the stage. Secret values stay out of that row.
-
-**Plugin hooks.** `emits` runs other rules in the middle of this pipeline. Depth one and cycle checks at publish time are the constraint.
-
-**Expressions.** The grammar in section 6 is there to stop `${{ }}` becoming a language. The escape hatch is a plugin stage or `run`, not more expression functions.
-
-**Migration.** `rules from` emitting a `pipeline`, and the README examples moving to YAML, matter more than keeping `run`.
+Per-file isolation fits a proxy better than one big rules file. One bad YAML must not stop the rest of traffic. The matching gap is real: `rules.diagnose` with `complete: false` means a request might have missed a rule that failed to parse. The CLI has to say that. It must not pretend the match set is complete.
