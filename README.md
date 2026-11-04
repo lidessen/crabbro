@@ -180,6 +180,8 @@ reads the token file itself.
 
 ## Rule format
 
+`chiling sources list` shows apps and pages. `chiling scope pick`, `omit`, `off`, `on`, `reset`, and `bypass` narrow the current recording session. If none is recording, the first scope command opens one and says so. Omit hides rows from `requests list` (`hiddenCount`, `hiddenReason`) without stopping forwarding or rules. `requests list --all` shows the hidden rows. `requests list --type xhr --initiator <url>` and the same flags on `find` filter further. Durable lists are `~/.chiling/scope/allow.yaml` and `deny.yaml`, edited with `config draft/validate/commit/discard --scope`. An empty allow list does not narrow.
+
 New rules are YAML, one file per rule, with a `pipeline` of `uses` stages. `chiling rules from <id>` prints that YAML. `chiling rules migrate <file.js>` wraps an older script as a literal `run` stage (`runtime: goja`); the script text is not an expression expansion site. A legacy script that does not start with `version:` still runs as JavaScript. The schema is `schemas/rule.v1.json`. The full format, including `if`, `select`, and observe-only `parallel`, is [docs/design/rules.md](docs/design/rules.md).
 
 Plugins are npm packages loaded by one Node host, with a worker per active plugin. `chiling plugin install ./pkg` requires `package-lock.json` and runs `npm ci --ignore-scripts`. A pipeline stage calls `uses: <plugin>.<capability>`. See [docs/design/plugins.md](docs/design/plugins.md).
@@ -321,7 +323,7 @@ same routes the CLI calls.
 
 ## What is still not in this tree
 
-- Traffic inspection scope (apps, pages, session pick/omit). The design is [docs/design/inspect.md](docs/design/inspect.md). Exchanges reserve an empty `attribution` field for it. View filters are not applied, and rules are not muted by a scope that does not exist yet.
+- Tab and initiator attribution from a browser extension or Chrome DevTools Protocol. Header-derived pages and `Sec-Fetch-*` resource types are implemented. See [docs/design/inspect.md](docs/design/inspect.md).
 - A separate per-exchange memory budget beyond the capture and 256 KiB transform caps.
 - Trust-store detection. `mitmCertInstalled` is still whatever the CLI reports after install.
 - WebSocket message reassembly. Frame rules see one data frame at a time and do not run on ping, pong, or close.
@@ -346,6 +348,7 @@ same routes the CLI calls.
 | `internal/history` | SQLite exchange log |
 | `internal/ring` | Recent flows |
 | `docs/design/rules.md` | YAML rule format (`pipeline`, `if`, `select`, observe-only `parallel`) |
-| `docs/design/inspect.md` | Traffic inspection design (not implemented) |
+| `docs/design/inspect.md` | Traffic sources, session scope, durable allow/deny |
+| `internal/inspect` | Attribution, scope matching, Linux process lookup |
 | `schemas/rule.v1.json` | Proposed JSON Schema for that format |
 | `docs/design/plugins.md` | Node plugin host: one process, a worker per active plugin |

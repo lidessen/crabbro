@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lidessen/chiling/internal/inspect"
 	"github.com/lidessen/chiling/internal/rule"
 	"github.com/lidessen/chiling/internal/shared"
 )
@@ -38,6 +39,7 @@ type Exchange struct {
 
 	decision     string
 	failureStage string
+	bypass       bool
 
 	matched       []*shared.Rule
 	upgradeConn   net.Conn
@@ -162,6 +164,28 @@ func (p *Proxy) newExchange(r *http.Request, ingress string, tunnelID shared.Req
 		TunnelID:          tunnelID,
 		PolicyGeneration:  policyGen,
 	}
+	bypass := false
+	if p.Inspect != nil {
+		if p.Sessions != nil {
+			p.Inspect.Scopes = p.Sessions
+		}
+		bypass = p.Inspect.Annotate(record, r.Header, remoteAddr(r.RemoteAddr))
+	}
+	inspect.StripStamps(r.Header)
+	if bypass {
+		ex := &Exchange{ctx: r.Context(), record: record, started: start, policyGen: policyGen, bypass: true}
+		out, err := http.NewRequestWithContext(r.Context(), r.Method, target.String(), r.Body)
+		if err != nil {
+			return nil, err
+		}
+		out.Header = r.Header.Clone()
+		stripHopByHop(out.Header)
+		inspect.StripStamps(out.Header)
+		out.Host = target.Host
+		out.ContentLength = r.ContentLength
+		ex.outbound = out
+		return ex, nil
+	}
 	if p.RingBuffer != nil {
 		stored := p.RingBuffer.Add(record.Method, record.Scheme, record.Host, record.Path, record.Query, record.URL, record.ClientAddr)
 		stored.StartedAt = start
@@ -172,6 +196,9 @@ func (p *Proxy) newExchange(r *http.Request, ingress string, tunnelID shared.Req
 		stored.Intercepted = record.Intercepted
 		stored.TunnelID = record.TunnelID
 		stored.PolicyGeneration = record.PolicyGeneration
+		stored.Attribution = record.Attribution
+		stored.Hidden = record.Hidden
+		stored.HiddenReason = record.HiddenReason
 		record = stored
 	}
 	if p.Sessions != nil {
@@ -188,6 +215,7 @@ func (p *Proxy) newExchange(r *http.Request, ingress string, tunnelID shared.Req
 	}
 	out.Header = r.Header.Clone()
 	stripHopByHop(out.Header)
+	inspect.StripStamps(out.Header)
 	if isWebSocketUpgrade(r) {
 		restoreWebSocketHeaders(out.Header, r.Header)
 	}
@@ -303,6 +331,9 @@ func (m *ruleMiddleware) Priority() int { return m.rule.Priority }
 
 func (m *ruleMiddleware) Wrap(next ExchangeHandler) ExchangeHandler {
 	return func(ex *Exchange) (*http.Response, error) {
+		if ex.bypass {
+			return next(ex)
+		}
 		if time.Since(ex.started) > shared.DefaultRuleBudget {
 			ex.traces = append(ex.traces, shared.RuleTrace{
 				RuleID:      m.rule.ID,

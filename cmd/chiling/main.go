@@ -68,6 +68,10 @@ func run() error {
 		return cmdHistory(cfg, flag.Args()[1:])
 	case "plugin":
 		return cmdPlugin(cfg, flag.Args()[1:])
+	case "sources":
+		return cmdSources(cfg, flag.Args()[1:])
+	case "scope":
+		return cmdScope(cfg, flag.Args()[1:])
 	case "config":
 		return cmdConfig(cfg, flag.Args()[1:])
 	case "help", "--help", "-h":
@@ -102,6 +106,9 @@ Commands:
   decision status           Show whether a decision API is configured
   history status            Show the SQLite history
   history prune             Drop expired exchanges
+  sources list              List apps and pages the proxy has seen
+  scope status              Show the session view filter
+  scope pick|omit|off|on|reset|bypass
   plugin list               List installed plugins (does not start a worker)
   plugin install <path>     Install from a directory with package-lock.json
   plugin inspect <id>       Read tools and uses (starts the worker)

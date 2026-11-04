@@ -24,6 +24,16 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		host = r.URL.Host
 	}
 
+	if p.Inspect != nil {
+		if p.Sessions != nil {
+			p.Inspect.Scopes = p.Sessions
+		}
+		if p.Inspect.BypassHost(remoteAddr(r.RemoteAddr), host) {
+			p.tunnelPassthrough(w, r, host, startTime, nil)
+			return
+		}
+	}
+
 	// Create request record for the CONNECT tunnel.
 	req := p.RingBuffer.Add("CONNECT", "https", host, "", "", "https://"+host, r.RemoteAddr)
 	req.StartedAt = startTime
@@ -99,20 +109,26 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// -----------------------------------------------------------------------
 	// Normal CONNECT tunnel (passthrough)
 	// -----------------------------------------------------------------------
+	p.tunnelPassthrough(w, r, host, startTime, req)
+}
 
-	// Connect to the target.
+// tunnelPassthrough copies bytes for a CONNECT that is not intercepted.
+// req may be nil when an explicit scope bypass asked not to record the tunnel.
+func (p *Proxy) tunnelPassthrough(w http.ResponseWriter, r *http.Request, host string, startTime time.Time, req *shared.Request) {
 	targetConn, err := net.DialTimeout("tcp", host, 10*time.Second)
 	if err != nil {
-		now := time.Now()
-		req.CompletedAt = &now
-		req.Status = http.StatusBadGateway
-		req.DurationMs = time.Since(startTime).Milliseconds()
-		p.EventHub.Emit(&shared.Event{
-			Type:      shared.EventRequestFailed,
-			RequestID: req.ID,
-			Timestamp: now,
-			Payload:   map[string]string{"error": "failed to connect to " + host},
-		})
+		if req != nil {
+			now := time.Now()
+			req.CompletedAt = &now
+			req.Status = http.StatusBadGateway
+			req.DurationMs = time.Since(startTime).Milliseconds()
+			p.EventHub.Emit(&shared.Event{
+				Type:      shared.EventRequestFailed,
+				RequestID: req.ID,
+				Timestamp: now,
+				Payload:   map[string]string{"error": "failed to connect to " + host},
+			})
+		}
 		writeError(w, http.StatusBadGateway, "Failed to connect to "+host)
 		return
 	}
@@ -121,30 +137,34 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// Tell the client the tunnel is established.
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
-		now := time.Now()
-		req.CompletedAt = &now
-		req.Status = http.StatusInternalServerError
-		req.DurationMs = time.Since(startTime).Milliseconds()
-		p.EventHub.Emit(&shared.Event{
-			Type:      shared.EventRequestFailed,
-			RequestID: req.ID,
-			Timestamp: now,
-		})
+		if req != nil {
+			now := time.Now()
+			req.CompletedAt = &now
+			req.Status = http.StatusInternalServerError
+			req.DurationMs = time.Since(startTime).Milliseconds()
+			p.EventHub.Emit(&shared.Event{
+				Type:      shared.EventRequestFailed,
+				RequestID: req.ID,
+				Timestamp: now,
+			})
+		}
 		writeError(w, http.StatusInternalServerError, "Hijacking not supported")
 		return
 	}
 
 	clientConn, _, err := hijacker.Hijack()
 	if err != nil {
-		now := time.Now()
-		req.CompletedAt = &now
-		req.Status = http.StatusInternalServerError
-		req.DurationMs = time.Since(startTime).Milliseconds()
-		p.EventHub.Emit(&shared.Event{
-			Type:      shared.EventRequestFailed,
-			RequestID: req.ID,
-			Timestamp: now,
-		})
+		if req != nil {
+			now := time.Now()
+			req.CompletedAt = &now
+			req.Status = http.StatusInternalServerError
+			req.DurationMs = time.Since(startTime).Milliseconds()
+			p.EventHub.Emit(&shared.Event{
+				Type:      shared.EventRequestFailed,
+				RequestID: req.ID,
+				Timestamp: now,
+			})
+		}
 		writeError(w, http.StatusInternalServerError, "Hijacking failed")
 		return
 	}
@@ -154,7 +174,9 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
 
 	// Tunnel established.
-	req.Status = http.StatusOK
+	if req != nil {
+		req.Status = http.StatusOK
+	}
 
 	p.trackTunnel(clientConn)
 	defer p.untrackTunnel(clientConn)
@@ -179,15 +201,16 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// Both directions run until EOF. CloseWrite on one side lets the other finish.
 	<-done
 	<-done
-	now := time.Now()
-	req.CompletedAt = &now
-	req.DurationMs = time.Since(startTime).Milliseconds()
-
-	p.EventHub.Emit(&shared.Event{
-		Type:      shared.EventResponseCompleted,
-		RequestID: req.ID,
-		Timestamp: now,
-	})
+	if req != nil {
+		now := time.Now()
+		req.CompletedAt = &now
+		req.DurationMs = time.Since(startTime).Milliseconds()
+		p.EventHub.Emit(&shared.Event{
+			Type:      shared.EventResponseCompleted,
+			RequestID: req.ID,
+			Timestamp: now,
+		})
+	}
 }
 
 // handleMITMExchange performs the full MITM interception exchange on a hijacked

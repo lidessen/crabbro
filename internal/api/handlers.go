@@ -140,6 +140,8 @@ func (s *Server) handleRequests(w http.ResponseWriter, r *http.Request) {
 		"q":         q.Get("q"),
 		"tag":       q.Get("tag"),
 		"session":   q.Get("session"),
+		"type":      q.Get("type"),
+		"initiator": q.Get("initiator"),
 	})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, shared.ErrCodeBadRequest, "invalid filter",
@@ -147,6 +149,19 @@ func (s *Server) handleRequests(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	requests = filtered
+	showAll := q.Get("all") == "1" || q.Get("all") == "true"
+	hiddenCount := 0
+	if !showAll {
+		visible := requests[:0]
+		for _, req := range requests {
+			if req.Hidden {
+				hiddenCount++
+				continue
+			}
+			visible = append(visible, req)
+		}
+		requests = visible
+	}
 	if limit > 0 && len(requests) > limit {
 		if cursor != "" {
 			requests = requests[:limit]
@@ -161,15 +176,23 @@ func (s *Server) handleRequests(w http.ResponseWriter, r *http.Request) {
 		status := req.Status
 		durationMs := req.DurationMs
 
-		summaries = append(summaries, shared.RequestSummary{
-			ID:         req.ID,
-			StartedAt:  req.StartedAt.Format(time.RFC3339Nano),
-			Method:     req.Method,
-			URL:        req.URL,
-			Status:     status,
-			DurationMs: durationMs,
-			Tags:       req.Tags,
-		})
+		sum := shared.RequestSummary{
+			ID:           req.ID,
+			StartedAt:    req.StartedAt.Format(time.RFC3339Nano),
+			Method:       req.Method,
+			URL:          req.URL,
+			Status:       status,
+			DurationMs:   durationMs,
+			Tags:         req.Tags,
+			Hidden:       req.Hidden,
+			HiddenReason: req.HiddenReason,
+		}
+		if req.Attribution != nil {
+			sum.ResourceType = req.Attribution.ResourceType
+			sum.InitiatorURL = req.Attribution.InitiatorURL
+			sum.SourceID = req.Attribution.SourceID
+		}
+		summaries = append(summaries, sum)
 	}
 
 	// Calculate next cursor.
@@ -180,8 +203,10 @@ func (s *Server) handleRequests(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := shared.ListRequestsResponse{
-		Requests:   summaries,
-		NextCursor: nextCursor,
+		Requests:    summaries,
+		NextCursor:  nextCursor,
+		HiddenCount: hiddenCount,
+		ScopeActive: s.scopeActive(),
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

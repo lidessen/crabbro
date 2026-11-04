@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chiling.dev/schemas/scope.v1.json",
+  "title": "Chiling scope list",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "id", "entries"],
+  "properties": {
+    "version": { "const": 1 },
+    "id": { "enum": ["allow", "deny"] },
+    "entries": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["expr"],
+        "properties": {
+          "expr": { "type": "string", "minLength": 3, "maxLength": 512 },
+          "action": { "enum": ["hide", "bypass"] }
+        }
+      }
+    }
+  }
+}

@@ -17,6 +17,7 @@ import (
 	"github.com/lidessen/chiling/internal/decision"
 	"github.com/lidessen/chiling/internal/fixture"
 	"github.com/lidessen/chiling/internal/history"
+	"github.com/lidessen/chiling/internal/inspect"
 	"github.com/lidessen/chiling/internal/mitm"
 	"github.com/lidessen/chiling/internal/plugin"
 	"github.com/lidessen/chiling/internal/proxy"
@@ -55,6 +56,8 @@ type Server struct {
 	Decision *decision.Client
 	// Plugins is the Node host supervisor. Nil disables plugin routes.
 	Plugins *plugin.Manager
+	// Inspect attributes traffic and holds session scope plus durable lists.
+	Inspect *inspect.Runtime
 	// RulesDir is the on-disk rule directory. Nil disables draft/commit.
 	RulesDir *rule.Dir
 	// Replay runs a captured request back through the proxy.
@@ -113,6 +116,9 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/v1/rules/diagnose", s.handleRulesDiagnose)
 	s.mux.HandleFunc("/v1/rules/reload", s.handleRulesReload)
 	s.mux.HandleFunc("/v1/rules", s.handleRules)
+	s.mux.HandleFunc("/v1/sources", s.handleSources)
+	s.mux.HandleFunc("/v1/sources/", s.handleSources)
+	s.mux.HandleFunc("/v1/scope", s.handleScope)
 	s.mux.HandleFunc("/v1/config/status", s.handleConfigStatus)
 	s.mux.HandleFunc("/v1/config/draft", s.handleConfigDraft)
 	s.mux.HandleFunc("/v1/config/validate", s.handleConfigValidate)

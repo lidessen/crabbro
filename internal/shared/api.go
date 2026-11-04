@@ -19,8 +19,10 @@ type StatusResponse struct {
 
 // ListRequestsResponse is returned by GET /v1/requests.
 type ListRequestsResponse struct {
-	Requests   []RequestSummary `json:"requests"`
-	NextCursor string           `json:"nextCursor,omitempty"`
+	Requests    []RequestSummary `json:"requests"`
+	NextCursor  string           `json:"nextCursor,omitempty"`
+	HiddenCount int              `json:"hiddenCount,omitempty"`
+	ScopeActive bool             `json:"scopeActive,omitempty"`
 }
 
 // RequestSummary is a lightweight view of a request used in list responses.
@@ -30,8 +32,13 @@ type RequestSummary struct {
 	Method     string    `json:"method"`
 	URL        string    `json:"url"`
 	Status     int       `json:"status"`
-	DurationMs int64     `json:"durationMs"`
-	Tags       []string  `json:"tags,omitempty"`
+	DurationMs   int64    `json:"durationMs"`
+	Tags         []string `json:"tags,omitempty"`
+	Hidden       bool     `json:"hidden,omitempty"`
+	HiddenReason []string `json:"hiddenReason,omitempty"`
+	ResourceType string   `json:"resourceType,omitempty"`
+	InitiatorURL string   `json:"initiatorUrl,omitempty"`
+	SourceID     string   `json:"sourceId,omitempty"`
 }
 
 // RequestDetailResponse is returned by GET /v1/requests/:id.
