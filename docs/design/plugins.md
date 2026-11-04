@@ -2,6 +2,7 @@
 
 Status: Proposal, not implemented
 Date: 2026-11-04
+Revised: runtime model, after a survey of existing plugin systems. One OS process per plugin is no longer the recommendation.
 Scope: JS plugins distributed as npm packages. This does not change the current rule sandbox.
 
 `NETWORK_PIPELINE_DESIGN.md` decision 7 kept plugin installation, manifests, host capabilities, and command registration out of the network work. This document is that follow-on. Rules stay what they are today: one JavaScript function, evaluated by Goja, returning a validated action list.
@@ -9,13 +10,15 @@ Scope: JS plugins distributed as npm packages. This does not change the current 
 ## 1. Decision summary
 
 1. Plugins are npm packages. The daemon does not execute them inside Goja. Goja stays the rule engine.
-2. Each enabled plugin is a long-lived Node process started by `chilingd`. Hooks are JSON messages over a private socket. The process is started once, not once per request.
-3. A plugin returns the same declarative actions rules return. Go validates and applies them. Plugin code never receives `http.Request`, a socket, or the response writer.
-4. Built-in action names are reserved. A plugin action is `plugin.<package>.<action>` and cannot replace `mockResponse` or any other built-in.
-5. A rule may emit a plugin action. The rule still matches in Goja. Only that action's handler crosses into Node.
-6. Default permissions are none: no network, no filesystem outside the plugin directory, no environment, no history writes. Native addons and install scripts are refused unless the operator opts in.
-7. CLI commands a plugin registers live under `chiling plugin run <pkg> ...`. They do not add top-level `chiling` subcommands.
-8. Install, enable, and traces go through the daemon. The CLI is a client. Output is JSON. A UI later reads the same API and the same activity log.
+2. Node is the plugin runtime, because that is what npm packages actually run on. The daemon supervises **one** Node host process, not one process per plugin. The host is started lazily and exits when nothing is active.
+3. Inside that host, each activated plugin runs in its own `worker_threads` worker. A worker timeout terminates that worker. It does not restart the host and it does not affect other plugins. A plugin that needs native code, or that asks for a process boundary, gets its own child process instead.
+4. WASM is the right shape for a future untrusted filter ABI (Envoy, Zed). It is the wrong v1 runtime for npm packages.
+5. A plugin returns the same declarative actions rules return. Go validates and applies them. Plugin code never receives `http.Request`, a socket, or the response writer.
+6. Built-in action names are reserved. A plugin action is a `plugin` action naming `package` and `action`. It cannot replace `mockResponse`.
+7. A rule may emit that action. The rule still matches in Goja. Only the handler crosses into the host.
+8. Default permissions are none. `worker_threads` is not a security boundary. Permissions are enforced by not handing the worker Node's `fs`, `net`, or `process`, and by brokering calls back to the daemon. Honest limits are in section 10.
+9. CLI commands a plugin registers live under `chiling plugin run <pkg> ...`. They do not add top-level `chiling` subcommands.
+10. Install, enable, and traces go through the daemon. The CLI is a client. Output is JSON. A UI later reads the same API and the same activity log.
 
 ## 2. What exists today
 
@@ -33,66 +36,162 @@ Actions the daemon already knows how to apply:
 
 Rules are an in-memory map (`RuleStore`). They are lost when the daemon exits. Captured exchanges are not: `internal/history` writes them to SQLite. The control API is `/v1` over an owner-only Unix socket, with a bearer token on TCP. The CLI defaults to JSON. `internal/session` records a trajectory (`request_captured`, `rule_created`, `verify`, `find`) for a later UI.
 
-That split is the constraint this proposal keeps. A hot-path rule must not grow a Node dependency. A distributed plugin must not be squeezed into a runtime that cannot load one.
+A hot-path rule must not grow a Node dependency. A distributed plugin must not be squeezed into a runtime that cannot load one.
 
 ## 3. Goals and non-goals
 
 ### Goals
 
 - An operator or agent can install a plugin from npm and enable it without editing the daemon.
+- Idle plugins cost nothing in Node. Enabled-but-unmatched plugins do not keep a process or a worker alive.
 - Plugin authors write TypeScript against a types-only package and ship compiled JavaScript.
 - Hooks line up with the stages the proxy already has: request, response, WebSocket frame.
 - Anything a plugin returns is checked by the same validator as a rule, then applied by Go.
+- A runaway or crashed plugin does not take down `chilingd`, and does not take down unrelated plugins.
 - Agents can list plugins, read their manifests, and call their commands from JSON.
 - A UI can show install, enable, and per-exchange plugin traces without a second control plane.
 
 ### Non-goals for the first implementation
 
-- Running untrusted anonymous code. Installing a package is an operator decision. Permissions reduce accidents and surprise install scripts. They are not a sandbox against a hostile native addon.
+- Running anonymous untrusted code as if it were a browser origin. Installing a package is an operator decision. The permission layer stops accidents and surprise install scripts. It does not contain a hostile native addon. See section 10.
 - Replacing rules with plugins. One-off rewrites stay inline JavaScript.
 - Loading plugins from the network on each request.
-- A plugin store or search index inside chiling. npm is the index.
+- A plugin store inside chiling. npm is the index.
 - Plugin-owned MITM policy. A plugin match must not decrypt a host. That stays `NetworkPolicy`.
 - Editing history or deleting captures in the first permission set.
+- Compiling npm packages to WASM so they can run inside the Go process.
 
-## 4. Runtime
+## 4. What other systems actually do
 
-### Options
+These are the arrangements that matter for a local proxy whose plugins are npm packages. The column "isolation" is what a faulty or hostile plugin can do to its neighbors, not the marketing claim.
 
-| | Goja, same sandbox as rules | Node subprocess | Bun subprocess |
-|---|---|---|---|
-| npm dependencies | No. Goja does not resolve `node_modules`, and the current preprocessor only rewrites a leading `export default`. | Yes. `npm install` is the distribution path the owner asked for. | Yes, with a smaller compatibility gap than Goja and a larger one than current Node. |
-| Cold start | None. The VM is created per evaluation and is cheap. | A process start is too slow to do per request. A process kept for the daemon lifetime is fine. | Faster startup than Node, same "keep it alive" requirement. |
-| Isolation | Best of the three for pure JS. A timeout interrupts the VM. A script cannot touch the disk. | A hung plugin can be killed without exiting `chilingd`. Node is not a security boundary once native code or `child_process` is reachable. | Same process story as Node. |
-| Author experience | Authors could not `import` a normal package. The types they write would not match the runtime. | Matches how npm packages are written and tested. | Authors would still test on Node, because that is what CI and editors run. |
+| System | Where code runs | Idle cost | How a bad plugin is stopped | Isolation that is real | What it gives up |
+|---|---|---|---|---|---|
+| VS Code extension host | One Node process (sometimes a few: local, remote, web). Extensions are modules in that process. Lazy activation on events. JSON-RPC to the workbench. | An enabled extension that has not activated costs a manifest. The host process exists once extensions are needed. | Host crash restarts the **whole host**. Every extension in it reloads. A stuck extension can freeze all of them. | API surface and a separate process from the UI. Extensions in one host share a heap and can `require` Node. | Per-extension kill. |
+| JetBrains | In-process JVM. Classloader per plugin. Declarative extension points in `plugin.xml`. | Loaded plugins sit in the IDE process. | A bad plugin can crash or deadlock the IDE. Dynamic unload exists and is partial. | Classloader, not an OS process. | Crash isolation. |
+| Chrome extensions, MV3 | A service worker per extension, event-driven, killed when idle. Separate from the page. `declarativeNetRequest` for network rules. | Idle extension has no running worker. | The worker is terminated. Other extensions stay up. | Process-per-extension in Chromium, plus a permission manifest. No arbitrary Node. | Persistent background state. Blocking `webRequest` is mostly gone. |
+| Figma plugins | A sandboxed JS realm per plugin. `postMessage` RPC to the document. The document API is the capability set. | A closed plugin is not running. | The realm can be torn down without closing the file. | The plugin never holds the document objects. Network exists in the iframe unless the product restricts it. | npm, Node, and a general filesystem. |
+| Obsidian | JS evaluated in the app process. Full Node and vault access. | Loaded plugins are part of the app. | A throw or tight loop can break the app. | Community trust. Almost none technically. | Safety. |
+| Deno | One process. Permissions are capabilities (`--allow-net`, `--allow-read`). A worker can be created with a **subset** of those permissions. | The process you started. | Kill the worker or the process. | The permission check is in the runtime, for Deno APIs. It is not a VM boundary against native code. | npm semantics are an emulation layer, not the reason Deno exists. |
+| Zed extensions | WASM components (Wasmtime, WIT) in the editor process. | An unused extension is bytes on disk. Instantiation is cheap relative to Node. | A trap fails that instance. The editor stays up. Memory can be capped per instance. | Strong for code that only uses the host ABI. | No npm. Authors compile to WASM. |
+| Envoy proxy-wasm | WASM VM inside the proxy process. SDK in Rust, Go, AssemblyScript, C++. One ABI for request and response headers and buffered bodies. | Configured filters occupy a VM. | A trap can fail the stream (fail-open or fail-closed). Some runtime bugs have still crashed Envoy. | Good for pure WASM. Not perfect against runtime bugs. | Not JavaScript npm. Body streaming and host calls are an explicit ABI. |
+| mitmproxy addons | Python in the mitmproxy process. Hooks: `request`, `response`, `websocket_message`. | Imported addons live in the process. | An exception is logged. A blocking call blocks the proxy. | None. This is the "local user script" model. | Isolation. It is the closest product analogue to chiling rules, with a much larger language surface. |
+| Whistle | npm plugins loaded into the Whistle Node process. | In-process. | A bad plugin can crash Whistle. | None beyond Node modules. | Isolation. |
+| Charles, Proxyman | In-app tools and JavaScript **scripts** for rewrite, map-local, and breakpoints. Not a general npm host. | Scripts are part of the app session. | A script error fails that script. | The script API is smaller than Node. | Distribution as packages. |
+| Caddy | Go modules **compiled into** the binary (`xcaddy`). | No extra process. | A bad plugin is a bad build. | Trust is at build time. | `npm install` without a rebuild. |
+| Vite, Rollup | JS hooks in the bundler process (`resolveId`, `load`, `transform`). | In-process. | A plugin can hang the build. | None. Authors are trusted. | A security story. The hook *shape* (pure functions, narrow context) is still the right API idea. |
+| Grafana backend plugins | Hashicorp `go-plugin`: one OS process per plugin, gRPC over a local socket, version handshake, supervisor restarts the plugin. | One process per installed backend plugin, even when idle. | RPC deadline plus process kill. Grafana stays up. Other plugins stay up. | Address space and kill are real. The plugin runs as the same OS user, so it can still read the disk. | Memory: a full process per plugin, which is the cost this revision is trying not to pay for ordinary JS. |
+
+What is worth copying, and what is not:
+
+- **Copy from VS Code:** one host, activation events, lazy load, a versioned RPC, restart the host only when the host itself is dead.
+- **Copy from Chrome MV3:** an idle plugin is not a running worker. Wake it on an event. Do not keep N runtimes warm.
+- **Copy from Grafana `go-plugin`:** the daemon supervises the host (handshake, heartbeat, restart). Use a **separate process** only when the plugin can crash native code.
+- **Copy from Envoy and Zed:** the plugin returns a patch through a narrow ABI. A failure fails that stream, not the proxy. Do not copy WASM as the v1 implementation.
+- **Copy from Vite and mitmproxy:** hooks are small and synchronous from the proxy's point of view. Chiling already has this for rules.
+- **Do not copy Caddy's compile-in model.** It rejects the npm requirement.
+- **Do not copy Obsidian or Whistle's in-process trust** for the Go daemon. A plugin must not share an address space with `chilingd`. The proxy has to keep forwarding if Node dies.
+
+## 5. Runtime
 
 ### Recommendation
 
-Use Node as the plugin host. Keep Goja for rules.
+Three tiers. Almost every plugin is tier 1.
 
-One OS process per enabled plugin, started when the plugin is enabled and stopped when it is disabled or the daemon shuts down. A shared Node process for every plugin would use less memory and is a reasonable later optimization. Separate processes make a timeout a kill, and they stop one package from reading another's config. A local proxy is expected to have a few plugins, not hundreds.
+| Tier | When | What runs it |
+|---|---|---|
+| Rules | Always. Agent-written JS, no npm. | Goja, inside `chilingd`, as today. |
+| Plugins, default | npm package, pure JS, no `native` grant. | A worker inside the single Node host. |
+| Plugins, opted in | Manifest sets `"isolation": "process"`, or the install granted `native`. | A child process of the host, supervised like a Grafana plugin. One plugin, one process. |
 
-The host program is a small script shipped with chiling (`internal/pluginhost` or `cmd/chiling-plugin-host`). The daemon speaks length-prefixed JSON frames over a Unix socket created mode `0600` in the plugin state directory. Frames are `load`, `hook`, `action`, `command`, and `shutdown`. The daemon owns the timeout: if a hook exceeds its budget, the daemon kills that process, records the error on the exchange, and follows the plugin's failure mode (default fail-open, same as rules). The next exchange starts a fresh process.
+The host is a small program shipped with chiling (`cmd/chiling-plugin-host`). `chilingd` speaks to it over one Unix socket, mode `0600`. The daemon does not start the host at boot. It starts the host on the first activation event. If every worker has been idle and the host has been idle for a grace period, the daemon stops the host. Steady state with no matching traffic is zero Node processes.
 
-Bun is not the v1 host. It can be a later `chiling plugin host --runtime bun` experiment if startup or install speed becomes the problem. The package format should not mention the runtime, so that swap stays possible.
+Workers:
 
-Do not try to teach Goja to load npm. A partial resolver would accept packages that then fail on `import`, top-level await, or a dependency. That is a worse author experience than a boring Node process.
+- Created on that plugin's first activation, not at enable time.
+- Destroyed with `worker.terminate()` after an idle timeout (proposal: 30 s with no hook and no command).
+- Given V8 `resourceLimits` (proposal: 64 MB old-generation heap, overridable in the install record).
+- Do not share a JS heap. They do not share plugin config objects. The host keeps the config and passes a copy in each call.
 
-## 5. Package shape
+This is cheaper than one Node process per plugin once two or more plugins are active, and it is as cheap when they are idle, because neither design should keep a runtime for an idle plugin. The earlier per-process recommendation paid a full Node startup and a full RSS **per active plugin**, plus one socket and one supervisor each. The host pays one Node startup for the whole set, and a worker isolate per plugin that is actually in a hook. A worker isolate is still real memory (its own V8 heap). It is not free. It is smaller and faster to start than a process, and one heartbeat covers all of them.
 
-A plugin is a normal npm package whose `package.json` carries a `chiling` block. The daemon reads that block as data. It does not execute `package.json`.
+Bun is not the v1 host. The package format does not name the runtime, so a later host can be swapped. Goja stays rules-only. Teaching Goja to load npm would fail on `import`, top-level await, and dependencies.
+
+WASM stays a documented non-goal for v1. proxy-wasm and Zed are what to copy if chiling ever wants a filter that must not be able to call Node at all. That filter would be a second kind of package, not an npm compatibility layer. Componentizing npm to WASM is not a migration path authors will accept.
+
+### Activation
+
+The manifest lists activation events. The daemon evaluates them in Go, before any Node code runs.
+
+| Event | Fires when |
+|---|---|
+| `onRequest` | A request passes the plugin's static `match` (method, host pattern, path prefix). This is the default if the manifest omits `activation`. |
+| `onCommand` | `chiling plugin run` names this package. |
+| `onStartup` | The daemon is up and the plugin is enabled. Opt-in. `plugin info` warns. Idle cost stops being zero. |
+
+`onRequest` uses the same host matcher as MITM (`internal/mitm` patterns). A plugin for `api.example.com` does not wake on other hosts. Enablement without a matching request does not start Node.
+
+### Timeouts and runaway plugins
+
+The daemon owns the deadline, same idea as Goja's interrupt, different mechanism.
+
+1. The daemon's RPC wait is the hook budget. Proposal: 500 ms by default, the same `DefaultRuleTimeout`, overridable per plugin up to the exchange's `DefaultRuleBudget` (2 s). A frame hook uses the same budget per frame.
+2. On deadline, the daemon tells the host to terminate **that worker** and applies the plugin's failure mode (`fail-open` skips it, `fail-closed` returns 403). Other workers and the Go proxy keep going.
+3. `worker.terminate()` is asynchronous and does not stop a thread stuck inside native code. If the worker has not exited within 1 s, the host marks the plugin poisoned and refuses new calls until the worker is actually gone. The in-flight exchange has already moved on at step 2.
+4. The host heartbeats every 2 s. Three missed beats and the daemon kills the **host** process and starts a new one on the next activation. That is the VS Code restart, used only when the supervisor itself is dead, not when one plugin is slow.
+5. A plugin that exceeds its heap limit crashes its worker (V8 abort of that isolate). The host reports it. The daemon does not restart the host.
+6. In-flight exchanges keep the plugin snapshot they started with. A restart does not retarget them.
+
+### Memory
+
+- Per worker: `resourceLimits.maxOldGenerationSizeMb` (default 64). This caps the V8 heap. It does not cap native allocations, buffers held by the host, or memory the plugin causes the daemon to spend (history reads are already limited).
+- Per host: the daemon samples RSS. Proposal: soft cap 512 MB for the whole host. Over the cap, the daemon restarts the host and records `plugin_host_restarted`. This is a backstop, not a fair scheduler.
+- A plugin that declares `isolation: process` has its own RSS. The host cap does not include it. The daemon applies a separate cap (proposal: 256 MB) and kills that process if it exceeds it.
+
+### RPC
+
+One socket, `~/.chiling/plugins/host.sock`, mode `0600`. Frames are length-prefixed JSON (`uint32` big-endian length, then one object). gRPC would match Grafana and cost a code generator for a protocol that only our host and our daemon speak. JSON matches the CLI and the rule action schema.
+
+Daemon to host:
+
+| `type` | Fields | Meaning |
+|---|---|---|
+| `hello` | `api`, `token` | Handshake. Host replies with its protocol version. Mismatch: daemon refuses the host. |
+| `activate` | `package`, `entry`, `config`, `permissions` | Start the worker if it is not running. |
+| `hook` | `id`, `package`, `hook`, `exchangeId`, `payload` | `onRequest`, `onResponse`, or `onWebSocketFrame`. |
+| `action` | `id`, `package`, `action`, `params`, `payload` | A rule's `plugin` action. |
+| `command` | `id`, `package`, `command`, `params` | `plugin run`. |
+| `deactivate` | `package` | `worker.terminate()` after the current call. |
+| `shutdown` | | Exit the host. |
+
+Host to daemon:
+
+| `type` | Fields | Meaning |
+|---|---|---|
+| `result` | `id`, `match`, `actions`, `error` | Reply to `hook`, `action`, or `command`. |
+| `broker` | `id`, `package`, `op`, `payload` | `history.list`, `history.get`, `net.fetch`, `fs.read`, `fs.write`, `secrets.get`. The daemon checks the permission and the limits, then replies. |
+| `log` | `package`, `level`, `message` | stderr for the operator. Not a trace. |
+| `heartbeat` | `rssBytes` | Liveness and the memory sample. |
+
+`id` correlates replies. Hooks on different exchanges run concurrently. The host queues per worker so one plugin's hooks are ordered and two plugins are not blocked on each other. The daemon does not wait for plugin A before starting plugin B's hook.
+
+The host is the only Node process that loads plugin code. Workers cannot open the daemon socket. Broker calls go through the host, which stamps the package name. A worker that guesses another package's name still fails the permission check in the daemon, and the host drops broker frames whose package does not match the worker that sent them.
+
+## 6. Package shape
+
+A plugin is a normal npm package. The daemon reads the `chiling` block as data. It does not execute `package.json`.
 
 ```json
 {
   "name": "@example/chiling-redact",
   "version": "1.2.0",
   "type": "module",
-  "exports": {
-    ".": "./dist/index.js"
-  },
+  "exports": { ".": "./dist/index.js" },
   "chiling": {
     "api": "1.0.0",
     "entry": "./dist/index.js",
+    "activation": ["onRequest"],
+    "isolation": "worker",
     "permissions": ["history:read"],
     "configSchema": "./chiling.config.schema.json"
   }
@@ -101,9 +200,11 @@ A plugin is a normal npm package whose `package.json` carries a `chiling` block.
 
 | Field | Required | Meaning |
 |---|---|---|
-| `chiling.api` | yes | Semver of the plugin API this package was built against. The daemon loads it only when the major matches. |
+| `chiling.api` | yes | Semver of the plugin API. The daemon loads it only when the major matches and the daemon's minor is at least the plugin's minor. |
 | `chiling.entry` | yes | JavaScript file, relative to the package root, no `..`. |
-| `chiling.permissions` | no | Declared capabilities. Default is empty. See section 8. |
+| `chiling.activation` | no | `onRequest` (default), `onCommand`, `onStartup`. |
+| `chiling.isolation` | no | `worker` (default) or `process`. |
+| `chiling.permissions` | no | Declared capabilities. Default is empty. |
 | `chiling.configSchema` | no | JSON Schema for the plugin's config object. |
 
 The entry module default-exports one object:
@@ -115,13 +216,13 @@ const plugin: Plugin = {
   match: { hosts: ["*.example.com"], methods: ["POST"] },
   hooks: {
     onRequest(ctx) { return { match: false }; },
-    onResponse(ctx) { return { match: true, actions: [/* built-in or plugin actions */] }; },
+    onResponse(ctx) { return { match: true, actions: [] }; },
     onWebSocketFrame(ctx) { return { match: false }; }
   },
   actions: {
     redact: {
       params: { type: "object", required: ["names"], properties: { names: { type: "array", items: { type: "string" } } } },
-      handle(ctx, params) { /* return further actions or a frame patch */ }
+      handle(ctx, params) { return { match: true, actions: [] }; }
     }
   },
   commands: {
@@ -136,41 +237,37 @@ const plugin: Plugin = {
 export default plugin;
 ```
 
-`@chiling/plugin` is a types-only package published from this repository when implementation starts. It contains the hook context, the action union, and the JSON Schema types for config. It does not contain the daemon. Authors compile with `tsc`. The daemon loads the emitted `.js` and never runs the compiler.
+`@chiling/plugin` is a types-only package published from this repository when implementation starts. It contains the hook context, the action union, and the config types. It does not contain the daemon. Authors compile with `tsc`. The daemon loads the emitted `.js` and never runs the compiler.
 
-A second file, `chiling.plugin.json`, is allowed and overrides the `package.json` block when both exist. Tools that should not parse `package.json` can read it. The fields are the same.
+`chiling.plugin.json` is allowed and overrides the `package.json` block when both exist. The daemon rejects a package whose entry is missing, whose `api` it does not speak, or whose schema is not valid JSON Schema draft 2020-12. Rejection happens before a worker is started.
 
-The daemon rejects a package whose entry is missing, whose `api` major it does not speak, or whose schema is not valid JSON Schema draft 2020-12. Rejection happens before the process is spawned.
+## 7. API surface
 
-## 6. API surface
+Hooks are optional. Each receives a JSON view and returns `{ match, actions }`, the same shape `ValidateOutput` already enforces. The view is a copy.
 
-Hooks are optional. Each one receives a JSON view and returns `{ match, actions }`, the same shape `ValidateOutput` already enforces. The view is a copy. Mutations in JavaScript are discarded.
-
-| Hook | When the daemon calls it | View |
+| Hook | When | View |
 |---|---|---|
-| `onRequest` | After the exchange is built, before upstream, outer plugin to inner plugin by priority | `ctx.request` as rules see it today, plus `ctx.original` |
-| `onResponse` | On the unwind, after inner plugins | `ctx.request` and `ctx.response` (`status`, `headers`, `body`, `bodyTruncated`) |
-| `onWebSocketFrame` | For a text or binary frame, only if this plugin's `onRequest` matched the upgrade | `ctx.frame` (`direction`, `opcode`, `payload`, `fin`) |
+| `onRequest` | After the exchange is built, before upstream. Outer plugin to inner plugin by priority. | `ctx.request` as rules see it, plus `ctx.original` |
+| `onResponse` | On the unwind, after inner plugins. | `ctx.request` and `ctx.response` (`status`, `headers`, `body`, `bodyTruncated`) |
+| `onWebSocketFrame` | A text or binary frame, and only if this plugin's `onRequest` matched the upgrade. | `ctx.frame` (`direction`, `opcode`, `payload`, `fin`) |
 
-`match` on the plugin object is a static prefilter the daemon evaluates in Go: method, host pattern (the same matcher MITM uses), path prefix. If it does not match, the daemon does not send the hook. This keeps a redact-one-host plugin off the hot path for everything else. The hook may still return `match: false`.
+`match` on the plugin object is the static prefilter the daemon evaluates in Go. If it does not match, the daemon does not send the hook and does not activate the plugin. The hook may still return `match: false`.
 
-Returned built-in actions are applied by the existing onion code. A plugin does not get a second, looser applier. `delay` and `throttle` keep their current caps. Body previews keep the 64 KiB capture cap. A `rewriteResponseBody` that needs more than `MaxTransformBody` (256 KiB) fails the plugin result the same way it fails a rule.
+Returned built-in actions are applied by the existing onion. `delay` and `throttle` keep their current caps. Body previews keep the 64 KiB capture cap. A `rewriteResponseBody` that needs more than `MaxTransformBody` (256 KiB) fails that plugin result the same way it fails a rule.
 
 ### History
 
-With permission `history:read`, the host exposes `ctx.history.list` and `ctx.history.get`. They call the daemon, which reads `internal/history`, and return the same summary and detail shapes as `GET /v1/requests`. Results are limited (default 50, hard max 200) and bodies are the stored previews, not a stream. `history:write` is not in the first permission set. Plugins must not delete or rewrite the log.
+With `history:read`, `ctx.history.list` and `ctx.history.get` call the daemon over the broker and return the same shapes as `GET /v1/requests`. Default limit 50, hard max 200. Bodies are stored previews. `history:write` is not in the first permission set.
 
 ### Actions a rule can call
 
-`actions` registers handlers. The public type string is `plugin.<package-name>.<action>`. The package name keeps its npm scope, with `/` replaced by `.` so the type is one token (`plugin.@example.chiling-redact.redact` is ugly; store the npm name and use the escaped form only on the wire). The wire form is:
+The wire form is one new built-in action:
 
 ```json
 { "type": "plugin", "params": { "package": "@example/chiling-redact", "action": "redact", "names": ["authorization"] } }
 ```
 
-`type: "plugin"` is one new built-in. `params.package` and `params.action` select the handler. Any other params are validated against that action's JSON Schema before the handler runs. The handler returns more actions, which Go validates again, and which may not include another `plugin` action in v1. That forbids plugin-to-plugin chains until we have a cycle rule. One level is enough for "this rule calls the redact plugin".
-
-A rule written by an agent looks like any other rule:
+`params.package` and `params.action` select the handler. Other params are validated against that action's JSON Schema before the handler runs. The handler returns more actions, which Go validates again. In v1 those actions must be built-ins, not another `plugin` action. That forbids plugin-to-plugin chains until there is a cycle rule.
 
 ```js
 export default function rule(ctx) {
@@ -184,54 +281,51 @@ export default function rule(ctx) {
 }
 ```
 
-The rule runs in Goja. Goja does not load the plugin. The daemon, seeing a validated `plugin` action, sends `action` to that package's process.
+The rule runs in Goja. The daemon sends `action` to the host, which routes it to that package's worker, activating it if needed.
 
 ### Commands
 
-`commands` are functions the CLI can call. They are not hooks. They may be async. Their return value is JSON and is printed as-is. They do not implicitly change proxy state. If a command wants to add a rule, it returns a script and the agent runs `chiling rules create`, or it calls a daemon RPC that goes through the existing rule API. The first version should not let a command mutate rules inside the plugin process.
+`commands` are not hooks. They may be async. Their return value is JSON and is printed as-is. They do not change proxy state inside the worker. A command that wants a rule returns a script, and the agent runs `chiling rules create`.
 
 ### Config
 
-`chiling.config.schema.json` is a JSON Schema. `chiling plugin config <pkg>` prints it. `chiling plugin config set <pkg> <file>` validates the file and stores the object in the install record. The host receives the validated object as `ctx.config` on every call. Unknown keys are rejected. Secrets are not fields in this object. A secret is a name (`params.tokenFrom: "openai"`) resolved by the daemon from `~/.chiling/secrets/` (mode `0600`) and passed only to a plugin that declared `secrets:read`. The value is not written to traces, events, or history.
+`chiling plugin config <pkg>` prints the schema. `chiling plugin config set <pkg> <file>` validates and stores the object. The host passes a copy as `ctx.config` on each call. Secrets are not fields in this object. A secret is a name resolved by the daemon from `~/.chiling/secrets/` (mode `0600`) and passed only to a plugin that declared `secrets:read`. Values are not written to traces, events, or history.
 
-## 7. Plugins and rules
-
-They are different objects.
+## 8. Plugins and rules
 
 | | Rule | Plugin |
 |---|---|---|
-| Who writes it | The agent, for one task, often from `rules from` | A package author |
-| Where it lives | In-memory `RuleStore`, script included in `GET /v1/rules` | `~/.chiling/plugins`, enabled flag in the install record |
-| Runtime | Goja, per evaluation | Node process for the daemon lifetime |
-| What it can do | Return built-in actions, including one `plugin` action | Hooks, plus handlers for its own actions |
+| Who writes it | The agent, often from `rules from` | A package author |
+| Where it lives | In-memory `RuleStore` | `~/.chiling/plugins` |
+| Runtime | Goja, per evaluation, inside `chilingd` | Worker in the Node host, or a private process if it opted into one |
+| What it can do | Built-in actions, including one `plugin` action | Hooks and its own action handlers |
 | Failure | `failureMode` on the rule | `failureMode` on the install record, default `fail-open` |
 
-A plugin must not inject rule scripts into the store by itself. The agent can see every rule. If a plugin wants a starting script, `chiling plugin info <pkg>` includes an optional `ruleTemplate` string from the manifest, and the agent creates the rule. That keeps "what will run" auditable in `rules list`.
+A plugin must not insert rules by itself. `plugin info` may include a `ruleTemplate` string. The agent creates the rule. The rule list stays the auditable contract.
 
-Ordering: enabled plugins are middleware outside rules. A plugin `onRequest` sees the original request. Rules then see any request patches the plugin's actions produced. Response hooks unwind rules first, then plugins, which matches the onion (outer plugin, inner rules). Priority is an integer on the install record, default 100, ordered like rules (priority, then package name).
+Ordering: plugins are middleware outside rules. Plugin `onRequest` sees the original request. Rules then see patches from plugin actions. Response hooks unwind rules first, then plugins. Priority is an integer on the install record, default 100, then package name.
 
-Snapshots: enabling or disabling a plugin publishes a new plugin snapshot the same way rule edits publish a rule snapshot. An in-flight exchange keeps the snapshot it started with.
+Enabling or disabling a plugin publishes a new snapshot. An in-flight exchange keeps the snapshot it started with. Deactivation terminates the worker after the current call. It does not stop the host if other plugins are active.
 
-## 8. Install, storage, CLI
-
-State directory: `~/.chiling/plugins/`.
+## 9. Install, storage, CLI
 
 ```text
 ~/.chiling/plugins/
-  installed.json          # id, version, enabled, priority, failureMode, config, permissions granted
+  installed.json              # package, resolved version, enabled, priority, failureMode, isolation, config, granted permissions
+  host.sock                   # the one RPC socket, mode 0600
   packages/
-    @example/chiling-redact/   # npm package tree, including its own package-lock.json
-  sockets/
-    @example/chiling-redact.sock
+    @example/chiling-redact/  # npm tree and its package-lock.json
+  data/
+    @example/chiling-redact/  # only if fs:data was granted
 ```
 
-`installed.json` is the source of truth for enablement. Deleting the package directory without updating it is an error the daemon reports, not a silent disable.
+There is not a socket per plugin. `installed.json` is the source of truth for enablement.
 
-Commands, all JSON by default, `--pretty` for a short table:
+Commands, JSON by default, `--pretty` for a short table:
 
 ```text
 chiling plugin add <npm-pkg>[@version] [--enable]
-chiling plugin add --path <dir> [--enable]     # local checkout, for authors and CI
+chiling plugin add --path <dir> [--enable]
 chiling plugin list
 chiling plugin info <pkg>
 chiling plugin enable <pkg>
@@ -240,114 +334,134 @@ chiling plugin remove <pkg>
 chiling plugin config <pkg>
 chiling plugin config set <pkg> <file.json>
 chiling plugin run <pkg> <command> [--param k=v]
+chiling plugin host status
 ```
 
-`add` asks the daemon (`POST /v1/plugins`). The daemon runs `npm install --ignore-scripts --omit=dev` in a fresh directory, with `npm_config_ignore_scripts=true`. It then reads the manifest and, if `--enable` was set, spawns the host. Version is pinned in `installed.json` to the exact version npm resolved. `remove` stops the process, deletes the directory, and drops the record.
+`add` is `POST /v1/plugins`. The daemon runs `npm install --ignore-scripts --omit=dev` with `npm_config_ignore_scripts=true`. It pins the resolved version. `--enable` marks it enabled. It does not start Node until an activation event. `remove` deactivates the worker, deletes the directory, and drops the record. If that was the last active worker, the host is stopped.
 
-Registry and auth are the operator's npm config, passed through deliberately (`NPM_CONFIG_USERCONFIG` pointing at a file the operator named). The daemon does not embed a token and does not read the whole environment into the plugin.
+`plugin list` rows include `{ package, version, enabled, state, api, isolation, permissions, hooks, actions, commands }`. `state` is `idle`, `running`, or `poisoned`. `plugin host status` is `{ running, pid, rssBytes, workers }`.
 
-`chiling plugin --help` lists the commands above. It does not list every installed plugin's commands. Those are in `plugin info`, so the top-level help stays stable and an agent can still discover them. `plugin list` rows are `{ package, version, enabled, api, permissions, hooks, actions, commands }`. `plugin info` adds the config schema and the rule template.
+Registry and auth are the operator's npm config (`NPM_CONFIG_USERCONFIG`). The daemon does not copy that environment into the worker.
 
-Control API, under `/v1/plugins`:
+Control API:
 
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/v1/plugins` | List |
 | `POST` | `/v1/plugins` | Add (`{ "package", "version", "path", "enable" }`) |
-| `GET` | `/v1/plugins/{id}` | Manifest, status, last error |
+| `GET` | `/v1/plugins/{id}` | Manifest, state, last error |
 | `POST` | `/v1/plugins/{id}/enable` | Enable |
-| `POST` | `/v1/plugins/{id}/disable` | Disable |
+| `POST` | `/v1/plugins/{id}/disable` | Disable and terminate the worker |
 | `DELETE` | `/v1/plugins/{id}` | Remove |
 | `PUT` | `/v1/plugins/{id}/config` | Replace config after schema check |
-| `POST` | `/v1/plugins/{id}/commands/{name}` | Run a command |
+| `POST` | `/v1/plugins/{id}/commands/{name}` | Run a command (activates `onCommand`) |
+| `GET` | `/v1/plugins/host` | Host process status |
 
 Errors use the existing envelope (`error.code`, `error.message`, `error.details`).
 
-## 9. Permissions, sandbox, versions
+## 10. Permissions, and what a worker does not isolate
 
 Declared permissions:
 
 | Permission | Allows |
 |---|---|
-| `net` | `ctx.net.fetch(url)` through the daemon. No raw `fetch` in the plugin realm. Redirects are not followed unless listed. Private addresses are denied unless `net:private` is also granted. |
-| `fs:data` | Read and write `~/.chiling/plugins/data/<package>/` only. |
-| `history:read` | Bounded list and get, section 6. |
-| `secrets:read` | Resolve named secrets. Names used are recorded on the trace. Values are not. |
-| `scripts` | Allow npm lifecycle scripts at install. Default off. |
-| `native` | Allow `*.node` files. Default off. v1 should refuse the package if any are present and this was not granted. |
+| `net` | `ctx.net.fetch(url)` through the daemon. Redirects are not followed unless listed. Private addresses need `net:private` as well. |
+| `fs:data` | Read and write `~/.chiling/plugins/data/<package>/` only, through the broker. |
+| `history:read` | Bounded list and get. |
+| `secrets:read` | Resolve named secrets. The name is recorded on the trace. The value is not. |
+| `scripts` | npm lifecycle scripts at install. Default off. |
+| `native` | `*.node` files. Forces `isolation: process`. Default off. |
 
-The host preload deletes `process.binding`, `child_process`, `worker_threads`, `vm`, and the global `fetch`, and replaces `fs` with a client that only speaks to the daemon broker. This is a guardrail. A package granted `native` or `scripts` can escape it. The CLI prints those two grants in the `add` confirmation and in `plugin info` so an agent sees them in the JSON.
+`worker_threads` gives each plugin its own V8 isolate, its own JS heap, and a `terminate()` that does not kill the host. A tight loop in one worker does not freeze the host's event loop or another worker. `resourceLimits` can abort that isolate when the heap grows. Those are the operational properties this design depends on.
 
-`chiling.api` uses semver. The daemon implements one major at a time (start at `1`). A plugin with a different major is not loaded. A newer minor than the daemon knows is loaded only if the daemon's minor is greater or equal. The types package version matches this.
+`worker_threads` does **not** do the following. Node's own documentation treats threads as a concurrency tool, not a sandbox.
 
-Plugin package versions are exact pins. `chiling plugin add pkg@1` stores `1.2.3` as resolved. Upgrades are an explicit `plugin add pkg@1.3.0`, not a floating range reread on every daemon start.
+- It does not hide Node built-ins. A worker can `import('node:fs')` and `import('node:net')` unless the host's loader refuses those specifiers. The permission model in Node (`--permission`) is process-wide, so it cannot grant `net` to one worker and deny it to another.
+- It does not stop a plugin from reading another plugin's files on disk. The process uid is the operator. `~/.chiling/plugins/packages` is readable. The broker is what stops the *API* from doing it. A worker that is allowed to evaluate arbitrary JS and can reach `fs` does not need the API.
+- It does not cap native memory, and `terminate()` does not unwind a stuck native call.
+- A bug in a native addon loaded in any worker can corrupt the host. That is why `native` forces a separate process.
+- SharedArrayBuffer is opt-in and should not be enabled. Do not pass `transferList` of host secrets.
 
-Traces: every hook and every `plugin` action appends a `RuleTrace`-shaped record with `phase` of `request`, `response`, `frame`, or `command`, `ruleId` set to `plugin:<package>`, and the same `matched`, `actions`, `durationMs`, and `error` fields. Secrets and raw bodies beyond the preview are not copied into the trace. Events stay observational (`plugin_invoked`). They do not control forwarding.
+So the enforcement plan is:
 
-Failure mode on the install record defaults to `fail-open`: a dead plugin is skipped and the exchange continues. `fail-closed` returns 403, same as a rule.
+1. The worker is started with a custom module loader that allows only the plugin's own package and `@chiling/plugin` (types are erased; the runtime shim is the broker client). `node:fs`, `node:net`, `node:child_process`, `node:vm`, `node:worker_threads` are blocked.
+2. `fetch` is not on the global object. `ctx.net.fetch` is a function the shim sends as a broker frame.
+3. The daemon checks the permission again. The host check is not the only check.
+4. This stops accidents and most unmodified packages that expect full Node. It does not stop a package written to escape a loader (prototype tricks against a buggy shim, a bug in Node). Treat it the way VS Code treats the extension host: trusted-enough code the operator installed, in a process that is not the proxy.
+5. `isolation: process` is the escape hatch when that is not enough. That process is still the same OS user. It is not a container. It does mean a crash and a `kill` stay inside that plugin.
 
-## 10. Agents
+`chiling.api` is semver. One major at a time, starting at `1`. Exact version pins in `installed.json`. Upgrades are an explicit `plugin add`, not a floating range on daemon start.
 
-An agent discovers plugins without guessing flags:
+Traces use the existing `RuleTrace` shape with `phase` of `request`, `response`, `frame`, or `command`, and `ruleId` of `plugin:<package>`. Events (`plugin_invoked`) do not control forwarding.
+
+## 11. Agents
 
 1. `chiling plugin --help` for the stable verbs.
-2. `chiling plugin list` for what is installed and which hooks and actions each one exposes.
-3. `chiling plugin info <pkg>` for the config schema, permissions, and rule template.
-4. `chiling rules create` with a `plugin` action, then `chiling verify replay <id>` as today.
-5. `chiling plugin run <pkg> <command>` when the job is not a proxy mutation.
+2. `chiling plugin list` for what is installed, whether it is idle or running, and which hooks and actions it exposes.
+3. `chiling plugin info <pkg>` for the config schema, permissions, isolation, activation events, and rule template.
+4. `chiling rules create` with a `plugin` action, then `chiling verify replay <id>`.
+5. `chiling plugin run <pkg> <command>` for work that is not a proxy mutation.
+6. `chiling plugin host status` to see whether Node is running at all.
 
-`plugin list` and `plugin info` are the machine-readable catalog. Help text for a plugin command is the `summary` plus the JSON Schema, not a free-form README. The daemon is the source of those strings so the CLI and a UI cannot drift.
+`plugin list` and `plugin info` are the catalog. Command help is the `summary` plus the JSON Schema, served by the daemon so the CLI and a UI cannot drift.
 
-## 11. Future UI
+## 12. Future UI
 
-No new UI process. The trajectory already stored in `internal/session` gains activity kinds:
+Activity kinds on the trajectory `internal/session` already stores:
 
 | Kind | When |
 |---|---|
 | `plugin_added` | Package installed |
 | `plugin_enabled` / `plugin_disabled` | Snapshot publish |
 | `plugin_removed` | Uninstall |
-| `plugin_invoked` | A hook or action ran. Carries package, phase, request id, duration, error |
+| `plugin_activated` / `plugin_deactivated` | Worker started or idle-terminated |
+| `plugin_invoked` | A hook or action ran. Package, phase, request id, duration, error |
+| `plugin_host_restarted` | The host process was killed and will be started again on the next activation |
 
-The request detail a UI already gets from `GET /v1/requests/{id}` includes plugin rows in `ruleTrace` because they use that struct. The UI can show them in the same trace list as Goja rules, with the package name as the label. A plugins screen is `GET /v1/plugins`: enabled state, version, permissions, last error. Enable and disable are the POST routes above. The UI does not run npm itself.
+`GET /v1/requests/{id}` already returns `ruleTrace`. Plugin rows use that struct. A plugins screen is `GET /v1/plugins` plus `GET /v1/plugins/host`. The UI does not run npm and does not embed Node.
 
-## 12. Testing for authors
+## 13. Testing for authors
 
-Authors test against fixtures, not against a live network.
+- `@chiling/plugin/testing` exports `runHook(plugin, fixture, phase)`. It feeds fixture JSON (the same shape as `~/.chiling/fixtures/<name>.json`) into the hook in-process. It does not start the daemon. Authors run it under `node --test`.
+- `chiling plugin add --path ./my-plugin` loads a checkout. CI uses that with `testdata/plugins/echo`, a package that returns a `tag`, so tests do not need a registry.
+- A daemon test installs that path, sends one request through the proxy, and asserts the trace contains `plugin:<name>` and the tag. Same shape as `TestAgentLoopRecordInspectRuleVerify`.
+- A second test installs two path plugins, makes the first one loop, and asserts the second still returns its tag and the daemon is still up. That is the regression this runtime exists to pass.
+- Manifest failures do not spawn Node.
+- The host has a table test for the frame protocol. A timeout test asserts `worker.terminate()` and a `fail-open` trace, and asserts the host pid did not change.
 
-- `@chiling/plugin/testing` exports `runHook(plugin, fixture, phase)` which feeds a fixture JSON (the same shape as `~/.chiling/fixtures/<name>.json`) into the hook and returns the action list. It does not start the daemon. Authors run it under `node --test`.
-- `chiling plugin add --path ./my-plugin` loads a checkout. CI in this repository will use that flag with `testdata/plugins/echo`, a package that returns a `tag`, so tests do not need a registry.
-- A daemon integration test installs that path, sends one request through the proxy, and asserts the trace contains `plugin:<name>` and the tag. That is the same shape as `TestAgentLoopRecordInspectRuleVerify`.
-- Schema failures (bad `api`, unknown permission, action that fails `ValidateOutput`) are unit tests on the manifest loader and do not spawn Node.
-- The Node host has a table test: a fixture frame in, a JSON frame out, timeout kills the process.
+A response hook runs once per exchange on the unwind. A frame hook runs once per data frame.
 
-Authors are told not to depend on hook call count beyond the contract in section 6. A response hook runs once per exchange on the unwind. A frame hook runs once per data frame.
-
-## 13. Phased plan
+## 14. Phased plan
 
 Each phase leaves `go test ./...` green and does not change Goja rule behavior.
 
-1. **Manifest and local load.** Parse `chiling` from `package.json`. Spawn the Node host for `--path` packages only. `onRequest` and `onResponse` may return built-in actions. Default permissions. `plugin list` and `plugin info`. No npm.
-2. **npm install.** `plugin add <pkg>`, `--ignore-scripts`, exact pin, enable and disable, remove. Persist `installed.json`.
-3. **Rule dispatch.** The `plugin` action. Frame hook. Failure mode. Traces and activity kinds.
-4. **Broker.** `history:read`, `secrets:read`, `net`, `fs:data`, config schema. Command RPC and `plugin run`.
-5. **Author kit.** Publish `@chiling/plugin` types and the testing helper. Document a sample package in the README.
+1. **Host and local load.** One host process, one worker per activated path plugin, `onRequest` and `onResponse` returning built-in actions. Activation on match. Idle workers exit. `plugin list`, `plugin info`, `plugin host status`. No npm.
+2. **npm install.** `plugin add`, `--ignore-scripts`, exact pin, enable, disable, remove.
+3. **Rule dispatch and faults.** The `plugin` action. Frame hook. Worker timeout and poison. Host heartbeat and restart. Traces and activity kinds. The two-plugin timeout test from section 13.
+4. **Broker.** `history:read`, `secrets:read`, `net`, `fs:data`, config schema, `plugin run`. `native` and `isolation: process` as a child process.
+5. **Author kit.** Publish `@chiling/plugin` and the testing helper.
 
 Phase 1 is the first code change. This document is not that change.
 
-## 14. Open decisions
+## 15. Decisions
 
-| Decision | Recommendation | Why |
+| Decision | Recommendation | Trade-off against the previous per-process design |
 |---|---|---|
-| Who runs plugin code? | Node, one long-lived process per enabled plugin. Goja stays rules-only. | npm packages do not run on Goja. A per-request process is too slow. A separate process can be killed on timeout. |
-| Bun instead of Node? | Not in v1. Keep the package format runtime-neutral so it can be tried later. | Authors and `npm install` already assume Node. Bun's speed does not pay for a second compatibility target yet. |
-| Shared Node process for all plugins? | No in v1. Revisit if memory shows up in `plugin list`. | Isolation and kill are worth a few processes. |
-| May a plugin override `mockResponse`? | No. Plugin behavior is a `plugin` action naming `package` and `action`. | Agents must be able to tell built-ins from third-party code in a rule file. |
-| May a plugin insert rules by itself? | No. It may ship a `ruleTemplate` the agent creates explicitly. | The rule list stays the auditable contract. |
-| Plugin-to-plugin action calls? | Not in v1. A handler returns built-in actions only. | Avoids cycles and unbounded IPC on one exchange. |
-| Where do CLI commands appear? | `chiling plugin run <pkg> <command>`. | Top-level `chiling` verbs stay stable. Discovery is `plugin info`. |
-| npm lifecycle scripts | Off unless the install grants `scripts`. | Install scripts are the usual supply-chain surprise. |
-| Native addons | Refuse the package unless the install grants `native`. | The preload guardrail does not contain them. |
-| History writes | Not a permission in the first set. `history:read` only. | The log is evidence. Plugins should not rewrite it. |
-| Secret storage | Named files under `~/.chiling/secrets`, mode `0600`, injected by the daemon, redacted in traces. | Config JSON would otherwise end up in `installed.json` and in backups. |
-| API version gate | Major must match. Daemon minor must be greater than or equal to the plugin's minor. | Older daemons must not pretend to understand new hooks. |
+| Who runs plugin code? | Goja for rules. One Node host for plugins. A worker per activated plugin. | Per-process isolates crashes and `kill` better, and Node's `--permission` flag could apply per plugin because it is process-wide. It costs a Node RSS and a startup per **active** plugin, and N supervisors. Idle cost can be zero either way if activation is lazy. The waste the earlier draft actually had was keeping a process per **enabled** plugin. |
+| When does a plugin get its own process? | Only if it sets `isolation: process` or is granted `native`. | Those plugins pay the cost the default path avoids. They can crash without taking the host down. |
+| WASM? | Not for npm plugins. Revisit only for a separate untrusted ABI. | WASM (Zed, Envoy) isolates better than workers and can run inside `chilingd`. It does not run npm. |
+| Bun? | Not in v1. Package format stays runtime-neutral. | Bun starts faster. Authors and `npm install` already assume Node. |
+| Shared isolate for all plugins, VS Code style? | No. Workers are the default, even though VS Code shares one isolate. | A shared isolate is less memory and simpler RPC. One tight loop or one heap blow-up stalls every plugin, which is the failure VS Code accepts and a proxy should not. |
+| Idle plugins | No worker and, after a grace period, no host. Activation events in the manifest. `onStartup` is opt-in. | Matches Chrome MV3 and VS Code activation. The first matched request pays host startup once. |
+| Timeouts | Daemon deadline, then `worker.terminate()`. Restart the host only if the heartbeat dies. | Per-process used kill as the only tool. Terminate is weaker against native code, which is why native code is not allowed in a worker. |
+| Memory | 64 MB V8 heap per worker, 512 MB RSS backstop on the host. | `resourceLimits` does not cover native RAM. The host cap is a blunt restart. |
+| Permissions | Broker in the daemon, loader in the worker that does not expose Node I/O. Document that this is not a sandbox. | A dedicated process does not sandbox the disk either, unless the OS user changes. It does limit blast radius of a crash. |
+| May a plugin override `mockResponse`? | No. The action is `type: "plugin"` plus `package` and `action`. | Unchanged. |
+| May a plugin insert rules by itself? | No. It may ship a `ruleTemplate` the agent creates. | Unchanged. |
+| Plugin-to-plugin calls? | Not in v1. Handlers return built-in actions only. | Unchanged. Avoids cycles on one exchange. |
+| Where do CLI commands appear? | `chiling plugin run <pkg> <command>`. | Unchanged. |
+| npm lifecycle scripts | Off unless the install grants `scripts`. | Unchanged. |
+| Native addons | Refuse unless granted, and then `isolation: process`. | Stronger than the previous draft, which left native code inside the same kind of process as ordinary plugins. |
+| History writes | Not in the first permission set. | Unchanged. |
+| Secrets | Named files under `~/.chiling/secrets`, mode `0600`, redacted in traces. | Unchanged. |
+| API version gate | Major must match. Daemon minor must be at least the plugin's minor. | Unchanged. |
