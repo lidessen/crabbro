@@ -427,7 +427,7 @@ So the enforcement plan is:
 4. This stops accidents and most unmodified packages that expect full Node. It does not stop a package written to escape a loader (prototype tricks against a buggy shim, a bug in Node). Treat it the way VS Code treats the extension host: trusted-enough code the operator installed, in a process that is not the proxy.
 5. `isolation: process` is the escape hatch when that is not enough. That process is still the same OS user. It is not a container. It does mean a crash and a `kill` stay inside that plugin.
 
-`chiling.api` is semver. One major at a time, starting at `1`. Exact version pins in `installed.json`. Upgrades are an explicit `plugin add`, not a floating range on daemon start.
+`chiling.api` is semver. One major at a time, starting at `1`. Exact version pins in `installed.json`. Upgrades are an explicit `plugin upgrade`, not a floating range on daemon start.
 
 Traces use the existing `RuleTrace` shape with `phase` of `request`, `response`, `frame`, or `command`, and `ruleId` of `plugin:<package>`. Events (`plugin_invoked`) do not control forwarding.
 
@@ -460,7 +460,7 @@ Activity kinds on the trajectory `internal/session` already stores:
 ## 13. Testing for authors
 
 - `@chiling/plugin/testing` exports `runHook(plugin, fixture, phase)`. It feeds fixture JSON (the same shape as `~/.chiling/fixtures/<name>.json`) into the hook in-process. It does not start the daemon. Authors run it under `node --test`.
-- `chiling plugin add --path ./my-plugin` loads a checkout. CI uses that with `testdata/plugins/echo`, a package that returns a `tag`, so tests do not need a registry.
+- `chiling plugin install ./my-plugin` loads a checkout that already has `package-lock.json`. CI uses that with `testdata/plugins/echo`, a package that returns a `tag`, so tests do not need a registry.
 - A daemon test installs that path, sends one request through the proxy, and asserts the trace contains `plugin:<name>` and the tag. Same shape as `TestAgentLoopRecordInspectRuleVerify`.
 - A second test installs two path plugins, makes the first one loop, and asserts the second still returns its tag and the daemon is still up. That is the regression this runtime exists to pass.
 - Manifest failures do not spawn Node.
@@ -473,7 +473,7 @@ A response hook runs once per exchange on the unwind. A frame hook runs once per
 Each phase leaves `go test ./...` green and does not change Goja rule behavior.
 
 1. **Host and local load.** One host process, one worker per activated path plugin, `onRequest` and `onResponse` returning built-in actions. Activation on match. Idle workers exit. `plugin list`, `plugin info`, `plugin host status`. No npm.
-2. **npm install.** `plugin add`, `--ignore-scripts`, exact pin, enable, disable, remove.
+2. **npm install.** `plugin install` with `npm ci --ignore-scripts`, exact pin, instances, upgrade, uninstall.
 3. **Rule dispatch and faults.** The `plugin` action. Frame hook. Worker timeout and poison. Host heartbeat and restart. Traces and activity kinds. The two-plugin timeout test from section 13.
 4. **Broker.** `history:read`, `secrets:read`, `net`, `fs:data`, config schema, `plugin run`. `native` and `isolation: process` as a child process.
 5. **Author kit.** Publish `@chiling/plugin` and the testing helper.
