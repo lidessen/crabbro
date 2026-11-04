@@ -238,14 +238,16 @@ func (s *Server) handleFind(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Query string `json:"query"`
-		Limit int    `json:"limit"`
+		Query     string `json:"query"`
+		Limit     int    `json:"limit"`
+		Type      string `json:"type"`
+		Initiator string `json:"initiator"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Query) == "" {
 		writeError(w, http.StatusBadRequest, shared.ErrCodeBadRequest, "query is required")
 		return
 	}
-	flows := s.flowSummaries(body.Limit)
+	flows := s.flowSummaries(body.Limit, body.Type, body.Initiator)
 	result, err := s.Decision.Find(r.Context(), body.Query, flows)
 	if err != nil {
 		if errors.Is(err, decision.ErrNotConfigured) {
@@ -320,20 +322,29 @@ func (s *Server) handleRulesDraft(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func (s *Server) flowSummaries(limit int) []decision.Flow {
+func (s *Server) flowSummaries(limit int, typ, initiator string) []decision.Flow {
 	if s.RingBuffer == nil {
 		return nil
 	}
 	if limit <= 0 || limit > 32 {
 		limit = 32
 	}
-	all := s.RingBuffer.List(limit)
+	all := s.RingBuffer.List(0)
 	out := make([]decision.Flow, 0, len(all))
 	for _, req := range all {
-		if req.Method == "CONNECT" {
+		if req.Method == "CONNECT" || req.Hidden {
+			continue
+		}
+		if typ != "" && (req.Attribution == nil || !strings.EqualFold(req.Attribution.ResourceType, typ)) {
+			continue
+		}
+		if initiator != "" && (req.Attribution == nil || !strings.EqualFold(req.Attribution.InitiatorURL, initiator)) {
 			continue
 		}
 		out = append(out, *s.flowFrom(req))
+		if len(out) >= limit {
+			break
+		}
 	}
 	return out
 }
@@ -418,6 +429,24 @@ func filterRequests(all []*shared.Request, q map[string]string) ([]*shared.Reque
 		}
 		if session != "" && req.SessionID != session {
 			continue
+		}
+		if typ := q["type"]; typ != "" {
+			got := ""
+			if req.Attribution != nil {
+				got = req.Attribution.ResourceType
+			}
+			if !strings.EqualFold(got, typ) {
+				continue
+			}
+		}
+		if init := q["initiator"]; init != "" {
+			got := ""
+			if req.Attribution != nil {
+				got = req.Attribution.InitiatorURL
+			}
+			if !strings.EqualFold(got, init) {
+				continue
+			}
 		}
 		out = append(out, req)
 	}

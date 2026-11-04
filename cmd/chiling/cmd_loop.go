@@ -158,12 +158,14 @@ func cmdRecord(cfg *clientConfig, args []string) error {
 func cmdFind(cfg *clientConfig, args []string) error {
 	fs := flag.NewFlagSet("find", flag.ContinueOnError)
 	pretty := fs.Bool("pretty", false, "Human-readable output")
+	typ := fs.String("type", "", "Only flows of this resource type")
+	initiator := fs.String("initiator", "", "Only flows with this initiator URL")
 	fs.Parse(args)
 	query := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if query == "" {
 		return fmt.Errorf("usage: chiling find \"<what you are looking for>\"")
 	}
-	body, _ := json.Marshal(map[string]any{"query": query})
+	body, _ := json.Marshal(map[string]any{"query": query, "type": *typ, "initiator": *initiator})
 	resp, err := doRequest(cfg, http.MethodPost, "/v1/find", bytes.NewReader(body))
 	if err != nil {
 		return err

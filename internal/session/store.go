@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lidessen/chiling/internal/inspect"
 	"github.com/lidessen/chiling/internal/shared"
 )
 
@@ -22,6 +23,7 @@ type Store struct {
 	current  *shared.Session
 	activity []shared.Activity
 	max      int
+	scopes   map[string]*inspect.Scope
 }
 
 // New creates a store that keeps up to max activity entries (and the same
@@ -30,7 +32,7 @@ func New(max int) *Store {
 	if max < 1 {
 		max = 1024
 	}
-	return &Store{max: max}
+	return &Store{max: max, scopes: map[string]*inspect.Scope{}}
 }
 
 // Start opens a recording session. An already-open session is stopped first.
@@ -82,6 +84,7 @@ func (s *Store) stopLocked(id string) *shared.Session {
 			now := time.Now().UTC()
 			sess.Recording = false
 			sess.StoppedAt = &now
+			delete(s.scopes, sess.ID)
 			s.appendLocked(shared.Activity{
 				At:        now,
 				Kind:      "session_stopped",

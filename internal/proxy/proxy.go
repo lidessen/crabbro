@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/lidessen/chiling/internal/history"
+	"github.com/lidessen/chiling/internal/inspect"
 	"github.com/lidessen/chiling/internal/mitm"
 	"github.com/lidessen/chiling/internal/ring"
 	"github.com/lidessen/chiling/internal/rule"
@@ -41,6 +42,9 @@ type Proxy struct {
 	Policy   PolicyStore
 	Sessions *session.Store
 	History  *history.Store
+	// Inspect attributes exchanges and applies view scope. Nil keeps the
+	// proxy behavior from before inspection existed.
+	Inspect *inspect.Runtime
 
 	// DialTLS allows injecting a custom TLS dialer for upstream connections
 	// in tests. If nil, the shared transport verifies server certificates.
@@ -59,6 +63,14 @@ type Proxy struct {
 }
 
 // New creates a new Proxy with sensible defaults.
+func remoteAddr(s string) net.Addr {
+	a, err := net.ResolveTCPAddr("tcp", s)
+	if err != nil {
+		return nil
+	}
+	return a
+}
+
 func New(addr string, rb *ring.RequestBuffer, ruleStore *rule.RuleStore, ruleEngine *rule.RuleEngine) *Proxy {
 	return &Proxy{
 		ListenAddr:  addr,

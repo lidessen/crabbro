@@ -123,17 +123,17 @@ func cmdConfig(cfg *clientConfig, args []string) error {
 		if len(args) < 2 {
 			return fmt.Errorf("usage: chiling config validate <id>")
 		}
-		return printAPI(cfg, http.MethodPost, "/v1/config/validate?id="+args[1], nil)
+		return printAPI(cfg, http.MethodPost, "/v1/config/validate?id="+args[1]+configKind(args), nil)
 	case "commit":
 		if len(args) < 2 {
 			return fmt.Errorf("usage: chiling config commit <id>")
 		}
-		return printAPI(cfg, http.MethodPost, "/v1/config/commit?id="+args[1], nil)
+		return printAPI(cfg, http.MethodPost, "/v1/config/commit?id="+args[1]+configKind(args), nil)
 	case "discard":
 		if len(args) < 2 {
 			return fmt.Errorf("usage: chiling config discard <id>")
 		}
-		return printAPI(cfg, http.MethodPost, "/v1/config/discard?id="+args[1], nil)
+		return printAPI(cfg, http.MethodPost, "/v1/config/discard?id="+args[1]+configKind(args), nil)
 	case "draft":
 		if len(args) < 2 {
 			return fmt.Errorf("usage: chiling config draft <file>")
@@ -143,10 +143,23 @@ func cmdConfig(cfg *clientConfig, args []string) error {
 			return err
 		}
 		id := strings.TrimSuffix(strings.TrimSuffix(fileBase(args[1]), ".draft"), ".yaml")
-		return printAPI(cfg, http.MethodPost, "/v1/config/draft?id="+id, bytes.NewReader(b))
+		kind := ""
+		if strings.Contains(args[1], "/scope/") {
+			kind = "&kind=scope"
+		}
+		return printAPI(cfg, http.MethodPost, "/v1/config/draft?id="+id+kind, bytes.NewReader(b))
 	default:
 		return fmt.Errorf("unknown config command: %s", args[0])
 	}
+}
+
+func configKind(args []string) string {
+	for _, a := range args {
+		if a == "--scope" || a == "allow" || a == "deny" {
+			return "&kind=scope"
+		}
+	}
+	return ""
 }
 
 func fileBase(path string) string {

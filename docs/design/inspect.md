@@ -1,10 +1,10 @@
 # Inspecting traffic
 
-Status: Design only. Not implemented.
+Status: Implemented, except the deferred items at the end of this file.
 Date: 2026-11-04
 Scope: How an agent finds the one app or page it means to change when the proxy is seeing many of them at once.
 
-This document does not change forwarding, rules, or the plugin host. The exchange record has an empty `attribution` field reserved for the model below (`internal/shared.Request`). Session activity kinds are already an open string, so scope changes can be appended later without a new table. Nothing fills those fields yet.
+The proxy fills `Request.Attribution` on each recorded exchange. Session scope and durable allow/deny lists are loaded. A browser extension or Chrome DevTools Protocol is not connected, so tab ids and initiator scripts stay empty unless a client sends `X-Chiling-Page` or `X-Chiling-Initiator`. The proxy strips those stamps before forwarding.
 
 ## What the agent is doing
 
@@ -324,13 +324,18 @@ The UI does not keep a private filter. It reads `GET /v1/scope` and `GET /v1/sou
 - Rules stay matched by `on.request` only. No code path consults a view filter, which is the behavior this design wants as the default.
 - Durable scope files are specified to reuse `config draft/validate/commit/discard` rather than a new write protocol.
 
-## Open decisions
+## Decisions
 
-- Implicit `scope` session versus requiring `record start` first. This document opens an implicit session so the REPL works. If that surprises operators who think recording is opt-in, `scope` should refuse until `record start`.
-- Rolling a browser helper PID up to the parent app can mis-attribute a helper that hosts several apps (rare on desktop, common if a wrapper process supervises more than one child). The executable path is stored so the agent can override with `pid:`.
-- Header-only page identity collapses every tab of one origin into one page. That is a limit, not a bug. Tab identity waits on an extension or CDP, and those are not scheduled here.
-- `Sec-Fetch-Dest: empty` is labeled `xhr` rather than `fetch`. CDP may correct it later. Splitting them from headers alone is not possible.
-- Config `allow` is "empty means everyone", which is the opposite of a published MITM allowlist. The CLI should say that in `scope status` (`configAllow` empty is `restricting: false`) so the two lists are not operated as one.
-- Whether `bypass` may be set for a single session without a config commit. This document allows a session bypass list that dies with the session, plus a durable `action: bypass`. Both are explicit and both appear in `scope status`.
-- PID lookup cost on Linux is a `/proc` scan at accept time. Caching by local port for the life of the connection is assumed. A busier lookup (a netlink conntrack subscriber) is not assumed.
-- Windows and macOS lookups are specified but not tried in this tree. The first implementation should treat a failed lookup as `kind: unknown` and keep capturing.
+- Any `scope` command with no recording session opens an implicit session named `scope`. The JSON includes `implicitSession: true`. `record stop` forgets the session scope.
+- `Sec-Fetch-Dest: empty` is resource type `xhr`. A request with no Sec-Fetch-Dest header at all is `unknown`.
+- A failed PID lookup is `kind: unknown`. The exchange is still proxied and recorded.
+- Empty durable allow does not narrow. `scope status` reports `restricting: false` in that case.
+- Session bypass and durable `action: bypass` are both explicit. `omit` and `off` only hide.
+
+## Deferred
+
+- Browser extension and Chrome DevTools Protocol. Without them the proxy has no tab id and no initiator script unless the stamp headers are already present.
+- macOS uses `lsof` for the port owner. `proc_pidfdinfo` is not linked in this build. Windows calls `GetExtendedTcpTable`. Both files cross-compile. Only Linux is exercised here.
+- A bypass that names a resource type or initiator is decided after the request is visible, so a connection that was already decrypted stays decrypted. Bypass of an app, pid, or host on `CONNECT` skips MITM and does not record the tunnel.
+- Hide reasons include `session-pick` and `config-allow` in addition to `session-omit` and `config-deny`, so a pick miss is distinguishable from an omit.
+- `config validate allow` and `config validate deny` edit the scope directory, not a rule with those ids.

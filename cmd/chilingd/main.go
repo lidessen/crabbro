@@ -20,6 +20,7 @@ import (
 	"github.com/lidessen/chiling/internal/decision"
 	"github.com/lidessen/chiling/internal/fixture"
 	"github.com/lidessen/chiling/internal/history"
+	"github.com/lidessen/chiling/internal/inspect"
 	"github.com/lidessen/chiling/internal/mitm"
 	"github.com/lidessen/chiling/internal/plugin"
 	"github.com/lidessen/chiling/internal/proxy"
@@ -185,6 +186,10 @@ func run() error {
 	}
 	apiSrv.Decision = decision.New(decCfg)
 	apiSrv.RulesDir = rulesDir
+	inspectRT := inspect.NewRuntime(filepath.Join(homeDir, "scope"))
+	inspectRT.Scopes = pxy.Sessions
+	pxy.Inspect = inspectRT
+	apiSrv.Inspect = inspectRT
 	if pluginMgr != nil {
 		pluginMgr.Decision = apiSrv.Decision
 		apiSrv.Plugins = pluginMgr

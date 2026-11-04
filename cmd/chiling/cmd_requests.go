@@ -43,6 +43,9 @@ func cmdRequestsList(cfg *clientConfig, args []string) error {
 	q := fs.String("q", "", "Substring match on method or URL")
 	tag := fs.String("tag", "", "Filter by tag")
 	session := fs.String("session", "", "Filter by recording session id")
+	typ := fs.String("type", "", "Filter by resource type (xhr, script, image, ...)")
+	initiator := fs.String("initiator", "", "Filter by initiator URL")
+	all := fs.Bool("all", false, "Include exchanges hidden by the current scope")
 	pretty := fs.Bool("pretty", false, "Human-readable output")
 	fs.Parse(args)
 
@@ -74,6 +77,15 @@ func cmdRequestsList(cfg *clientConfig, args []string) error {
 	}
 	if *session != "" {
 		params = append(params, "session="+*session)
+	}
+	if *typ != "" {
+		params = append(params, "type="+*typ)
+	}
+	if *initiator != "" {
+		params = append(params, "initiator="+*initiator)
+	}
+	if *all {
+		params = append(params, "all=1")
 	}
 	if len(params) > 0 {
 		path += "?" + strings.Join(params, "&")

@@ -61,11 +61,14 @@ func (s *Server) handleConfigStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleConfigDraft(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	if s.handleScopeDraft(w, r, id) {
+		return
+	}
 	if s.RulesDir == nil {
 		writeError(w, http.StatusBadRequest, shared.ErrCodeBadRequest, "no rules directory")
 		return
 	}
-	id := r.URL.Query().Get("id")
 	body, err := io.ReadAll(io.LimitReader(r.Body, ruleMaxBody))
 	if err != nil || id == "" {
 		writeError(w, http.StatusBadRequest, shared.ErrCodeBadRequest, "id and body are required")
@@ -79,22 +82,38 @@ func (s *Server) handleConfigDraft(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleConfigValidate(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	if r.URL.Query().Get("kind") == "scope" && s.Inspect != nil && s.Inspect.Durable != nil {
+		diags := s.Inspect.Durable.ValidateFile(id)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": len(diags) == 0, "diagnostics": diags})
+		return
+	}
 	if s.RulesDir == nil {
 		writeError(w, http.StatusBadRequest, shared.ErrCodeBadRequest, "no rules directory")
 		return
 	}
-	id := r.URL.Query().Get("id")
 	offline := r.URL.Query().Get("offline") != "false"
 	diags := s.RulesDir.ValidateFile(id, offline, nil)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": len(diags) == 0, "diagnostics": diags})
 }
 
 func (s *Server) handleConfigCommit(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	if r.URL.Query().Get("kind") == "scope" && s.Inspect != nil && s.Inspect.Durable != nil {
+		if err := s.Inspect.Durable.Commit(id); err != nil {
+			writeError(w, http.StatusBadRequest, shared.ErrCodeBadRequest, "commit rejected")
+			return
+		}
+		if s.Sessions != nil {
+			s.Sessions.Note("scope_committed", "", "", "", "committed "+id)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"id": id, "committed": true})
+		return
+	}
 	if s.RulesDir == nil {
 		writeError(w, http.StatusBadRequest, shared.ErrCodeBadRequest, "no rules directory")
 		return
 	}
-	id := r.URL.Query().Get("id")
 	if err := s.RulesDir.Commit(id); err != nil {
 		writeError(w, http.StatusBadRequest, shared.ErrCodeBadRequest, "commit rejected")
 		return
@@ -106,11 +125,19 @@ func (s *Server) handleConfigCommit(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleConfigDiscard(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	if r.URL.Query().Get("kind") == "scope" && s.Inspect != nil && s.Inspect.Durable != nil {
+		if err := s.Inspect.Durable.Discard(id); err != nil {
+			writeError(w, http.StatusNotFound, shared.ErrCodeNotFound, "no draft")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"id": id, "discarded": true})
+		return
+	}
 	if s.RulesDir == nil {
 		writeError(w, http.StatusBadRequest, shared.ErrCodeBadRequest, "no rules directory")
 		return
 	}
-	id := r.URL.Query().Get("id")
 	if err := s.RulesDir.Discard(id); err != nil {
 		writeError(w, http.StatusNotFound, shared.ErrCodeNotFound, "no draft")
 		return

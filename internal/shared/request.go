@@ -60,21 +60,29 @@ type Request struct {
 	PolicyGeneration uint64 `json:"policyGeneration,omitempty"`
 	RuleGeneration   uint64 `json:"ruleGeneration,omitempty"`
 
-	// Attribution is reserved for traffic inspection (docs/design/inspect.md).
-	// The proxy does not fill it yet. List, rules, and history ignore it.
-	// Omitempty keeps today's JSON unchanged until a later change populates it.
+	// Hidden is set when the current scope or a durable list hides this exchange
+	// from the default list. The bytes were still forwarded and rules still ran.
+	Hidden       bool     `json:"hidden,omitempty"`
+	HiddenReason []string `json:"hiddenReason,omitempty"`
+
+	// Attribution is filled when the proxy can name a source, page, or resource type.
 	Attribution *Attribution `json:"attribution,omitempty"`
 }
 
-// Attribution identifies where a captured exchange came from. It is a placeholder
-// so inspection can attach a process, page, initiator, and resource type without
-// a second record shape. Nothing in this tree sets it.
+// Attribution identifies where a captured exchange came from.
 type Attribution struct {
 	SourceID     string `json:"sourceId,omitempty"`
 	PageID       string `json:"pageId,omitempty"`
 	InitiatorURL string `json:"initiatorUrl,omitempty"`
 	ResourceType string `json:"resourceType,omitempty"`
 	Confidence   string `json:"confidence,omitempty"`
+	App          string `json:"app,omitempty"`
+	PID          int    `json:"pid,omitempty"`
+	HelperPID    int    `json:"helperPid,omitempty"`
+	Executable   string `json:"executable,omitempty"`
+	Kind         string `json:"kind,omitempty"`
+	Origin       string `json:"origin,omitempty"`
+	PageURL      string `json:"pageUrl,omitempty"`
 }
 
 // HeaderField is one header name and every value received for it, in order.
