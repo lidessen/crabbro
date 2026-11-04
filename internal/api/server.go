@@ -18,6 +18,7 @@ import (
 	"github.com/lidessen/chiling/internal/fixture"
 	"github.com/lidessen/chiling/internal/history"
 	"github.com/lidessen/chiling/internal/mitm"
+	"github.com/lidessen/chiling/internal/plugin"
 	"github.com/lidessen/chiling/internal/proxy"
 	"github.com/lidessen/chiling/internal/ring"
 	"github.com/lidessen/chiling/internal/rule"
@@ -52,6 +53,10 @@ type Server struct {
 	History *history.Store
 	// Decision is the optional Jev / OpenAI client. Nil means unconfigured.
 	Decision *decision.Client
+	// Plugins is the Node host supervisor. Nil disables plugin routes.
+	Plugins *plugin.Manager
+	// RulesDir is the on-disk rule directory. Nil disables draft/commit.
+	RulesDir *rule.Dir
 	// Replay runs a captured request back through the proxy.
 	Replay func(shared.VerifyRequest) (shared.VerifyResult, error)
 	// PublishMITM republishes the network policy after a control-plane change.
@@ -104,7 +109,18 @@ func (s *Server) registerRoutes() {
 	// Milestone 2: Rule routes — note: /v1/rules/test must be registered
 	// before /v1/rules/ to avoid the trailing-slash catch-all.
 	s.mux.HandleFunc("/v1/rules/test", s.handleRulesTest)
+	s.mux.HandleFunc("/v1/rules/preview", s.handleRulesPreview)
+	s.mux.HandleFunc("/v1/rules/diagnose", s.handleRulesDiagnose)
+	s.mux.HandleFunc("/v1/rules/reload", s.handleRulesReload)
 	s.mux.HandleFunc("/v1/rules", s.handleRules)
+	s.mux.HandleFunc("/v1/config/status", s.handleConfigStatus)
+	s.mux.HandleFunc("/v1/config/draft", s.handleConfigDraft)
+	s.mux.HandleFunc("/v1/config/validate", s.handleConfigValidate)
+	s.mux.HandleFunc("/v1/config/commit", s.handleConfigCommit)
+	s.mux.HandleFunc("/v1/config/discard", s.handleConfigDiscard)
+	s.mux.HandleFunc("/v1/plugins/host", s.handlePluginHost)
+	s.mux.HandleFunc("/v1/plugins", s.handlePlugins)
+	s.mux.HandleFunc("/v1/plugins/", s.handlePluginByID)
 	s.mux.HandleFunc("/v1/rules/", s.handleRulesByID)
 
 	s.mux.HandleFunc("/v1/fixtures", s.handleFixturesListOrSave)

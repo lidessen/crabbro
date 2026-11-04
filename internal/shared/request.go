@@ -59,6 +59,22 @@ type Request struct {
 	FailureStage     string `json:"failureStage,omitempty"`
 	PolicyGeneration uint64 `json:"policyGeneration,omitempty"`
 	RuleGeneration   uint64 `json:"ruleGeneration,omitempty"`
+
+	// Attribution is reserved for traffic inspection (docs/design/inspect.md).
+	// The proxy does not fill it yet. List, rules, and history ignore it.
+	// Omitempty keeps today's JSON unchanged until a later change populates it.
+	Attribution *Attribution `json:"attribution,omitempty"`
+}
+
+// Attribution identifies where a captured exchange came from. It is a placeholder
+// so inspection can attach a process, page, initiator, and resource type without
+// a second record shape. Nothing in this tree sets it.
+type Attribution struct {
+	SourceID     string `json:"sourceId,omitempty"`
+	PageID       string `json:"pageId,omitempty"`
+	InitiatorURL string `json:"initiatorUrl,omitempty"`
+	ResourceType string `json:"resourceType,omitempty"`
+	Confidence   string `json:"confidence,omitempty"`
 }
 
 // HeaderField is one header name and every value received for it, in order.

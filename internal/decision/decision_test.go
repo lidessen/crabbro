@@ -163,7 +163,7 @@ func TestDraftJevScaffoldsScript(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Action != "mockResponse" || !strings.Contains(got.Script, "mockResponse") {
+	if got.Action != "mockResponse" || !strings.Contains(got.Script, "chiling.mock-response") {
 		t.Fatalf("draft = %#v", got)
 	}
 	if !strings.Contains(got.Script, "/v1/login") {

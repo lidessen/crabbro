@@ -2,6 +2,7 @@ package rule
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"strings"
@@ -69,6 +70,31 @@ func (a *ruleAction) liftFlatParams() {
 	lift("milliseconds", a.Milliseconds)
 	lift("bytesPerSecond", a.BytesPerSecond)
 	lift("payload", a.Payload)
+}
+
+// ValidateRawActions checks plugin-returned actions. An empty list is valid.
+// Diagnostics do not include parameter values.
+func ValidateRawActions(actions any) ([]shared.RuleAction, error) {
+	raw, err := json.Marshal(actions)
+	if err != nil {
+		return nil, fmt.Errorf("invalid actions")
+	}
+	if string(raw) == "null" || string(raw) == "[]" {
+		return nil, nil
+	}
+	var list []ruleAction
+	if err := json.Unmarshal(raw, &list); err != nil {
+		return nil, fmt.Errorf("invalid actions")
+	}
+	if len(list) == 0 {
+		return nil, nil
+	}
+	out := ruleOutput{Match: true, Actions: list}
+	validated, errs := ValidateOutput(out)
+	if len(errs) > 0 {
+		return nil, fmt.Errorf("invalid actions")
+	}
+	return validated, nil
 }
 
 // ValidateOutput validates a rule evaluation result and converts it into

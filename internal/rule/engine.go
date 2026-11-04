@@ -1,6 +1,7 @@
 package rule
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -20,7 +21,10 @@ import (
 //
 //	ctx = { request: { method, scheme, host, path, query, url,
 //	    headers: { "Header-Name": "value" }, body, clientAddr } }
-type RuleEngine struct{}
+type RuleEngine struct {
+	// Runtime calls plugins. Nil means a plugin uses stage fails the rule.
+	Runtime Runtime
+}
 
 // Result is the validated outcome of a single rule evaluation.
 type Result struct {
@@ -30,6 +34,39 @@ type Result struct {
 	Error       string              `json:"error,omitempty"`
 	SchemaValid bool                `json:"schemaValid"`
 	SchemaErrs  []string            `json:"schemaErrors,omitempty"`
+	// Format is "yaml" or "js". The proxy runs a YAML response pipeline on a
+	// synthetic response; a JavaScript rule is evaluated again instead.
+	Format string              `json:"format,omitempty"`
+	Stages []shared.StageTrace `json:"stages,omitempty"`
+	Vars   map[string]any      `json:"vars,omitempty"`
+}
+
+// Runtime is the plugin host a YAML pipeline calls for uses, tools, and secrets.
+type Runtime interface {
+	Invoke(ctx context.Context, req InvokeRequest) (InvokeResult, error)
+	Secret(plugin, instance, name string) (string, error)
+	HasInstance(plugin, instance string) bool
+}
+
+// InvokeRequest is one plugin call. Kind is "uses", "tool", "hook", or "middleware".
+type InvokeRequest struct {
+	Plugin     string
+	Instance   string
+	Capability string
+	Kind       string
+	With       map[string]any
+	Env        map[string]any
+	Payload    map[string]any
+	Timeout    time.Duration
+	ExchangeID string
+}
+
+// InvokeResult is the validated plugin reply.
+type InvokeResult struct {
+	Outputs map[string]any
+	Actions []shared.RuleAction
+	Effect  string
+	Match   bool
 }
 
 // NewRuleEngine creates a RuleEngine.
@@ -55,98 +92,106 @@ type Phase struct {
 	ResponseBody          string
 	ResponseBodyTruncated bool
 	Frame                 *shared.FrameView
+	// Extra is copied onto the Goja context for a run stage (vars, pipeline, env).
+	Extra map[string]any
 }
 
 // EvaluatePhase is Evaluate with a response view or a WebSocket frame.
 func (e *RuleEngine) EvaluatePhase(script string, req *shared.Request, body string, phase *Phase, timeout time.Duration) Result {
-	return e.evaluate(script, req, body, phase, timeout)
+	return e.dispatch(script, req, body, phase, timeout)
 }
 
 func (e *RuleEngine) Evaluate(script string, req *shared.Request, body string, timeout time.Duration) Result {
-	return e.evaluate(script, req, body, nil, timeout)
+	return e.dispatch(script, req, body, nil, timeout)
+}
+
+func (e *RuleEngine) dispatch(script string, req *shared.Request, body string, phase *Phase, timeout time.Duration) Result {
+	if IsYAMLRule(script) {
+		doc, err := ParseYAML(script)
+		if err != nil {
+			return evalError(time.Now(), err.Error())
+		}
+		if diags := schemaDiagnostics(script); len(diags) > 0 {
+			return Result{
+				Format: "yaml", DurationMs: 0, SchemaValid: false,
+				Error: diags[0].Error(), SchemaErrs: diagStrings(diags),
+			}
+		}
+		return e.evalDocument(doc, req, body, phase, timeout)
+	}
+	res := e.evaluate(script, req, body, phase, timeout)
+	res.Format = "js"
+	return res
 }
 
 func (e *RuleEngine) evaluate(script string, req *shared.Request, body string, phase *Phase, timeout time.Duration) Result {
 	start := time.Now()
+	out, outputs, err := e.callScript(script, req, body, phase, timeout)
+	if err != nil {
+		return evalError(start, err.Error())
+	}
+	_ = outputs
+	actions, errs := ValidateOutput(out)
+	return Result{
+		Matched:     out.Match,
+		Actions:     actions,
+		DurationMs:  time.Since(start).Milliseconds(),
+		SchemaValid: len(errs) == 0,
+		SchemaErrs:  errs,
+		Error:       errString(errs),
+	}
+}
 
+// callScript runs a Goja script and returns the raw result. The script text
+// is not an expression expansion site.
+func (e *RuleEngine) callScript(script string, req *shared.Request, body string, phase *Phase, timeout time.Duration) (ruleOutput, map[string]any, error) {
 	vm := goja.New()
 	setupSandbox(vm)
-
-	// Build the immutable JS context and inject as global.
 	ctx := buildContext(req, body, phase)
 	if err := vm.Set("ctx", ctx); err != nil {
-		return evalError(start, fmt.Sprintf("failed to set context: %v", err))
+		return ruleOutput{}, nil, fmt.Errorf("failed to set context: %v", err)
 	}
-
-	// Preprocess script to handle ES module export syntax.
 	processedScript := preprocessScript(script)
-
-	// Schedule interrupt-based timeout.
 	var timer *time.Timer
 	if timeout > 0 {
 		timer = time.AfterFunc(timeout, func() {
 			vm.Interrupt("rule execution timeout")
 		})
+		defer timer.Stop()
 	}
-
-	// Run the script.
-	_, err := vm.RunString(processedScript)
-	if err != nil {
-		if timer != nil {
-			timer.Stop()
-		}
-		return evalError(start, fmt.Sprintf("script error: %v", err))
+	if _, err := vm.RunString(processedScript); err != nil {
+		return ruleOutput{}, nil, fmt.Errorf("script error: %v", err)
 	}
-
-	// Locate the rule function in the global scope.
 	ruleFn := getRuleFunction(vm)
 	if ruleFn == nil {
-		if timer != nil {
-			timer.Stop()
-		}
-		return evalError(start, "rule entry point not found: define __rule__ or rule function")
+		return ruleOutput{}, nil, fmt.Errorf("rule entry point not found: define __rule__ or rule function")
 	}
-
-	// Call the rule function with the context.
-	ctxVal := vm.ToValue(ctx)
-	resultVal, err := ruleFn(goja.Undefined(), ctxVal)
-	if timer != nil {
-		timer.Stop()
-	}
+	resultVal, err := ruleFn(goja.Undefined(), vm.ToValue(ctx))
 	if err != nil {
-		return evalError(start, fmt.Sprintf("rule execution error: %v", err))
+		return ruleOutput{}, nil, fmt.Errorf("rule execution error: %v", err)
 	}
-
-	// Serialize result to JSON for size check.
-	resultJSON, err := json.Marshal(resultVal.Export())
+	exported := resultVal.Export()
+	resultJSON, err := json.Marshal(exported)
 	if err != nil {
-		return evalError(start, fmt.Sprintf("result serialization error: %v", err))
+		return ruleOutput{}, nil, fmt.Errorf("result serialization error: %v", err)
 	}
 	if len(resultJSON) > MaxSerializedResultLen {
-		return evalError(start, fmt.Sprintf("rule result exceeds max size (%d bytes)", MaxSerializedResultLen))
+		return ruleOutput{}, nil, fmt.Errorf("rule result exceeds max size (%d bytes)", MaxSerializedResultLen)
 	}
-
-	// Deserialize into ruleOutput for validation.
 	var out ruleOutput
 	if err := json.Unmarshal(resultJSON, &out); err != nil {
-		return evalError(start, fmt.Sprintf("result format error: %v", err))
+		return ruleOutput{}, nil, fmt.Errorf("result format error: %v", err)
 	}
 	for i := range out.Actions {
 		out.Actions[i].liftFlatParams()
 	}
-
-	// Validate the output against action schemas.
-	actions, errs := ValidateOutput(out)
-	durationMs := time.Since(start).Milliseconds()
-
-	return Result{
-		Matched:     out.Match,
-		Actions:     actions,
-		DurationMs:  durationMs,
-		SchemaValid: len(errs) == 0,
-		SchemaErrs:  errs,
-		Error:       errString(errs),
+	var outputs map[string]any
+	if m, ok := exported.(map[string]any); ok {
+		if o, ok := m["outputs"].(map[string]any); ok {
+			outputs = o
+		}
 	}
+	return out, outputs, nil
 }
 
 // preprocessScript converts ES module export syntax to a form Goja can
@@ -234,6 +279,11 @@ func buildContext(req *shared.Request, body string, phase *Phase) map[string]any
 			"opcode":    phase.Frame.Opcode,
 			"payload":   phase.Frame.Payload,
 			"fin":       phase.Frame.Fin,
+		}
+	}
+	if phase != nil {
+		for k, v := range phase.Extra {
+			ctx[k] = v
 		}
 	}
 	return ctx

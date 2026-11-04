@@ -1,0 +1,824 @@
+package plugin
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"embed"
+	"encoding/binary"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/lidessen/chiling/internal/decision"
+	"github.com/lidessen/chiling/internal/rule"
+	"github.com/lidessen/chiling/internal/shared"
+)
+
+//go:embed js/*.mjs
+var runtimeFS embed.FS
+
+// ErrNoNode is returned when the plugin host cannot be started.
+var ErrNoNode = errors.New("node is not installed")
+
+// Manager installs plugins and supervises one Node host.
+type Manager struct {
+	Dir       string
+	Decision  *decision.Client
+	Heartbeat time.Duration
+	IdleGrace time.Duration
+	HeapMB    int
+
+	mu        sync.Mutex
+	pendingMu sync.Mutex
+	state     diskState
+	cmd       *exec.Cmd
+	conn      net.Conn
+	pending   map[string]chan map[string]any
+	writeMu   sync.Mutex
+	lastBeat  time.Time
+	misses    int
+	rss       int64
+	workers   int
+	seq       int
+	closed    bool
+	sock      string
+	stopBeat  chan struct{}
+	stderr    bytes.Buffer
+}
+
+// ExecHost runs the Node host bound to sock. It does not return until the process exits.
+func ExecHost(sock string) error {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		return ErrNoNode
+	}
+	dir, err := os.MkdirTemp("", "chiling-host-")
+	if err != nil {
+		return err
+	}
+	if err := extractRuntime(dir); err != nil {
+		return err
+	}
+	cmd := exec.Command(node, filepath.Join(dir, "host.mjs"), sock)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME")}
+	return cmd.Run()
+}
+
+// NewManager opens or creates a plugin directory.
+func NewManager(dir string) (*Manager, error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	m := &Manager{
+		Dir:       dir,
+		Heartbeat: 2 * time.Second,
+		IdleGrace: 30 * time.Second,
+		HeapMB:    64,
+		pending:   map[string]chan map[string]any{},
+	}
+	if err := m.load(); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+// Close stops the host process.
+func (m *Manager) Close() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.closed = true
+	m.stopLocked()
+}
+
+func (m *Manager) stopLocked() {
+	if m.stopBeat != nil {
+		close(m.stopBeat)
+		m.stopBeat = nil
+	}
+	if m.conn != nil {
+		_ = m.write(map[string]any{"type": "shutdown", "id": "shutdown"})
+		_ = m.conn.Close()
+		m.conn = nil
+	}
+	if m.cmd != nil && m.cmd.Process != nil {
+		_ = m.cmd.Process.Kill()
+		_, _ = m.cmd.Process.Wait()
+		m.cmd = nil
+	}
+	if m.sock != "" {
+		_ = os.Remove(m.sock)
+	}
+}
+
+// HostStatus is the supervisor view. It does not start Node.
+type HostStatus struct {
+	Running  bool  `json:"running"`
+	PID      int   `json:"pid,omitempty"`
+	RSSBytes int64 `json:"rssBytes,omitempty"`
+	Workers  int   `json:"workers"`
+}
+
+func (m *Manager) Status() HostStatus {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	st := HostStatus{Running: m.cmd != nil && m.cmd.Process != nil, RSSBytes: m.rss, Workers: m.workers}
+	if st.Running {
+		st.PID = m.cmd.Process.Pid
+	}
+	return st
+}
+
+// List does not start a worker.
+func (m *Manager) List() []PackageRecord {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := append([]PackageRecord(nil), m.state.Packages...)
+	return out
+}
+
+func (m *Manager) Instances(pluginID string) []InstanceRecord {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []InstanceRecord
+	for _, in := range m.state.Instances {
+		if pluginID == "" || in.Plugin == pluginID {
+			cp := in
+			cp.Credentials = map[string]string{}
+			for k := range in.Credentials {
+				cp.Credentials[k] = k
+			}
+			out = append(out, cp)
+		}
+	}
+	return out
+}
+
+// HasInstance implements rule.Runtime.
+func (m *Manager) HasInstance(pluginID, instance string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	in := m.instanceByName(pluginID, instance)
+	return in != nil && in.Enabled
+}
+
+// Secret implements rule.Runtime. The value is read from the secrets directory.
+func (m *Manager) Secret(pluginID, instance, name string) (string, error) {
+	m.mu.Lock()
+	in := m.instanceByName(pluginID, instance)
+	var ref string
+	if in != nil {
+		ref = in.Credentials[name]
+	}
+	m.mu.Unlock()
+	if ref == "" {
+		ref = name
+	}
+	if strings.Contains(ref, "/") || strings.Contains(ref, "..") {
+		return "", fmt.Errorf("invalid credential ref")
+	}
+	b, err := os.ReadFile(filepath.Join(m.Dir, "secrets", ref))
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(b)), nil
+}
+
+// Invoke implements rule.Runtime.
+func (m *Manager) Invoke(ctx context.Context, req rule.InvokeRequest) (rule.InvokeResult, error) {
+	if err := m.ensureHost(); err != nil {
+		return rule.InvokeResult{}, err
+	}
+	m.mu.Lock()
+	pkg := m.packageByID(req.Plugin)
+	inst := m.instanceByName(req.Plugin, req.Instance)
+	var rec PackageRecord
+	var cfg map[string]any
+	var creds map[string]string
+	if pkg != nil {
+		rec = *pkg
+	}
+	if inst != nil {
+		cfg = inst.Config
+		creds = inst.Credentials
+	}
+	m.mu.Unlock()
+	if pkg == nil || inst == nil || !inst.Enabled {
+		return rule.InvokeResult{}, fmt.Errorf("instance is not installed")
+	}
+	secrets := map[string]string{}
+	for name := range creds {
+		if v, err := m.Secret(req.Plugin, req.Instance, name); err == nil {
+			secrets[name] = v
+		}
+	}
+	if err := m.activate(rec, cfg); err != nil {
+		return rule.InvokeResult{}, err
+	}
+	timeout := req.Timeout
+	if timeout <= 0 {
+		timeout = 500 * time.Millisecond
+	}
+	kind := req.Kind
+	if kind == "" {
+		kind = "uses"
+	}
+	msg := map[string]any{
+		"type": kind, "package": rec.ID, "instance": req.Instance, "capability": req.Capability,
+		"hook": req.Capability, "with": req.With, "env": req.Env, "payload": req.Payload,
+		"config": cfg, "secrets": secrets, "arguments": req.With,
+	}
+	reply, err := m.roundTrip(ctx, msg, timeout)
+	if err != nil {
+		_ = m.terminate(rec.ID)
+		return rule.InvokeResult{}, fmt.Errorf("%s: %w", kind, err)
+	}
+	if errMsg, _ := reply["error"].(string); errMsg != "" {
+		return rule.InvokeResult{}, fmt.Errorf("plugin failed")
+	}
+	result, _ := reply["result"].(map[string]any)
+	if result == nil {
+		result = map[string]any{}
+	}
+	outputs, _ := result["outputs"].(map[string]any)
+	actions, err := rule.ValidateRawActions(result["actions"])
+	if err != nil {
+		return rule.InvokeResult{}, err
+	}
+	effect, _ := reply["effect"].(string)
+	if effect == "" {
+		effect = "mutate"
+	}
+	for i := range actions {
+		actions[i] = scrubAction(actions[i], secrets)
+	}
+	return rule.InvokeResult{Outputs: scrubMap(outputs, secrets), Actions: actions, Effect: effect, Match: result["match"] != false}, nil
+}
+
+// Describe starts the worker and returns catalogs. list does not call this.
+func (m *Manager) Describe(id string) (map[string]any, error) {
+	if err := m.ensureHost(); err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	pkg := m.packageByID(id)
+	var rec PackageRecord
+	if pkg != nil {
+		rec = *pkg
+	}
+	m.mu.Unlock()
+	if pkg == nil {
+		return nil, fmt.Errorf("plugin is not installed")
+	}
+	if err := m.activate(rec, nil); err != nil {
+		return nil, err
+	}
+	reply, err := m.roundTrip(context.Background(), map[string]any{"type": "describe", "package": id}, 2*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	desc, _ := reply["describe"].(map[string]any)
+	if desc == nil {
+		return map[string]any{}, nil
+	}
+	return desc, nil
+}
+
+func (m *Manager) activate(rec PackageRecord, cfg map[string]any) error {
+	_, err := m.roundTrip(context.Background(), map[string]any{
+		"type": "activate", "package": rec.ID, "entry": filepath.Join(rec.Path, rec.Entry),
+		"isolation": rec.Isolation, "heapMb": m.HeapMB, "permissions": rec.Permissions, "config": cfg,
+	}, 5*time.Second)
+	if err != nil {
+		return fmt.Errorf("activate: %w", err)
+	}
+	return nil
+}
+
+func (m *Manager) terminate(id string) error {
+	_, err := m.roundTrip(context.Background(), map[string]any{"type": "terminate", "package": id}, time.Second)
+	return err
+}
+
+func (m *Manager) ensureHost() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.conn != nil && m.cmd != nil && m.cmd.ProcessState == nil {
+		return nil
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		return ErrNoNode
+	}
+	dir := filepath.Join(m.Dir, "runtime")
+	if err := extractRuntime(dir); err != nil {
+		return err
+	}
+	sock := filepath.Join(os.TempDir(), fmt.Sprintf("chiling-plugin-%d-%d.sock", os.Getpid(), time.Now().UnixNano()))
+	_ = os.Remove(sock)
+	cmd := exec.Command(node, filepath.Join(dir, "host.mjs"), sock)
+	m.stderr.Reset()
+	cmd.Stderr = &m.stderr
+	cmd.Env = []string{
+		"PATH=" + os.Getenv("PATH"),
+		"HOME=" + os.Getenv("HOME"),
+		"CHILING_PLUGIN_HEARTBEAT_MS=" + strconv.Itoa(int(m.Heartbeat/time.Millisecond)),
+	}
+	cmd.Dir = dir
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	m.cmd = cmd
+	deadline := time.Now().Add(5 * time.Second)
+	var conn net.Conn
+	for {
+		c, err := net.Dial("unix", sock)
+		if err == nil {
+			conn = c
+			break
+		}
+		if time.Now().After(deadline) {
+			_ = cmd.Process.Kill()
+			return fmt.Errorf("plugin host did not listen")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	_ = os.Chmod(sock, 0o600)
+	m.conn = conn
+	m.sock = sock
+	m.pending = map[string]chan map[string]any{}
+	m.lastBeat = time.Now()
+	m.misses = 0
+	m.stopBeat = make(chan struct{})
+	go m.watch(m.stopBeat, cmd)
+	m.mu.Unlock()
+	_, err = m.roundTripLocked(map[string]any{"type": "hello", "api": "1.0.0", "token": "local"}, 2*time.Second)
+	m.mu.Lock()
+	if err != nil {
+		m.stopLocked()
+		return err
+	}
+	return nil
+}
+
+func (m *Manager) watch(stop chan struct{}, cmd *exec.Cmd) {
+	tick := time.NewTicker(m.Heartbeat)
+	defer tick.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-tick.C:
+			m.mu.Lock()
+			if m.cmd != cmd {
+				m.mu.Unlock()
+				return
+			}
+			missed := time.Since(m.lastBeat) > 3*m.Heartbeat
+			rss := rssKB(cmd.Process.Pid)
+			tooBig := rss > 512*1024
+			m.mu.Unlock()
+			if missed || tooBig {
+				m.mu.Lock()
+				if m.cmd == cmd {
+					m.stopLocked()
+				}
+				m.mu.Unlock()
+				return
+			}
+		}
+	}
+}
+
+func (m *Manager) readFrame() (map[string]any, error) {
+	m.mu.Lock()
+	conn := m.conn
+	m.mu.Unlock()
+	if conn == nil {
+		return nil, fmt.Errorf("plugin host is not running")
+	}
+	var n uint32
+	if err := binary.Read(conn, binary.BigEndian, &n); err != nil {
+		return nil, err
+	}
+	if n == 0 || n > 8*1024*1024 {
+		return nil, fmt.Errorf("bad frame")
+	}
+	buf := make([]byte, n)
+	if _, err := io.ReadFull(conn, buf); err != nil {
+		return nil, err
+	}
+	var msg map[string]any
+	if err := json.Unmarshal(buf, &msg); err != nil {
+		return nil, err
+	}
+	return msg, nil
+}
+
+func (m *Manager) readLoop(conn net.Conn) {
+	r := bufio.NewReader(conn)
+	for {
+		var n uint32
+		if err := binary.Read(r, binary.BigEndian, &n); err != nil {
+			return
+		}
+		if n == 0 || n > 8*1024*1024 {
+			return
+		}
+		buf := make([]byte, n)
+		if _, err := io.ReadFull(r, buf); err != nil {
+			return
+		}
+		var msg map[string]any
+		if err := json.Unmarshal(buf, &msg); err != nil {
+			continue
+		}
+		switch msg["type"] {
+		case "heartbeat":
+			m.mu.Lock()
+			m.lastBeat = time.Now()
+			m.misses = 0
+			if f, ok := msg["rssBytes"].(float64); ok {
+				m.rss = int64(f)
+			}
+			if f, ok := msg["workers"].(float64); ok {
+				m.workers = int(f)
+			}
+			m.mu.Unlock()
+		case "broker":
+			go m.handleBroker(msg)
+		case "log":
+			// Operator log. Not a trace, and not forwarded with secrets.
+		default:
+			id, _ := msg["id"].(string)
+			m.pendingMu.Lock()
+			ch := m.pending[id]
+			m.pendingMu.Unlock()
+			if ch != nil {
+				ch <- msg
+			}
+		}
+	}
+}
+
+func (m *Manager) handleBroker(msg map[string]any) {
+	op, _ := msg["op"].(string)
+	pkg, _ := msg["package"].(string)
+	id, _ := msg["id"].(string)
+	payload, _ := msg["payload"].(map[string]any)
+	delete(payload, "apiKey")
+	delete(payload, "endpoint")
+	delete(payload, "authorization")
+	delete(payload, "headers")
+	var body any
+	var err error
+	switch op {
+	case "decision.ask":
+		body, err = m.decisionAsk(payload)
+	case "history.list", "history.get":
+		err = fmt.Errorf("permission denied")
+	case "net.fetch":
+		err = fmt.Errorf("permission denied")
+	case "fs.read", "fs.write":
+		body, err = m.brokerFS(pkg, op, payload)
+	case "secrets.get":
+		name, _ := payload["name"].(string)
+		instance, _ := payload["instance"].(string)
+		if instance == "" {
+			instance = "local"
+		}
+		v, secErr := m.Secret(pkg, instance, name)
+		if secErr != nil {
+			err = fmt.Errorf("secret unavailable")
+		} else {
+			body = map[string]any{"value": v}
+		}
+	default:
+		err = fmt.Errorf("unknown broker op")
+	}
+	reply := map[string]any{"type": "brokerResult", "id": id, "package": pkg, "payload": body}
+	if err != nil {
+		reply["error"] = "broker failed"
+		reply["payload"] = nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_ = m.write(reply)
+}
+
+func (m *Manager) decisionAsk(payload map[string]any) (any, error) {
+	if m.Decision == nil {
+		return map[string]any{"decisionDiagnostic": decision.Diagnostic{Category: "not_configured"}}, decision.ErrNotConfigured
+	}
+	prompt, _ := payload["prompt"].(string)
+	kind, _ := payload["type"].(string)
+	var options []string
+	if raw, ok := payload["options"].([]any); ok {
+		for _, o := range raw {
+			if s, ok := o.(string); ok {
+				options = append(options, s)
+			}
+		}
+	}
+	res, err := m.Decision.Ask(context.Background(), prompt, kind, options)
+	out := map[string]any{
+		"choice": res.Choice, "text": res.Text, "decisionDiagnostic": res.Diagnostic,
+		"model": res.Model, "provider": res.Provider,
+	}
+	if res.Noul != nil {
+		out["noul"] = *res.Noul
+	}
+	return out, err
+}
+
+func (m *Manager) brokerFS(pkg, op string, payload map[string]any) (any, error) {
+	m.mu.Lock()
+	rec := m.packageByID(pkg)
+	var perms []string
+	if rec != nil {
+		perms = rec.Permissions
+	}
+	m.mu.Unlock()
+	if !hasPerm(perms, "fs:data") {
+		return nil, fmt.Errorf("permission denied")
+	}
+	rel, _ := payload["path"].(string)
+	if rel == "" || strings.Contains(rel, "..") || filepath.IsAbs(rel) {
+		return nil, fmt.Errorf("invalid path")
+	}
+	base := filepath.Join(m.Dir, "data", pkg)
+	full := filepath.Join(base, rel)
+	if !strings.HasPrefix(full, base+string(os.PathSeparator)) && full != base {
+		return nil, fmt.Errorf("invalid path")
+	}
+	if op == "fs.read" {
+		b, err := os.ReadFile(full)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"data": string(b)}, nil
+	}
+	data, _ := payload["data"].(string)
+	if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(full, []byte(data), 0o600); err != nil {
+		return nil, err
+	}
+	return map[string]any{"ok": true}, nil
+}
+
+func (m *Manager) roundTrip(ctx context.Context, msg map[string]any, timeout time.Duration) (map[string]any, error) {
+	return m.roundTripLocked(msg, timeout)
+}
+
+func (m *Manager) roundTripLocked(msg map[string]any, timeout time.Duration) (map[string]any, error) {
+	m.pendingMu.Lock()
+	defer m.pendingMu.Unlock()
+	m.mu.Lock()
+	if m.conn == nil {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("plugin host is not running")
+	}
+	m.seq++
+	id := fmt.Sprintf("m%d", m.seq)
+	msg["id"] = id
+	if m.conn != nil {
+		_ = m.conn.SetReadDeadline(time.Now().Add(timeout))
+	}
+	err := m.write(msg)
+	m.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		frame, err := m.readFrame()
+		if err != nil {
+			return nil, fmt.Errorf("plugin timed out: %s", strings.TrimSpace(m.stderr.String()))
+		}
+		switch frame["type"] {
+		case "heartbeat":
+			m.noteHeartbeat(frame)
+		case "broker":
+			m.handleBroker(frame)
+		case "log":
+		default:
+			if frame["id"] == id {
+				return frame, nil
+			}
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("plugin timed out: %s", strings.TrimSpace(m.stderr.String()))
+		}
+	}
+}
+
+func (m *Manager) noteHeartbeat(frame map[string]any) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.lastBeat = time.Now()
+	m.misses = 0
+	if f, ok := frame["rssBytes"].(float64); ok {
+		m.rss = int64(f)
+	}
+	if f, ok := frame["workers"].(float64); ok {
+		m.workers = int(f)
+	}
+}
+
+func (m *Manager) write(msg map[string]any) error {
+	if m.conn == nil {
+		return fmt.Errorf("plugin host is not running")
+	}
+	body, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+	m.writeMu.Lock()
+	defer m.writeMu.Unlock()
+	var head [4]byte
+	binary.BigEndian.PutUint32(head[:], uint32(len(body)))
+	if _, err := m.conn.Write(head[:]); err != nil {
+		return err
+	}
+	_, err = m.conn.Write(body)
+	return err
+}
+
+func extractRuntime(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	entries, err := fs.ReadDir(runtimeFS, "js")
+	if err != nil {
+		return err
+	}
+	for _, ent := range entries {
+		b, err := fs.ReadFile(runtimeFS, "js/"+ent.Name())
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(dir, ent.Name()), b, 0o600); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func rssKB(pid int) int64 {
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid))
+	if err != nil {
+		return 0
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if strings.HasPrefix(line, "VmRSS:") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				n, _ := strconv.ParseInt(fields[1], 10, 64)
+				return n
+			}
+		}
+	}
+	return 0
+}
+
+func scrubAction(a shared.RuleAction, secrets map[string]string) shared.RuleAction {
+	if a.Params == nil {
+		return a
+	}
+	raw, err := json.Marshal(a.Params)
+	if err != nil {
+		return a
+	}
+	s := string(raw)
+	for _, v := range secrets {
+		if v != "" {
+			s = strings.ReplaceAll(s, v, "[redacted]")
+		}
+	}
+	var params map[string]any
+	if json.Unmarshal([]byte(s), &params) == nil {
+		a.Params = params
+	}
+	return a
+}
+
+func scrubMap(m map[string]any, secrets map[string]string) map[string]any {
+	if m == nil {
+		return nil
+	}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		return map[string]any{}
+	}
+	s := string(raw)
+	for _, v := range secrets {
+		if v != "" {
+			s = strings.ReplaceAll(s, v, "[redacted]")
+		}
+	}
+	var out map[string]any
+	if json.Unmarshal([]byte(s), &out) != nil {
+		return map[string]any{}
+	}
+	return out
+}
+
+// Hooks runs onRequest for enabled plugins whose static match passes.
+// Registration alone does not insert a plugin. The caller decides to run hooks.
+func (m *Manager) Hooks(ctx context.Context, phase string, req *shared.Request, body string) ([]shared.RuleAction, []shared.RuleTrace) {
+	m.mu.Lock()
+	pkgs := append([]PackageRecord(nil), m.state.Packages...)
+	m.mu.Unlock()
+	var actions []shared.RuleAction
+	var traces []shared.RuleTrace
+	hook := "onRequest"
+	if phase == "response" {
+		hook = "onResponse"
+	}
+	for _, pkg := range pkgs {
+		if !pkg.Enabled || !contains(pkg.Activation, "onRequest") && phase == "request" {
+			continue
+		}
+		if phase == "request" && !matchStatic(pkg.Match, req) {
+			continue
+		}
+		inst := "local"
+		if !m.HasInstance(pkg.ID, inst) {
+			continue
+		}
+		res, err := m.Invoke(ctx, rule.InvokeRequest{
+			Plugin: pkg.ID, Instance: inst, Capability: hook, Kind: "hook",
+			Payload: map[string]any{"request": map[string]any{"method": req.Method, "host": req.Host, "path": req.Path, "body": body}},
+			Timeout: shared.DefaultRuleTimeout, ExchangeID: string(req.ID),
+		})
+		tr := shared.RuleTrace{RuleID: shared.RuleID("plugin:" + pkg.ID), Phase: phase, Matched: err == nil && res.Match}
+		if err != nil {
+			tr.Error = "plugin failed"
+			tr.Matched = false
+		} else {
+			tr.Actions = res.Actions
+			actions = append(actions, res.Actions...)
+		}
+		traces = append(traces, tr)
+	}
+	return actions, traces
+}
+
+func matchStatic(match Match, req *shared.Request) bool {
+	if req == nil {
+		return true
+	}
+	if len(match.Methods) > 0 {
+		ok := false
+		for _, method := range match.Methods {
+			if strings.EqualFold(method, req.Method) {
+				ok = true
+			}
+		}
+		if !ok {
+			return false
+		}
+	}
+	if match.PathPrefix != "" && !strings.HasPrefix(req.Path, match.PathPrefix) {
+		return false
+	}
+	if len(match.Hosts) == 0 {
+		return true
+	}
+	host := req.Host
+	if i := strings.LastIndex(host, ":"); i > 0 && strings.Count(host, ":") == 1 {
+		host = host[:i]
+	}
+	for _, pattern := range match.Hosts {
+		if pattern == "*" || strings.EqualFold(pattern, host) {
+			return true
+		}
+		if strings.HasPrefix(pattern, "*.") && strings.HasSuffix(host, pattern[1:]) {
+			return true
+		}
+	}
+	return false
+}
+
+func contains(list []string, want string) bool {
+	for _, s := range list {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}

@@ -47,6 +47,12 @@ func cmdRules(cfg *clientConfig, args []string) error {
 		return cmdRulesFrom(cfg, subArgs)
 	case "draft":
 		return cmdRulesDraft(cfg, subArgs)
+	case "validate":
+		return cmdRulesValidate(subArgs)
+	case "migrate":
+		return cmdRulesMigrate(subArgs)
+	case "preview":
+		return cmdRulesPreview(cfg, subArgs)
 	default:
 		return fmt.Errorf("unknown rules command: %s", sub)
 	}
@@ -511,6 +517,49 @@ func cmdRulesDraft(cfg *clientConfig, args []string) error {
 		"apply":       *apply,
 	})
 	return printAPI(cfg, http.MethodPost, "/v1/rules/draft", bytes.NewReader(payload))
+}
+
+func cmdRulesValidate(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: chiling rules validate <file>")
+	}
+	b, err := os.ReadFile(args[0])
+	if err != nil {
+		return err
+	}
+	diags := rule.Validate(string(b), true, nil)
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(map[string]any{"ok": len(diags) == 0, "diagnostics": diags})
+}
+
+func cmdRulesMigrate(args []string) error {
+	fs := flag.NewFlagSet("rules migrate", flag.ContinueOnError)
+	id := fs.String("id", "migrated", "Rule id for the wrapper")
+	fs.Parse(args)
+	if fs.NArg() < 1 {
+		return fmt.Errorf("usage: chiling rules migrate <file.js> [--id name]")
+	}
+	b, err := os.ReadFile(fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	out, err := rule.Migrate(*id, string(b))
+	if err != nil {
+		return err
+	}
+	fmt.Print(out)
+	return nil
+}
+
+func cmdRulesPreview(cfg *clientConfig, args []string) error {
+	fs := flag.NewFlagSet("rules preview", flag.ContinueOnError)
+	method := fs.String("method", "GET", "Request method")
+	host := fs.String("host", "", "Host")
+	path := fs.String("path", "/", "Path")
+	fs.Parse(args)
+	payload, _ := json.Marshal(map[string]any{"method": *method, "host": *host, "path": *path})
+	return printAPI(cfg, http.MethodPost, "/v1/rules/preview", bytes.NewReader(payload))
 }
 
 // ---------------------------------------------------------------------------

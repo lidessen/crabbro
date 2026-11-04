@@ -1,5 +1,9 @@
 // Package session records named capture windows and a trajectory of what the
 // agent did. A future UI can render this as a timeline.
+//
+// Activity.Kind is an open string. Inspection scope changes (docs/design/inspect.md)
+// will use kinds such as scope_picked and scope_reset on the current session.
+// This package does not interpret those kinds yet.
 package session
 
 import (

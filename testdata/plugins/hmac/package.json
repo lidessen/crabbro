@@ -1,0 +1,13 @@
+{
+  "name": "hmac",
+  "version": "1.0.0",
+  "type": "module",
+  "chiling": {
+    "id": "hmac",
+    "api": "1.0.0",
+    "entry": "index.js",
+    "activation": ["onCommand"],
+    "isolation": "worker",
+    "permissions": ["secrets:read"]
+  }
+}

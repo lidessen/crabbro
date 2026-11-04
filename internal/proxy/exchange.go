@@ -324,6 +324,8 @@ func (m *ruleMiddleware) Wrap(next ExchangeHandler) ExchangeHandler {
 			Matched:     result.Matched && result.SchemaValid && result.Error == "",
 			DurationMs:  result.DurationMs,
 			Error:       result.Error,
+			Stages:      result.Stages,
+			Vars:        result.Vars,
 		}
 		if result.Error != "" || !result.SchemaValid {
 			trace.Matched = false
@@ -366,6 +368,9 @@ func (m *ruleMiddleware) Wrap(next ExchangeHandler) ExchangeHandler {
 			if err := applyResponseActions(synthetic, respActions); err != nil {
 				return nil, err
 			}
+			if result.Format == "yaml" {
+				return m.applyResponsePhase(ex, synthetic)
+			}
 			return synthetic, nil
 		}
 		resp, err := next(ex)
@@ -404,6 +409,7 @@ func (m *ruleMiddleware) applyResponsePhase(ex *Exchange, resp *http.Response) (
 		RuleID: m.rule.ID, RuleVersion: m.rule.Version, Phase: "response",
 		DurationMs: result.DurationMs, Error: result.Error,
 		Matched: result.Matched && result.SchemaValid && result.Error == "",
+		Stages:  result.Stages, Vars: result.Vars,
 	}
 	if result.Error != "" || !result.SchemaValid || !result.Matched {
 		trace.Matched = false
