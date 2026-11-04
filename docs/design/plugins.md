@@ -2,23 +2,22 @@
 
 Status: Proposal, not implemented
 Date: 2026-11-04
-Revised: runtime model, after a survey of existing plugin systems. One OS process per plugin is no longer the recommendation.
-Scope: JS plugins distributed as npm packages. This does not change the current rule sandbox.
+Revised: plugins contribute middleware, hooks, and tools. Rules are YAML pathways, specified in [rules.md](./rules.md). The host runtime is unchanged: one lazy Node host, a worker per active plugin.
+Scope: JS plugins distributed as npm packages.
 
-`NETWORK_PIPELINE_DESIGN.md` decision 7 kept plugin installation, manifests, host capabilities, and command registration out of the network work. This document is that follow-on. Rules stay what they are today: one JavaScript function, evaluated by Goja, returning a validated action list.
+`NETWORK_PIPELINE_DESIGN.md` decision 7 kept plugin installation, manifests, host capabilities, and command registration out of the network work. This document is that follow-on. Agents author rules as YAML. Goja remains only for an optional `run` pipeline stage. The private repo `lidessen/workcells` was not readable from this environment (GitHub 404), so this draft does not copy its code. The pathway idea is the owner's: an ordered list of functions, callable from a rule and from an agent.
 
 ## 1. Decision summary
 
-1. Plugins are npm packages. The daemon does not execute them inside Goja. Goja stays the rule engine.
-2. Node is the plugin runtime, because that is what npm packages actually run on. The daemon supervises **one** Node host process, not one process per plugin. The host is started lazily and exits when nothing is active.
-3. Inside that host, each activated plugin runs in its own `worker_threads` worker. A worker timeout terminates that worker. It does not restart the host and it does not affect other plugins. A plugin that needs native code, or that asks for a process boundary, gets its own child process instead.
-4. WASM is the right shape for a future untrusted filter ABI (Envoy, Zed). It is the wrong v1 runtime for npm packages.
-5. A plugin returns the same declarative actions rules return. Go validates and applies them. Plugin code never receives `http.Request`, a socket, or the response writer.
-6. Built-in action names are reserved. A plugin action is a `plugin` action naming `package` and `action`. It cannot replace `mockResponse`.
-7. A rule may emit that action. The rule still matches in Goja. Only the handler crosses into the host.
-8. Default permissions are none. `worker_threads` is not a security boundary. Permissions are enforced by not handing the worker Node's `fs`, `net`, or `process`, and by brokering calls back to the daemon. Honest limits are in section 10.
-9. CLI commands a plugin registers live under `chiling plugin run <pkg> ...`. They do not add top-level `chiling` subcommands.
-10. Install, enable, and traces go through the daemon. The CLI is a client. Output is JSON. A UI later reads the same API and the same activity log.
+1. Plugins are npm packages. The daemon does not execute them inside Goja.
+2. A plugin contributes three things: middleware in the proxy onion, hooks other pathways can attach to, and tools an agent calls from the CLI.
+3. Node is the plugin runtime. The daemon supervises **one** host process, not one process per plugin. The host starts lazily and exits when nothing is active.
+4. Each activated plugin runs in its own `worker_threads` worker. A timeout terminates that worker. Native code, or `isolation: process`, gets a child process. WASM is not the npm runtime.
+5. A pipeline stage names a built-in (`chiling/...`) or a plugin action (`npm:<package>@<version>#<action>`). Go checks inputs and outputs against the plugin's schema. Plugin code never receives `http.Request` or a socket.
+6. Built-in action names are reserved. A plugin cannot replace `chiling/mock-response`.
+7. Default permissions are none. `worker_threads` is not a security boundary. See section 10.
+8. Tools are `chiling plugin run <pkg> <tool>`. They are the same functions a pipeline stage can `uses`. They do not add top-level `chiling` verbs.
+9. Install, enable, and traces go through the daemon. The CLI is a client. Output is JSON.
 
 ## 2. What exists today
 
@@ -54,7 +53,7 @@ A hot-path rule must not grow a Node dependency. A distributed plugin must not b
 ### Non-goals for the first implementation
 
 - Running anonymous untrusted code as if it were a browser origin. Installing a package is an operator decision. The permission layer stops accidents and surprise install scripts. It does not contain a hostile native addon. See section 10.
-- Replacing rules with plugins. One-off rewrites stay inline JavaScript.
+- Replacing the YAML pathway with a plugin. One-off rewrites are built-in pipeline stages. `run` is the escape hatch, not the format.
 - Loading plugins from the network on each request.
 - A plugin store inside chiling. npm is the index.
 - Plugin-owned MITM policy. A plugin match must not decrypt a host. That stays `NetworkPolicy`.
@@ -222,6 +221,7 @@ const plugin: Plugin = {
   actions: {
     redact: {
       params: { type: "object", required: ["names"], properties: { names: { type: "array", items: { type: "string" } } } },
+      effect: "mutate",
       handle(ctx, params) { return { match: true, actions: [] }; }
     }
   },
@@ -267,7 +267,7 @@ The wire form is one new built-in action:
 { "type": "plugin", "params": { "package": "@example/chiling-redact", "action": "redact", "names": ["authorization"] } }
 ```
 
-`params.package` and `params.action` select the handler. Other params are validated against that action's JSON Schema before the handler runs. The handler returns more actions, which Go validates again. In v1 those actions must be built-ins, not another `plugin` action. That forbids plugin-to-plugin chains until there is a cycle rule.
+`params.package` and `params.action` select the handler. Other params are validated against that action's JSON Schema before the handler runs. Each action declares `effect: "mutate"` or `effect: "observe"`. Only `observe` actions are legal inside a rule's `parallel` block. See [rules.md](./rules.md). The handler returns more actions, which Go validates again. In v1 those actions must be built-ins, not another `plugin` action. That forbids plugin-to-plugin chains until there is a cycle rule.
 
 ```js
 export default function rule(ctx) {
