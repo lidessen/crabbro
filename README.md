@@ -180,7 +180,11 @@ reads the token file itself.
 
 ## Rule format
 
-Rules are JavaScript. The daemon runs them in a fresh Goja VM with no
+New rules are YAML, one file per rule, with a `pipeline` of `uses` stages. `chiling rules from <id>` prints that YAML. `chiling rules migrate <file.js>` wraps an older script as a literal `run` stage (`runtime: goja`); the script text is not an expression expansion site. A legacy script that does not start with `version:` still runs as JavaScript. The schema is `schemas/rule.v1.json`. The full format, including `if`, `select`, and observe-only `parallel`, is [docs/design/rules.md](docs/design/rules.md).
+
+Plugins are npm packages loaded by one Node host, with a worker per active plugin. `chiling plugin install ./pkg` requires `package-lock.json` and runs `npm ci --ignore-scripts`. A pipeline stage calls `uses: <plugin>.<capability>`. See [docs/design/plugins.md](docs/design/plugins.md).
+
+Rules that are still JavaScript run in a fresh Goja VM with no
 filesystem, network, process, or environment access. Each evaluation has a
 500ms timeout. The whole result must validate or none of its actions apply.
 Enabled rules run in ascending priority, then rule id. A later rule sees
@@ -317,7 +321,7 @@ same routes the CLI calls.
 
 ## What is still not in this tree
 
-- A plugin runtime, and the YAML rule format. Rules in the daemon are still sandboxed Goja. The proposals are [docs/design/rules.md](docs/design/rules.md) (`pipeline` stages, `if` and `select`, observe-only `parallel`) and [docs/design/plugins.md](docs/design/plugins.md). Neither is implemented. They borrow names from workcells (`uses`, `with`, `instance`, Tools versus uses) and keep chiling's host model.
+- Traffic inspection scope (apps, pages, session pick/omit). The design is [docs/design/inspect.md](docs/design/inspect.md). Exchanges reserve an empty `attribution` field for it. View filters are not applied, and rules are not muted by a scope that does not exist yet.
 - A separate per-exchange memory budget beyond the capture and 256 KiB transform caps.
 - Trust-store detection. `mitmCertInstalled` is still whatever the CLI reports after install.
 - WebSocket message reassembly. Frame rules see one data frame at a time and do not run on ping, pong, or close.
@@ -332,12 +336,16 @@ same routes the CLI calls.
 | `cmd/chiling` | CLI |
 | `internal/proxy` | Listener, exchange pipeline, CONNECT, replay |
 | `internal/mitm` | CA and client-facing TLS |
-| `internal/rule` | Goja sandbox, schema, snapshots |
+| `internal/rule` | YAML pipelines, Goja `run` stages, rule files |
+| `internal/plugin` | Node plugin host |
+| `sdk/plugin` | TypeScript types for plugin authors |
+| `cmd/chiling-plugin-host` | Node host entry |
 | `internal/decision` | Jev and OpenAI-compatible decision calls |
 | `internal/api` | `/v1` control API |
 | `internal/session` | Recording sessions and trajectory |
 | `internal/history` | SQLite exchange log |
 | `internal/ring` | Recent flows |
-| `docs/design/rules.md` | YAML rule proposal (not implemented) |
+| `docs/design/rules.md` | YAML rule format (`pipeline`, `if`, `select`, observe-only `parallel`) |
+| `docs/design/inspect.md` | Traffic inspection design (not implemented) |
 | `schemas/rule.v1.json` | Proposed JSON Schema for that format |
-| `docs/design/plugins.md` | Plugin proposal (not implemented) |
+| `docs/design/plugins.md` | Node plugin host: one process, a worker per active plugin |

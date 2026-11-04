@@ -1,0 +1,15 @@
+{
+  "name": "lifecycle",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "preinstall": "node -e \"require('fs').writeFileSync('pwned','1')\""
+  },
+  "chiling": {
+    "id": "lifecycle",
+    "api": "1.0.0",
+    "entry": "index.js",
+    "activation": ["onCommand"],
+    "isolation": "worker"
+  }
+}

@@ -5,13 +5,17 @@ import "time"
 // RuleID is the stable identifier for a rule.
 type RuleID string
 
-// Rule represents a single JavaScript rule stored and executed by the daemon.
+// Rule represents one rule. Script is either a YAML document (version 1) or a
+// legacy JavaScript rule, which the engine loads as a single run stage.
 type Rule struct {
 	ID       RuleID `json:"id"`
 	Name     string `json:"name,omitempty"`
 	Priority int    `json:"priority"`
 	Enabled  bool   `json:"enabled"`
 	Script   string `json:"script"`
+	// Source is "file" for rules loaded from rules/<id>.yaml. Empty means the
+	// rule was created through the API and is not replaced by a directory sync.
+	Source string `json:"source,omitempty"`
 	// Version increments each time the script changes. Traces record the version
 	// that ran.
 	Version int `json:"version,omitempty"`
@@ -31,8 +35,25 @@ type RuleTrace struct {
 	Actions     []RuleAction `json:"actions,omitempty"`
 	DurationMs  int64        `json:"durationMs"`
 	Error       string       `json:"error,omitempty"`
-	// Phase is "request", "response", or "frame".
+	// Phase is "request", "response", "frame", or "command".
 	Phase string `json:"phase,omitempty"`
+	// Stages records pipeline decisions. Values that came from credentials are
+	// not included.
+	Stages []StageTrace `json:"stages,omitempty"`
+	// Vars is the resolved variable object. It is not a credential store.
+	Vars map[string]any `json:"vars,omitempty"`
+}
+
+// StageTrace is one pipeline stage. SkipReason is "if" or "unselected".
+type StageTrace struct {
+	ID         string         `json:"id,omitempty"`
+	Uses       string         `json:"uses,omitempty"`
+	Skipped    bool           `json:"skipped,omitempty"`
+	SkipReason string         `json:"skipReason,omitempty"`
+	Case       string         `json:"case,omitempty"`
+	Effect     string         `json:"effect,omitempty"`
+	Error      string         `json:"error,omitempty"`
+	Outputs    map[string]any `json:"outputs,omitempty"`
 }
 
 // RuleActionType enumerates the supported rule action types.

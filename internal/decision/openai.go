@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/lidessen/chiling/internal/rule"
+	"github.com/lidessen/chiling/internal/shared"
 )
 
 type oaMessage struct {
@@ -179,38 +182,18 @@ func scaffoldScript(description, action string, flow *Flow) string {
 	if flow != nil {
 		method = flow.Method
 		if u := flow.URL; u != "" {
-			// Keep the match simple: host and path are filled by the caller
-			// through the URL string when present.
 			host, path = splitURL(u)
 		}
 	}
-	var b strings.Builder
-	b.WriteString("export default function rule(ctx) {\n")
-	fmt.Fprintf(&b, "  // %s\n", sanitizeComment(description))
-	if host != "" {
-		fmt.Fprintf(&b, "  if (ctx.request.host !== %q) return { match: false };\n", host)
+	note := sanitizeComment(description)
+	if note == "" {
+		note = "drafted by the decision API"
 	}
-	if method != "" {
-		fmt.Fprintf(&b, "  if (ctx.request.method !== %q) return { match: false };\n", method)
-	}
-	if path != "" {
-		fmt.Fprintf(&b, "  if (ctx.request.path !== %q) return { match: false };\n", path)
-	}
-	b.WriteString("  return { match: true, actions: [")
-	switch action {
-	case "block":
-		b.WriteString(`{ type: "block", params: { status: 403, body: "blocked" } }`)
-	case "setRequestHeader":
-		b.WriteString(`{ type: "setRequestHeader", params: { name: "X-Chiling", value: "1" } }`)
-	case "rewriteURL":
-		b.WriteString(`{ type: "rewriteURL", params: { url: "https://example.test/rewritten" } }`)
-	case "tag":
-		b.WriteString(`{ type: "tag", params: { tags: ["matched"] } }`)
-	default:
-		b.WriteString(`{ type: "mockResponse", params: { status: 200, headers: { "content-type": "application/json" }, body: "{\"ok\":true}" } }`)
-	}
-	b.WriteString("] };\n}\n")
-	return b.String()
+	return rule.ScaffoldWithNote(&shared.Request{
+		Method: method,
+		Host:   host,
+		Path:   path,
+	}, action, `{"ok":true}`, "application/json", note)
 }
 
 func splitURL(raw string) (host, path string) {

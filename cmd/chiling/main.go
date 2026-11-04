@@ -66,6 +66,10 @@ func run() error {
 		return cmdDecision(cfg, flag.Args()[1:])
 	case "history":
 		return cmdHistory(cfg, flag.Args()[1:])
+	case "plugin":
+		return cmdPlugin(cfg, flag.Args()[1:])
+	case "config":
+		return cmdConfig(cfg, flag.Args()[1:])
 	case "help", "--help", "-h":
 		printUsage()
 		return nil
@@ -98,7 +102,15 @@ Commands:
   decision status           Show whether a decision API is configured
   history status            Show the SQLite history
   history prune             Drop expired exchanges
+  plugin list               List installed plugins (does not start a worker)
+  plugin install <path>     Install from a directory with package-lock.json
+  plugin inspect <id>       Read tools and uses (starts the worker)
+  plugin invoke <p> <i> <t> Call a tool
+  config status             List rule files and drafts
   rules list                List rules
+  rules validate <file>     Check a YAML rule without loading it
+  rules migrate <file.js>   Wrap a legacy script as a run stage
+  rules preview             Match rules without applying them
   rules create <file>       Create a rule from a JS file
   rules from <id>           Scaffold a rule from a captured request
   rules draft "<text>"      Ask the decision API to draft a rule

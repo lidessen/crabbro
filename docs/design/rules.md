@@ -1,6 +1,6 @@
 # Chiling Rule Format
 
-Status: Proposal, not implemented
+Status: Implemented. Inspection scope is designed in [inspect.md](./inspect.md) and is not built. Hook `emits` and `chiling.pass` are not built.
 Date: 2026-11-04
 Scope: A rule is match patterns plus a `pipeline` of stages. Plugins are specified in [plugins.md](./plugins.md). The JSON Schema is [schemas/rule.v1.json](../../schemas/rule.v1.json). Inline JavaScript is only a fallback `run` stage.
 

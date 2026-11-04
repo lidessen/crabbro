@@ -21,6 +21,7 @@ import (
 	"github.com/lidessen/chiling/internal/fixture"
 	"github.com/lidessen/chiling/internal/history"
 	"github.com/lidessen/chiling/internal/mitm"
+	"github.com/lidessen/chiling/internal/plugin"
 	"github.com/lidessen/chiling/internal/proxy"
 	"github.com/lidessen/chiling/internal/ring"
 	"github.com/lidessen/chiling/internal/rule"
@@ -65,6 +66,18 @@ func run() error {
 	rb := ring.NewRequestBuffer(*ringSize)
 	ruleStore := rule.NewRuleStore()
 	ruleEngine := rule.NewRuleEngine()
+	homeDir := filepath.Dir(expandDaemonPath(*udsPath))
+	rulesDir := rule.OpenDir(filepath.Join(homeDir, "rules"))
+	if diags, complete := rulesDir.Sync(ruleStore); !complete {
+		log.Printf("rules: %d file diagnostics", len(diags))
+	}
+	pluginMgr, err := plugin.NewManager(filepath.Join(homeDir, "plugins"))
+	if err != nil {
+		log.Printf("plugins: %v", err)
+	} else {
+		ruleEngine.Runtime = pluginMgr
+		defer pluginMgr.Close()
+	}
 
 	// -----------------------------------------------------------------------
 	// MITM initialization (Milestone 3)
@@ -171,6 +184,18 @@ func run() error {
 		decCfg.Model = *decisionModel
 	}
 	apiSrv.Decision = decision.New(decCfg)
+	apiSrv.RulesDir = rulesDir
+	if pluginMgr != nil {
+		pluginMgr.Decision = apiSrv.Decision
+		apiSrv.Plugins = pluginMgr
+		sinkPath := filepath.Join(homeDir, "decision-sink.json")
+		if err := decision.WriteSink(sinkPath, decision.Sink{
+			Instance: "local", Principal: "chilingd", Endpoint: decCfg.BaseURL,
+			Model: decCfg.Model, Provider: decCfg.Provider, Credential: "decision-api-key",
+		}); err != nil {
+			log.Printf("decision sink: %v", err)
+		}
+	}
 	if histPath := resolveHistoryPath(*historyPath, *udsPath); histPath != "" {
 		hist, err := history.Open(histPath, *historyRetention, *historyMax)
 		if err != nil {

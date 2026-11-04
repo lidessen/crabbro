@@ -194,6 +194,56 @@ func (s *RuleStore) Snapshot() (uint64, []*shared.Rule) {
 	return s.generation.Load(), out
 }
 
+// UpsertFile inserts or replaces a file-backed rule. The id is the document id.
+func (s *RuleStore) UpsertFile(r *shared.Rule) error {
+	if r == nil || r.ID == "" {
+		return fmt.Errorf("rule id is required")
+	}
+	now := time.Now().UTC()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	prev, ok := s.rules[r.ID]
+	cp := *r
+	cp.Source = "file"
+	if ok {
+		cp.CreatedAt = prev.CreatedAt
+		if prev.Script != r.Script {
+			cp.Version = prev.Version + 1
+		} else {
+			cp.Version = prev.Version
+		}
+	} else if cp.Version == 0 {
+		cp.Version = 1
+	}
+	if cp.CreatedAt.IsZero() {
+		cp.CreatedAt = now
+	}
+	cp.UpdatedAt = now
+	s.rules[r.ID] = &cp
+	s.generation.Add(1)
+	return nil
+}
+
+// DropFileRules removes file-backed rules whose ids are not in keep.
+func (s *RuleStore) DropFileRules(keep map[shared.RuleID]struct{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	changed := false
+	for id, r := range s.rules {
+		if r.Source != "file" {
+			continue
+		}
+		if _, ok := keep[id]; ok {
+			continue
+		}
+		delete(s.rules, id)
+		changed = true
+	}
+	if changed {
+		s.generation.Add(1)
+	}
+}
+
 // EnabledRules returns all currently enabled rules sorted by priority
 // (ascending). Each returned rule is a pointer to the store's internal
 // copy; callers must not mutate them.

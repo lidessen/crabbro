@@ -1,6 +1,6 @@
 # Chiling Plugin Design
 
-Status: Proposal, not implemented
+Status: Implemented, with the deferrals below. Inspection scope is [inspect.md](./inspect.md) and is not built.
 Date: 2026-11-04
 Revised: plugins contribute middleware, hooks, and tools. Rules are YAML pathways, specified in [rules.md](./rules.md). The host runtime is unchanged: one lazy Node host, a worker per active plugin.
 Scope: JS plugins distributed as npm packages.
@@ -478,7 +478,7 @@ Each phase leaves `go test ./...` green and does not change Goja rule behavior.
 4. **Broker.** `history:read`, `secrets:read`, `net`, `fs:data`, instance config, `plugin invoke`. `native` and `isolation: process` as a child process.
 5. **Author kit.** Publish `@chiling/plugin` and the testing helper.
 
-Phase 1 is the first code change. This document is not that change.
+The host, install, instances, `uses`, and the decision sink are in the tree. Still deferred: plugin `emits` chains, `chiling.pass`, plugin-to-plugin `uses`, `history:read` until a store is attached on the broker, and the traffic-inspection scope in [inspect.md](./inspect.md). `net.fetch` stays denied until a caller has `net`. `onStartup` does not keep the host warm.
 
 ## 15. Decisions
 

@@ -1,0 +1,11 @@
+{
+  "name": "@chiling/plugin",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Types for a Chiling plugin. The daemon loads the compiled JavaScript and does not run tsc.",
+  "types": "index.d.ts",
+  "exports": {
+    ".": { "types": "./index.d.ts" },
+    "./testing": "./testing.mjs"
+  }
+}
