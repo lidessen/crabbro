@@ -14,18 +14,26 @@ The loop the CLI is built for:
 
 ## Install
 
-Requires Go 1.26 or newer.
+Requires Go 1.26 or newer. From a checkout, one command builds the binaries and installs them:
+
+```sh
+./scripts/install.sh
+```
+
+On macOS that replaces `/Applications/Chiling.app` (a bundle around the CLI and daemon; there is no GUI yet) and links `chiling` onto `PATH`. On Linux it installs the CLI into `~/.local/bin` or `/usr/local/bin`. It does not trust the MITM CA or change the system proxy. After it finishes:
+
+```sh
+chiling daemon start
+chiling mitm install-ca
+```
+
+Useful flags: `--app-dir ~/Applications`, `--prefix ~/.local/bin`, `--no-cli-link`, `--dry-run`, `--uninstall`.
+
+`go install` still works if you only want the binaries on `PATH`:
 
 ```sh
 go install github.com/lidessen/chiling/cmd/chiling@latest
 go install github.com/lidessen/chiling/cmd/chilingd@latest
-```
-
-From a checkout:
-
-```sh
-go build -o chiling ./cmd/chiling
-go build -o chilingd ./cmd/chilingd
 ```
 
 `chiling daemon start` looks for `chilingd` beside the CLI binary, then on `PATH`.
@@ -336,6 +344,7 @@ same routes the CLI calls.
 |---|---|
 | `cmd/chilingd` | Daemon |
 | `cmd/chiling` | CLI |
+| `scripts/install.sh` | Local install: `Chiling.app` on macOS, CLI on Linux |
 | `internal/proxy` | Listener, exchange pipeline, CONNECT, replay |
 | `internal/mitm` | CA and client-facing TLS |
 | `internal/rule` | YAML pipelines, Goja `run` stages, rule files |

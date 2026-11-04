@@ -27,6 +27,7 @@ import (
 	"github.com/lidessen/chiling/internal/ring"
 	"github.com/lidessen/chiling/internal/rule"
 	"github.com/lidessen/chiling/internal/shared"
+	"github.com/lidessen/chiling/internal/version"
 )
 
 func main() {
@@ -58,7 +59,7 @@ func run() error {
 
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 
-	log.Printf("chilingd starting (version %s)", "0.1.0")
+	log.Printf("chilingd starting (version %s)", version.String())
 	log.Printf("proxy address:  %s", *proxyAddr)
 	log.Printf("control API:    UDS=%s, TCP=%s", *udsPath, *tcpAddr)
 	log.Printf("ring buffer:    %d entries", *ringSize)
