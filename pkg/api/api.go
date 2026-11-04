@@ -1,4 +1,4 @@
-package shared
+package api
 
 import "time"
 
@@ -27,18 +27,18 @@ type ListRequestsResponse struct {
 
 // RequestSummary is a lightweight view of a request used in list responses.
 type RequestSummary struct {
-	ID         RequestID `json:"id"`
-	StartedAt  string    `json:"startedAt"`
-	Method     string    `json:"method"`
-	URL        string    `json:"url"`
-	Status     int       `json:"status"`
-	DurationMs   int64    `json:"durationMs"`
-	Tags         []string `json:"tags,omitempty"`
-	Hidden       bool     `json:"hidden,omitempty"`
-	HiddenReason []string `json:"hiddenReason,omitempty"`
-	ResourceType string   `json:"resourceType,omitempty"`
-	InitiatorURL string   `json:"initiatorUrl,omitempty"`
-	SourceID     string   `json:"sourceId,omitempty"`
+	ID           RequestID `json:"id"`
+	StartedAt    string    `json:"startedAt"`
+	Method       string    `json:"method"`
+	URL          string    `json:"url"`
+	Status       int       `json:"status"`
+	DurationMs   int64     `json:"durationMs"`
+	Tags         []string  `json:"tags,omitempty"`
+	Hidden       bool      `json:"hidden,omitempty"`
+	HiddenReason []string  `json:"hiddenReason,omitempty"`
+	ResourceType string    `json:"resourceType,omitempty"`
+	InitiatorURL string    `json:"initiatorUrl,omitempty"`
+	SourceID     string    `json:"sourceId,omitempty"`
 }
 
 // RequestDetailResponse is returned by GET /v1/requests/:id.

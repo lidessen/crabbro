@@ -183,15 +183,6 @@ DELETE FROM requests WHERE id NOT IN (
 	return int(n + n2), nil
 }
 
-// Status is the agent-facing summary.
-type Status struct {
-	Enabled   bool   `json:"enabled"`
-	Path      string `json:"path,omitempty"`
-	Requests  int    `json:"requests"`
-	Retention string `json:"retention,omitempty"`
-	MaxRows   int    `json:"maxRows,omitempty"`
-}
-
 // Status reports configuration and the current row count.
 func (s *Store) Status() Status {
 	if s == nil {

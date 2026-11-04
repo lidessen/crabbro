@@ -205,7 +205,10 @@ func (p *Proxy) newExchange(r *http.Request, ingress string, tunnelID shared.Req
 		p.Sessions.NoteRequest(record)
 	}
 
-	p.emit(shared.EventRequestStarted, record.ID, nil)
+	p.emit(shared.EventRequestStarted, record.ID, map[string]any{
+		"method": record.Method, "url": record.URL, "host": record.Host,
+		"sessionId": record.SessionID, "hidden": record.Hidden,
+	})
 	p.emit(shared.EventRequestHeaders, record.ID, nil)
 
 	ctx := r.Context()
@@ -388,6 +391,7 @@ func (m *ruleMiddleware) Wrap(next ExchangeHandler) ExchangeHandler {
 		m.proxy.emit(shared.EventRuleApplied, ex.record.ID, map[string]any{
 			"ruleId": m.rule.ID, "actions": result.Actions,
 		})
+		m.proxy.noteApply(ex, m.rule, "request")
 
 		reqActions, respActions := splitStage(result.Actions)
 		synthetic, err := applyRequestPatch(ex, reqActions)
@@ -469,7 +473,15 @@ func (m *ruleMiddleware) applyResponsePhase(ex *Exchange, resp *http.Response) (
 	m.proxy.emit(shared.EventRuleApplied, ex.record.ID, map[string]any{
 		"ruleId": m.rule.ID, "phase": "response", "actions": respActions,
 	})
+	m.proxy.noteApply(ex, m.rule, "response")
 	return resp, nil
+}
+
+func (p *Proxy) noteApply(ex *Exchange, rl *shared.Rule, phase string) {
+	if p == nil || p.Sessions == nil || rl == nil || ex == nil || ex.record == nil {
+		return
+	}
+	p.Sessions.Note("rule_applied", ex.record.SessionID, string(ex.record.ID), string(rl.ID), strings.TrimSpace(phase+" "+rl.Name))
 }
 
 func applyRequestPatch(ex *Exchange, actions []shared.RuleAction) (*http.Response, error) {

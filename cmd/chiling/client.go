@@ -1,14 +1,16 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/lidessen/chiling/pkg/client"
 )
 
 // clientConfig holds the connection configuration for the control API.
@@ -40,57 +42,19 @@ func (cfg *clientConfig) apiToken() string {
 	return ""
 }
 
+func (cfg *clientConfig) apiClient() *client.Client {
+	return client.New(client.Options{
+		UDS:     cfg.UDS,
+		TCP:     cfg.TCP,
+		Token:   cfg.apiToken(),
+		Timeout: 10 * time.Second,
+	})
+}
+
 // doRequest performs an HTTP request to the control API, trying UDS first then
 // falling back to TCP.
 func doRequest(cfg *clientConfig, method, path string, body io.Reader) (*http.Response, error) {
-	// Try UDS first.
-	if cfg.UDS != "" {
-		client := &http.Client{
-			Timeout: 10 * time.Second,
-			Transport: &http.Transport{
-				DisableKeepAlives: true,
-				Dial: func(network, addr string) (net.Conn, error) {
-					return net.Dial("unix", cfg.UDS)
-				},
-			},
-		}
-		req, err := http.NewRequest(method, "http://localhost"+path, body)
-		if err != nil {
-			return nil, err
-		}
-		if tok := cfg.apiToken(); tok != "" {
-			req.Header.Set("Authorization", "Bearer "+tok)
-		}
-		resp, err := client.Do(req)
-		if err == nil {
-			return resp, nil
-		}
-	}
-
-	// Fall back to TCP.
-	if cfg.TCP != "" {
-		client := &http.Client{
-			Timeout: 10 * time.Second,
-			Transport: &http.Transport{
-				DisableKeepAlives: true,
-			},
-		}
-		url := fmt.Sprintf("http://%s%s", cfg.TCP, path)
-		req, err := http.NewRequest(method, url, body)
-		if err != nil {
-			return nil, err
-		}
-		if tok := cfg.apiToken(); tok != "" {
-			req.Header.Set("Authorization", "Bearer "+tok)
-		}
-		resp, err := client.Do(req)
-		if err != nil {
-			return nil, err
-		}
-		return resp, nil
-	}
-
-	return nil, fmt.Errorf("no control API connection available (tried UDS and TCP)")
+	return cfg.apiClient().Do(context.Background(), method, path, body)
 }
 
 // formatDuration formats seconds as a human-readable duration string.

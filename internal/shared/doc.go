@@ -1,5 +1,6 @@
-// Package shared provides the common type definitions, constants, and error
-// formats used across chilingd (the proxy daemon) and chiling (the CLI
-// client). These types define the wire format for the control API and the
-// internal data model for captured HTTP exchanges, events, and rules.
+// Package shared is the daemon-facing view of the control API.
+//
+// Wire types and the socket defaults live in pkg/api. This package aliases
+// them so existing daemon code keeps one definition, and it holds the
+// daemon-only limits (timeouts, body caps, ring size).
 package shared

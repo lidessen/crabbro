@@ -283,13 +283,14 @@ chiling rules create ./rule.js --name mock-login --priority 100
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/v1/status` | Version, proxy address, counts |
-| `GET` | `/v1/events` | Server-sent events |
+| `GET` | `/v1/events` | Server-sent events. `id` lines, resume with `after` or `Last-Event-ID` |
 | `GET` | `/v1/requests` | List. Query: `since`, `sinceTime`, `limit`, `method`, `host`, `path`, `status`, `q`, `tag`, `session` |
 | `GET` | `/v1/requests/{id}` | Detail. `include=headers,body,rule-trace`. `body` is the request body, `responseBody` is the response body |
 | `GET` `POST` | `/v1/sessions` | List or start a recording |
 | `GET` | `/v1/sessions/current` | Active recording |
 | `POST` | `/v1/sessions/{id}/stop` | Stop a recording |
-| `GET` | `/v1/activity` | Trajectory (`session`, `limit`) |
+| `GET` | `/v1/activity` | Trajectory tail (`session`, `limit`) |
+| `GET` | `/v1/trajectory` | Oldest-first pages (`session`, `cursor`, `limit`) |
 | `POST` | `/v1/verify/replay` | Replay a capture |
 | `POST` | `/v1/find` | Decision search. `{query, limit}` |
 | `GET` | `/v1/decision` | Provider status, no secret |
@@ -316,18 +317,21 @@ report and apply that policy.
 
 ## How a UI plugs in
 
-No UI is built here. A native client (the planned mygo.dev app, with a
-trajectory view along the lines of a harness timeline) should be a client of
-this API, not a second proxy:
+No UI is built here. A future native view imports `pkg/api` (the JSON types)
+and `pkg/client` (calls over the control socket, including `Subscribe`).
+Those packages do not import a UI toolkit. The contract, the event types, and
+the snapshot-then-follow pattern are in [docs/design/ui-api.md](docs/design/ui-api.md).
 
-- `GET /v1/activity?session=` is the timeline: session start/stop, captures, rule creates, find, verify.
-- `GET /v1/events` is the live tail.
-- `GET /v1/requests` and `GET /v1/requests/{id}?include=headers,body,rule-trace` are the flow rows and the detail pane.
-- `GET /v1/rules` plus enable, disable, and delete are the rule controls.
-- `GET /v1/sessions` groups a recording the way a trajectory groups one run.
+```sh
+go run ./examples/ui-client
+```
 
-The UI should not apply rules by editing proxy state locally. It calls the
-same routes the CLI calls.
+The view reads state that a goroutine updates from `Subscribe`. It does not
+keep a second copy of proxy state. `examples/ui-client` prints the same feed.
+
+`scripts/install.sh` is still how the `.app` and the CLI are installed. A
+MyGo bundle (`mygo.json`, signing, notarization, auto-update) should replace
+that script for the app once the native UI exists. The script is unchanged.
 
 ## What is still not in this tree
 
@@ -344,6 +348,10 @@ same routes the CLI calls.
 |---|---|
 | `cmd/chilingd` | Daemon |
 | `cmd/chiling` | CLI |
+| `pkg/api` | `/v1` JSON types shared by the daemon and clients |
+| `pkg/client` | Typed control-socket client (`Subscribe`, trajectory, scope, rules) |
+| `examples/ui-client` | Prints the trajectory and the live event stream |
+| `docs/design/ui-api.md` | Methods, events, pagination, and how a native view consumes them |
 | `scripts/install.sh` | Local install: `Chiling.app` on macOS, CLI on Linux |
 | `internal/proxy` | Listener, exchange pipeline, CONNECT, replay |
 | `internal/mitm` | CA and client-facing TLS |

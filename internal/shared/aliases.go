@@ -1,0 +1,104 @@
+package shared
+
+import "github.com/lidessen/chiling/pkg/api"
+
+// Wire types live in pkg/api. These aliases keep the daemon on one definition.
+type (
+	RequestID             = api.RequestID
+	Request               = api.Request
+	Attribution           = api.Attribution
+	HeaderField           = api.HeaderField
+	Headers               = api.Headers
+	BodyRef               = api.BodyRef
+	RuleID                = api.RuleID
+	Rule                  = api.Rule
+	RuleTrace             = api.RuleTrace
+	StageTrace            = api.StageTrace
+	RuleActionType        = api.RuleActionType
+	FrameView             = api.FrameView
+	RuleAction            = api.RuleAction
+	EventType             = api.EventType
+	Event                 = api.Event
+	StatusResponse        = api.StatusResponse
+	DaemonStatus          = api.DaemonStatus
+	ListRequestsResponse  = api.ListRequestsResponse
+	RequestSummary        = api.RequestSummary
+	RequestDetailResponse = api.RequestDetailResponse
+	CreateRuleRequest     = api.CreateRuleRequest
+	UpdateRuleRequest     = api.UpdateRuleRequest
+	ToggleRuleRequest     = api.ToggleRuleRequest
+	ListRulesResponse     = api.ListRulesResponse
+	GetRuleResponse       = api.GetRuleResponse
+	CreateFixtureRequest  = api.CreateFixtureRequest
+	ListFixturesResponse  = api.ListFixturesResponse
+	FixtureSummary        = api.FixtureSummary
+	GetFixtureResponse    = api.GetFixtureResponse
+	FixtureDetail         = api.FixtureDetail
+	FixtureRequest        = api.FixtureRequest
+	TestRuleRequest       = api.TestRuleRequest
+	TestRuleResponse      = api.TestRuleResponse
+	ErrorResponse         = api.ErrorResponse
+	ErrorBody             = api.ErrorBody
+	ErrorDetail           = api.ErrorDetail
+	MITMStatusResponse    = api.MITMStatusResponse
+	MITMDomainRequest     = api.MITMDomainRequest
+	Session               = api.Session
+	Activity              = api.Activity
+	VerifyRequest         = api.VerifyRequest
+	VerifyResult          = api.VerifyResult
+	HistoryStatus         = api.HistoryStatus
+	Plugin                = api.Plugin
+	PluginMatch           = api.PluginMatch
+	Source                = api.Source
+	Page                  = api.Page
+	SourceDetail          = api.SourceDetail
+	SourceList            = api.SourceList
+	ScopeState            = api.ScopeState
+	TrajectoryPage        = api.TrajectoryPage
+	ActivityList          = api.ActivityList
+	Diagnostic            = api.Diagnostic
+	RulePreview           = api.RulePreview
+	ValidateResult        = api.ValidateResult
+	ConfigAck             = api.ConfigAck
+	PluginList            = api.PluginList
+	SessionList           = api.SessionList
+	CurrentSession        = api.CurrentSession
+)
+
+const (
+	ErrCodeNotFound      = api.ErrCodeNotFound
+	ErrCodeBadRequest    = api.ErrCodeBadRequest
+	ErrCodeInternal      = api.ErrCodeInternal
+	ErrCodeRuleEvalError = api.ErrCodeRuleEvalError
+	ErrCodeUnauthorized  = api.ErrCodeUnauthorized
+
+	EventRequestStarted        = api.EventRequestStarted
+	EventRequestHeaders        = api.EventRequestHeaders
+	EventRequestBodyAvailable  = api.EventRequestBodyAvailable
+	EventRuleEvaluated         = api.EventRuleEvaluated
+	EventRuleApplied           = api.EventRuleApplied
+	EventResponseHeaders       = api.EventResponseHeaders
+	EventResponseBodyAvailable = api.EventResponseBodyAvailable
+	EventResponseCompleted     = api.EventResponseCompleted
+	EventRequestFailed         = api.EventRequestFailed
+	EventMITMEnabled           = api.EventMITMEnabled
+	EventMITMDisabled          = api.EventMITMDisabled
+	EventScopeChanged          = api.EventScopeChanged
+	EventActivity              = api.EventActivity
+
+	ActionAbort                = api.ActionAbort
+	ActionBlock                = api.ActionBlock
+	ActionMockResponse         = api.ActionMockResponse
+	ActionRemoveRequestHeader  = api.ActionRemoveRequestHeader
+	ActionSetRequestHeader     = api.ActionSetRequestHeader
+	ActionTag                  = api.ActionTag
+	ActionRewriteURL           = api.ActionRewriteURL
+	ActionSetResponseHeader    = api.ActionSetResponseHeader
+	ActionRemoveResponseHeader = api.ActionRemoveResponseHeader
+	ActionRewriteResponseBody  = api.ActionRewriteResponseBody
+	ActionSetResponseStatus    = api.ActionSetResponseStatus
+	ActionDelay                = api.ActionDelay
+	ActionThrottle             = api.ActionThrottle
+	ActionReplaceFrame         = api.ActionReplaceFrame
+	ActionDropFrame            = api.ActionDropFrame
+)

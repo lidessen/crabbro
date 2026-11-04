@@ -12,32 +12,6 @@ import (
 	"strings"
 )
 
-// PackageRecord is one installed plugin. Credentials are not stored here.
-type PackageRecord struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Version     string   `json:"version"`
-	Path        string   `json:"path"`
-	Entry       string   `json:"entry"`
-	API         string   `json:"api"`
-	Enabled     bool     `json:"enabled"`
-	Priority    int      `json:"priority"`
-	FailureMode string   `json:"failureMode"`
-	Isolation   string   `json:"isolation"`
-	Permissions []string `json:"permissions"`
-	Activation  []string `json:"activation"`
-	Digest      string   `json:"digest"`
-	Match       Match    `json:"match,omitempty"`
-}
-
-// Match is the static prefilter from package.json. The daemon can apply it
-// without starting a worker.
-type Match struct {
-	Hosts      []string `json:"hosts,omitempty"`
-	Methods    []string `json:"methods,omitempty"`
-	PathPrefix string   `json:"pathPrefix,omitempty"`
-}
-
 // InstanceRecord is one named configuration of a package.
 type InstanceRecord struct {
 	Plugin      string            `json:"plugin"`

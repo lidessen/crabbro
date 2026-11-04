@@ -8,6 +8,8 @@ package session
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,6 +26,19 @@ type Store struct {
 	activity []shared.Activity
 	max      int
 	scopes   map[string]*inspect.Scope
+	observer func(shared.Activity)
+}
+
+// SetObserver is called after each trajectory step is appended, with the
+// store lock held. The function must not call back into the store and must
+// not block.
+func (s *Store) SetObserver(fn func(shared.Activity)) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.observer = fn
+	s.mu.Unlock()
 }
 
 // New creates a store that keeps up to max activity entries (and the same
@@ -171,6 +186,65 @@ func (s *Store) Note(kind, sessionID, requestID, ruleID, summary string) {
 	})
 }
 
+// Trajectory returns oldest-first steps after cursor, optionally for one session.
+// cursor is an activity id (act_N). An empty cursor starts at the oldest
+// retained step. limit defaults to 50 and is capped at 200. next is the last
+// returned id when another page remains.
+func (s *Store) Trajectory(sessionID, cursor string, limit int) ([]shared.Activity, string, error) {
+	if limit < 0 {
+		return nil, "", fmt.Errorf("invalid limit")
+	}
+	if limit == 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	var cursorN int64
+	if cursor != "" {
+		n, ok := activitySeq(cursor)
+		if !ok {
+			return nil, "", fmt.Errorf("invalid cursor")
+		}
+		cursorN = n
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var src []shared.Activity
+	for _, a := range s.activity {
+		if sessionID != "" && a.SessionID != sessionID {
+			continue
+		}
+		if cursorN > 0 {
+			n, ok := activitySeq(a.ID)
+			if !ok || n <= cursorN {
+				continue
+			}
+		}
+		src = append(src, a)
+	}
+	next := ""
+	if len(src) > limit {
+		src = src[:limit]
+		next = src[len(src)-1].ID
+	}
+	out := make([]shared.Activity, len(src))
+	copy(out, src)
+	return out, next, nil
+}
+
+func activitySeq(id string) (int64, bool) {
+	rest, ok := strings.CutPrefix(id, "act_")
+	if !ok || rest == "" {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(rest, 10, 64)
+	if err != nil || n < 1 {
+		return 0, false
+	}
+	return n, true
+}
+
 // Activity returns recent trajectory entries, optionally filtered by session.
 func (s *Store) Activity(sessionID string, limit int) []shared.Activity {
 	s.mu.Lock()
@@ -197,6 +271,9 @@ func (s *Store) appendLocked(a shared.Activity) {
 	s.next++
 	a.ID = fmt.Sprintf("act_%d", s.next)
 	s.activity = append(s.activity, a)
+	if s.observer != nil {
+		s.observer(a)
+	}
 	if len(s.activity) > s.max {
 		s.activity = s.activity[len(s.activity)-s.max:]
 	}
