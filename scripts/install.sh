@@ -15,7 +15,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="Chiling"
-BUNDLE_ID="io.github.lidessen.chiling"
+BUNDLE_ID="dev.chiling.app"
 MIN_GO_MAJOR=1
 MIN_GO_MINOR=26
 
