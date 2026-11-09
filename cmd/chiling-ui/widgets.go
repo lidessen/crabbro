@@ -31,14 +31,46 @@ func pageWash(p *palette) ui.LinearGradient {
 
 // card is a surface of the page: a rounded face the sections sit on.
 func card(c *ui.Context, p *palette, fn func()) {
-	ui.Column(c).FillWidth().Padding(10, 12).Radius(8).
+	ui.Column(c).FillWidth().Padding(12, 14).Gap(2).Radius(10).
 		Background(p.surface).Border(1, p.border).Children(fn)
 }
 
 // cardTitle is what a card is of.
 func cardTitle(c *ui.Context, p *palette, title string) {
-	ui.Text(c, strings.ToUpper(title)).FontSize(10.5).FontWeight(650).LetterSpacing(0.6).
-		TextColor(p.faint).SingleLine()
+	ui.Row(c).Gap(7).AlignItems(ui.Center).Children(func() {
+		ui.Box(c).Width(3).Height(11).Radius(2).Background(p.accent.Alpha(0.85))
+		ui.Text(c, strings.ToUpper(title)).FontSize(10.5).FontWeight(650).LetterSpacing(0.7).
+			TextColor(p.muted).SingleLine()
+	})
+}
+
+// emptyState is what a page shows while it has nothing: a tinted mark, a
+// title, a line of help and, optionally, the command that starts things
+// off in a small code chip.
+func emptyState(c *ui.Context, p *palette, icon *ui.SVG, title, help, cmd string) {
+	ui.Column(c).Grow(1).Center().Padding(24).Gap(10).Children(func() {
+		ui.Row(c).Size(52, 52).Center().Radius(16).Background(p.accent.Alpha(0.12)).Children(func() {
+			ui.Icon(c, icon).FontSize(24).TextColor(p.accent)
+		})
+		ui.Text(c, title).FontSize(14).FontWeight(650).TextColor(p.text).Margin(4, 0, 0, 0).SingleLine()
+		ui.Text(c, help).FontSize(12.5).TextColor(p.muted).TextAlign(ui.Center).LineHeight(1.5).MaxWidth(360)
+		if cmd != "" {
+			ui.Text(c, cmd).FontSize(12).Font(mono()).TextColor(p.text).Padding(6, 11).Radius(7).
+				Background(p.surface).Border(1, p.border).SingleLine()
+		}
+	})
+}
+
+// statTile is one headline number of the daemon's overview: a small
+// label over a large value. The value rolls as it changes.
+func statTile(c *ui.Context, p *palette, key, label, value string, tone ui.Color) {
+	ui.Column(c.Key("stat:"+key)).Grow(1).Basis(0).MinWidth(0).Padding(12, 14).Gap(5).Radius(10).
+		Background(p.surface).Border(1, p.border).Children(func() {
+		ui.Text(c, strings.ToUpper(label)).FontSize(10.5).FontWeight(650).LetterSpacing(0.7).
+			TextColor(p.faint).SingleLine()
+		ui.Text(c, value).FontSize(22).FontWeight(650).TextColor(tone).SingleLine().
+			ContentTransition(ui.ContentTransition{Numeric: true})
+	})
 }
 
 // riseIn brings an element in as it is built: it fades and rises a little,
@@ -74,7 +106,7 @@ func methodColor(p *palette, method string) (ui.Color, ui.Color) {
 	case "GET":
 		return p.changed, p.changed.Alpha(0.11)
 	case "POST":
-		return p.accent, p.accent.Alpha(0.14)
+		return p.teal(), p.teal().Alpha(0.13)
 	case "PUT", "PATCH":
 		return p.warning(), p.warning().Alpha(0.13)
 	case "DELETE":

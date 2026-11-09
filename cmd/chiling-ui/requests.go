@@ -106,13 +106,9 @@ func (a *app) requestsPage(c *ui.Context, p *palette) {
 // captured yet, as Mayoi's empty folder is: how to send the first request
 // through the proxy.
 func (a *app) requestsEmpty(c *ui.Context, p *palette) {
-	ui.Column(c).Grow(1).Center().Padding(20).Gap(8).Children(func() {
-		ui.Icon(c, iconList).FontSize(28).TextColor(p.faint)
-		ui.Text(c, "No traffic yet").FontSize(13).FontWeight(600).TextColor(p.text).
-			Margin(4, 0, 0, 0).SingleLine()
-		ui.Text(c, "export HTTP_PROXY=127.0.0.1:8080 and send a request").
-			FontSize(12).TextColor(p.muted).TextAlign(ui.Center).LineHeight(1.45)
-	})
+	emptyState(c, p, iconList, "No traffic yet",
+		"Point a client at the proxy and send a request. Every exchange shows up here as it happens.",
+		"export HTTP_PROXY=http://127.0.0.1:8080")
 }
 
 // chosenRequestID is the request the table's choice names, "" for none.
@@ -128,8 +124,19 @@ func (a *app) requestsToolbar(c *ui.Context, p *palette) {
 	ui.Row(c).FillWidth().Height(56).Shrink(0).Padding(8, 12).
 		Gap(10).AlignItems(ui.Center).Children(func() {
 		ui.SearchField(c, &a.search).Grow(1).Shrink(1).MinWidth(40).MaxWidth(300)
-		ui.Checkbox(c, &a.showHidden, "Hidden").FontSize(12.5)
+		ui.Checkbox(c, &a.showHidden, "Show hidden").FontSize(12.5)
 		ui.Spacer(c)
+		st := a.snapshotState()
+		failed := 0
+		for _, rq := range st.requests {
+			if rq.Status >= 400 {
+				failed++
+			}
+		}
+		a.pill(c, fmt.Sprintf("%d requests", len(st.requests)), p.muted, p.muted.Alpha(0.12), false)
+		if failed > 0 {
+			a.pill(c, fmt.Sprintf("%d failed", failed), p.removed, p.removed.Alpha(0.13), false)
+		}
 		if a.bounceSearch(c) {
 			a.nudge(a.search)
 		}
@@ -223,9 +230,8 @@ func (a *app) requestCell(c *ui.Context, p *palette, r uiRequestRow, col int, ch
 func (a *app) requestDetail(c *ui.Context, p *palette, st store, rows []uiRequestRow) {
 	id := a.chosenRequestID(rows)
 	if id == "" {
-		ui.Column(c).Grow(1).Center().Padding(20).Children(func() {
-			ui.Text(c, "Choose a request to see what it sent and what came back.").FontSize(13).TextColor(p.faint)
-		})
+		emptyState(c, p, iconReplay, "Select a request",
+			"Choose a row to see what it sent, what came back, and which rules touched it.", "")
 		return
 	}
 	d, errText := st.detail, st.detailErr

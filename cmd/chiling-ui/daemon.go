@@ -18,7 +18,7 @@ func (a *app) daemonPage(c *ui.Context, p *palette) {
 	ui.Scroll(c).Grow(1).Draw(func(pt *ui.Painter, r ui.Rect) {
 		pt.FillGradient(r, pageWash(p), 0)
 	}).Children(func() {
-		ui.Column(c).FillWidth().Padding(16, 18, 24).Gap(18).Children(func() {
+		ui.Column(c).FillWidth().Padding(18, 20, 28).Gap(20).Children(func() {
 			switch {
 			case st.conn == connDown:
 				a.daemonSection(c, p, "Daemon", 0, func() {
@@ -39,12 +39,14 @@ func (a *app) daemonPage(c *ui.Context, p *palette) {
 					})
 				})
 			default:
+				ui.Row(c.Key("daemon:tiles")).FillWidth().Gap(12).Children(func() {
+					statTile(c, p, "req", "Requests", fmt.Sprint(st.status.RequestCount), p.text)
+					statTile(c, p, "rules", "Rules", fmt.Sprint(st.status.RuleCount), p.accent)
+					statTile(c, p, "up", "Uptime", uptimeLabel(st.status.UptimeSeconds), p.text)
+					statTile(c, p, "proxy", "Proxy", st.status.ProxyAddr, p.muted)
+				})
 				a.daemonSection(c, p, "Status", 0, func() {
 					a.fact(c, p, "Version", st.status.Version)
-					a.factRoll(c, p, "Uptime", uptimeLabel(st.status.UptimeSeconds))
-					a.fact(c, p, "Proxy", st.status.ProxyAddr)
-					a.factRoll(c, p, "Requests seen", fmt.Sprint(st.status.RequestCount))
-					a.factRoll(c, p, "Rules", fmt.Sprint(st.status.RuleCount))
 					a.factRoll(c, p, "Last event", fmt.Sprint(st.lastEvent))
 				})
 				a.daemonSection(c, p, "Recording", 40*time.Millisecond, func() {
