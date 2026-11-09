@@ -1,10 +1,17 @@
 package main
 
-import "github.com/egoist/mygo/ui"
+import (
+	"os"
+
+	"github.com/egoist/mygo/ui"
+)
 
 // teal is the second voice beside the coral accent: it tints what the
 // coral would otherwise share with the errors, as POST does.
 func (p *palette) teal() ui.Color {
+	if p.second != nil {
+		return *p.second
+	}
 	if p.dark {
 		return ui.Hex("#5ccfbf")
 	}
@@ -39,6 +46,60 @@ type palette struct {
 	// added, changed and removed are what went well, what waits, and
 	// what went wrong, as text that reads on the chrome and the editor.
 	added, changed, removed ui.Color
+	// second overrides teal, for a variant whose accent sits near it.
+	second *ui.Color
+}
+
+// variant names the palette in use: "coral" (the default), "indigo" or
+// "emerald". CHILING_THEME chooses it at launch.
+var variant = os.Getenv("CHILING_THEME")
+
+// finish lays the chosen variant over p's coral base and derives the
+// button states from its fill.
+func (p *palette) finish() *palette {
+	h := ui.Hex
+	set := func(dark, light map[string]string) {
+		m := light
+		if p.dark {
+			m = dark
+		}
+		fields := map[string]*ui.Color{"editor": &p.editor, "chrome": &p.chrome, "border": &p.border, "text": &p.text,
+			"muted": &p.muted, "faint": &p.faint, "accent": &p.accent, "fill": &p.fill, "surface": &p.surface,
+			"surfaceHover": &p.surfaceHover, "surfacePressed": &p.surfacePressed, "added": &p.added, "changed": &p.changed}
+		for k, v := range m {
+			if k == "second" {
+				c := h(v)
+				p.second = &c
+				continue
+			}
+			*fields[k] = h(v)
+		}
+		if a, ok := m["accent"]; ok {
+			ac := h(a)
+			p.active = ac.Alpha(map[bool]float32{true: 0.15, false: 0.11}[p.dark])
+			p.focus = ac.Alpha(0.5)
+			p.dangerFill = p.removed
+		}
+		p.hover = map[bool]ui.Color{true: ui.RGBA(255, 255, 255, 0.045), false: ui.RGBA(0, 0, 0, 0.04)}[p.dark]
+	}
+	switch variant {
+	case "indigo":
+		set(map[string]string{"editor": "#12141c", "chrome": "#0d0f15", "border": "#252a38", "text": "#e3e6f0", "muted": "#9aa1b5",
+			"faint": "#6a7188", "accent": "#7f95ff", "fill": "#4f6af0", "surface": "#181b25", "surfaceHover": "#1f2330",
+			"surfacePressed": "#272c3b", "changed": "#6cc4ff", "second": "#5ccfbf"},
+			map[string]string{"editor": "#fbfbfe", "chrome": "#f3f4f9", "border": "#e2e5ef", "text": "#20232f", "muted": "#646a80",
+				"faint": "#8a90a6", "accent": "#3f55d6", "fill": "#4a5fe0", "surface": "#ffffff", "surfaceHover": "#f1f2f8",
+				"surfacePressed": "#e8eaf3", "changed": "#0a7fc2", "second": "#1c8a7c"})
+	case "emerald":
+		set(map[string]string{"editor": "#121614", "chrome": "#0d100f", "border": "#232b27", "text": "#e2e9e5", "muted": "#96a39c",
+			"faint": "#67746d", "accent": "#34d399", "fill": "#0b8a5f", "surface": "#181d1b", "surfaceHover": "#1f2523",
+			"surfacePressed": "#272e2b", "added": "#c3e36a", "second": "#b79cff"},
+			map[string]string{"editor": "#fbfdfc", "chrome": "#f1f6f3", "border": "#dfe8e3", "text": "#1f2a25", "muted": "#5f6e66",
+				"faint": "#86948c", "accent": "#0f8a5f", "fill": "#0f8a5f", "surface": "#ffffff", "surfaceHover": "#eff5f1",
+				"surfacePressed": "#e6eee9", "added": "#5a8a10", "second": "#7c4dff"})
+	}
+	p.fillHover, p.fillPressed = p.fill.Mix(white, 0.1), p.fill.Mix(black, 0.15)
+	return p
 }
 
 func darkPalette() *palette {
@@ -67,8 +128,7 @@ func darkPalette() *palette {
 		changed:        ui.Hex("#8fb4ff"),
 		removed:        ui.Hex("#f5627f"),
 	}
-	p.fillHover, p.fillPressed = p.fill.Mix(white, 0.1), p.fill.Mix(black, 0.15)
-	return p
+	return p.finish()
 }
 
 func lightPalette() *palette {
@@ -96,8 +156,7 @@ func lightPalette() *palette {
 		changed:        ui.Hex("#2a5bd7"),
 		removed:        ui.Hex("#c8264f"),
 	}
-	p.fillHover, p.fillPressed = p.fill.Mix(white, 0.1), p.fill.Mix(black, 0.15)
-	return p
+	return p.finish()
 }
 
 // applyPal sets the window's theme from pal, as the widgets draw with it,
