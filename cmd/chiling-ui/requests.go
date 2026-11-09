@@ -141,9 +141,9 @@ func (a *app) requestsToolbar(c *ui.Context, p *palette) {
 				failed++
 			}
 		}
-		a.pill(c, fmt.Sprintf("%d requests", len(st.requests)), p.muted, p.muted.Alpha(0.12), false)
+		chip(c, fmt.Sprintf("%d requests", len(st.requests)), p.muted)
 		if failed > 0 {
-			a.pill(c, fmt.Sprintf("%d failed", failed), p.removed, p.removed.Alpha(0.13), false)
+			chip(c, fmt.Sprintf("%d failed", failed), p.removed)
 		}
 		if a.bounceSearch(c) {
 			a.nudge(a.search)
@@ -248,6 +248,9 @@ func (a *app) requestCell(c *ui.Context, p *palette, r uiRequestRow, col int, ch
 func (a *app) requestDetail(c *ui.Context, p *palette, st store, rows []uiRequestRow) {
 	id := a.chosenRequestID(rows)
 	if id == "" {
+		if len(rows) == 0 {
+			return
+		}
 		emptyState(c, p, iconReplay, "Select a request",
 			"Choose a row to see what it sent, what came back, and which rules touched it.", "")
 		return

@@ -48,6 +48,11 @@ func cardTitle(c *ui.Context, p *palette, title string) {
 // title, a line of help and, optionally, the command that starts things
 // off in a small code chip.
 func emptyState(c *ui.Context, p *palette, icon *ui.SVG, title, help, cmd string) {
+	emptyStateWith(c, p, icon, title, help, cmd, nil)
+}
+
+// emptyStateWith is emptyState with an action under the chip, drawn by act.
+func emptyStateWith(c *ui.Context, p *palette, icon *ui.SVG, title, help, cmd string, act func()) {
 	ui.Column(c).Grow(1).Center().Padding(24).Gap(10).Children(func() {
 		ui.Row(c).Size(52, 52).Center().Radius(16).Background(p.accent.Alpha(0.12)).Children(func() {
 			ui.Icon(c, icon).FontSize(24).TextColor(p.accent)
@@ -57,6 +62,9 @@ func emptyState(c *ui.Context, p *palette, icon *ui.SVG, title, help, cmd string
 		if cmd != "" {
 			ui.Text(c, cmd).FontSize(12).Font(mono()).TextColor(p.text).Padding(6, 11).Radius(7).
 				Background(p.surface).Border(1, p.border).SingleLine()
+		}
+		if act != nil {
+			ui.Row(c).Margin(4, 0, 0).Children(act)
 		}
 	})
 }
@@ -181,4 +189,11 @@ func bodyOrNone(b *string) string {
 		return "(none)"
 	}
 	return *b
+}
+
+// chip is a small count or note of a toolbar: a quiet wash behind plain
+// text, not the mono of the pills that name a status or a verb.
+func chip(c *ui.Context, label string, col ui.Color) {
+	ui.Text(c, label).FontSize(11.5).FontWeight(600).TextColor(col).Padding(2, 8).Radius(10).
+		Background(col.Alpha(0.12)).SingleLine()
 }

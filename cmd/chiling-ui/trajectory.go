@@ -29,9 +29,11 @@ var trajOldest int
 func (a *app) trajectoryPage(c *ui.Context, p *palette) {
 	st := a.snapshotState()
 	if len(st.traj) == 0 {
-		emptyState(c, p, iconClock, "No trace yet",
+		emptyStateWith(c, p, iconClock, "No trace yet",
 			"Start a recording and send traffic through the proxy. Captures, rule hits and verifications land here as a timeline.",
-			"chiling record start")
+			"chiling record start", func() {
+				a.fillButton(c, "trace-record", "Start recording", iconRecord).Clicked(func() { a.actStartRecording() })
+			})
 		return
 	}
 	byID := make(map[string]uiRequestRow, len(st.requests))
