@@ -161,7 +161,7 @@ func (a *app) ruleCell(c *ui.Context, p *palette, r api.Rule, col int) {
 	switch col {
 	case 0:
 		ui.Row(c).Grow(1).Gap(6).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, ruleLabel(r)).FontSize(12.5).FontWeight(550).TextColor(p.text).SingleLine().Shrink(1).MinWidth(20)
+			ui.Text(c, ruleLabel(r)).FontSize(12.5).FontWeight(550).TextColor(map[bool]ui.Color{true: p.text, false: p.muted}[r.Enabled]).SingleLine().Shrink(1).MinWidth(20)
 			if r.FailureMode == "fail-closed" {
 				ui.Badge(c, "fail-closed")
 			}

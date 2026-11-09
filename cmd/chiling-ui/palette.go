@@ -15,7 +15,7 @@ func (p *palette) teal() ui.Color {
 	if p.dark {
 		return ui.Hex("#5ccfbf")
 	}
-	return ui.Hex("#1c8a7c")
+	return ui.Hex("#17766a")
 }
 
 // palette is the look of the window, in the roles Mayoi's workbench uses:
@@ -111,10 +111,10 @@ func darkPalette() *palette {
 		hover:          ui.RGBA(255, 255, 255, 0.045),
 		active:         ui.RGBA(255, 106, 87, 0.15),
 		text:           ui.Hex("#f2e8e4"),
-		muted:          ui.Hex("#a89a97"),
-		faint:          ui.Hex("#75696a"),
+		muted:          ui.Hex("#b3a6a3"),
+		faint:          ui.Hex("#8f8283"),
 		accent:         ui.Hex("#ff6a57"),
-		fill:           ui.Hex("#d93a30"),
+		fill:           ui.Hex("#c93329"),
 		fillText:       ui.Hex("#fff6e8"),
 		dangerFill:     ui.Hex("#a51f3b"),
 		surface:        ui.Hex("#221a1d"),
@@ -137,12 +137,12 @@ func lightPalette() *palette {
 		chrome:         ui.Hex("#fcf3e0"),
 		border:         ui.Hex("#eadfc8"),
 		hover:          ui.RGBA(0, 0, 0, 0.04),
-		active:         ui.RGBA(210, 58, 42, 0.1),
+		active:         ui.RGBA(192, 52, 31, 0.1),
 		text:           ui.Hex("#2a1a1d"),
-		muted:          ui.Hex("#7a6663"),
-		faint:          ui.Hex("#9c8b85"),
-		accent:         ui.Hex("#d23a2a"),
-		fill:           ui.Hex("#dc3f31"),
+		muted:          ui.Hex("#66544f"),
+		faint:          ui.Hex("#7d6b66"),
+		accent:         ui.Hex("#c0341f"),
+		fill:           ui.Hex("#c43427"),
 		fillText:       ui.Hex("#fff6e8"),
 		dangerFill:     ui.Hex("#c8264f"),
 		surface:        ui.Hex("#fffdf8"),
@@ -151,8 +151,8 @@ func lightPalette() *palette {
 		scrollbar:      ui.RGBA(0, 0, 0, 0.18),
 		inverse:        ui.Hex("#2a1a1d"),
 		inverseText:    ui.Hex("#fcf3e0"),
-		focus:          ui.RGBA(210, 58, 42, 0.45),
-		added:          ui.Hex("#3d8a28"),
+		focus:          ui.RGBA(192, 52, 31, 0.45),
+		added:          ui.Hex("#2f7a1c"),
 		changed:        ui.Hex("#2a5bd7"),
 		removed:        ui.Hex("#c8164a"),
 	}
@@ -203,7 +203,7 @@ func (p *palette) warning() ui.Color {
 	if p.dark {
 		return ui.Hex("#e8b86d")
 	}
-	return ui.Hex("#c4862a")
+	return ui.Hex("#9a5f14")
 }
 
 var (

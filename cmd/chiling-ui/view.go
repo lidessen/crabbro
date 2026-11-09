@@ -16,12 +16,13 @@ const (
 	pageDaemon     = "daemon"
 )
 
-// mono is the family code and bodies draw in, or "" for the system's.
+// mono is the family code, paths and ids draw in: Menlo on macOS, and
+// elsewhere the system's own monospace.
 func mono() string {
 	if runtime.GOOS == "darwin" {
 		return "Menlo"
 	}
-	return ""
+	return "monospace"
 }
 
 // fadePage brings a page in as the sidebar chooses it, as Mayoi's are: it
@@ -117,7 +118,8 @@ func (a *app) recordControls(c *ui.Context, p *palette) {
 		a.ghostButton(c, "stop-record", "Stop", nil).Clicked(func() { a.actStopRecording() })
 		return
 	}
-	a.fillButton(c, "start-record", "Record", iconRecord).Clicked(func() { a.actStartRecording() })
+	a.fillButton(c, "start-record", "Record", iconRecord).Disabled(st.conn != connConnected).
+		Clicked(func() { a.actStartRecording() })
 }
 
 // ---------------------------------------------------------------------------
@@ -274,6 +276,13 @@ func (a *app) sidebarFooter(c *ui.Context, p *palette, st store) {
 
 // pageBody is the page the sidebar chose.
 func (a *app) pageBody(c *ui.Context, p *palette) {
+	// Without a daemon there is nothing to show but how to get one: every
+	// page but the daemon's says so, rather than an empty table that reads
+	// as no traffic.
+	if st := a.snapshotState(); st.conn != connConnected && a.page != pageDaemon {
+		a.offlinePage(c, p, st)
+		return
+	}
 	switch a.page {
 	case pageRequests:
 		a.requestsPage(c, p)
@@ -286,27 +295,49 @@ func (a *app) pageBody(c *ui.Context, p *palette) {
 	}
 }
 
+// offlinePage stands where a page would be while the daemon is not there.
+func (a *app) offlinePage(c *ui.Context, p *palette, st store) {
+	ui.Column(c.Key("offline")).Grow(1).Center().Padding(24).Gap(10).Children(func() {
+		ui.Row(c).Size(52, 52).Center().Radius(16).Background(p.accent.Alpha(0.12)).Children(func() {
+			ui.Icon(c, iconServer).FontSize(24).TextColor(p.accent)
+		})
+		if st.conn == connConnecting {
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Margin(4, 0, 0, 0).Children(func() {
+				ui.Spinner(c).Size(13, 13)
+				ui.Text(c, "Looking for the daemon…").FontSize(14).FontWeight(650).TextColor(p.text).SingleLine()
+			})
+			return
+		}
+		ui.Text(c, "The daemon isn't running").FontSize(14).FontWeight(650).TextColor(p.text).Margin(4, 0, 0, 0).SingleLine()
+		ui.Text(c, "Capture, rules and MITM live in chilingd. Start it and this window picks up where it left off.").
+			FontSize(12.5).TextColor(p.muted).TextAlign(ui.Center).LineHeight(1.5).MaxWidth(380)
+		a.fillButton(c, "offline-start", "Start chilingd", iconPlay).Clicked(func() { a.actStartDaemon() })
+		if st.connErr != "" {
+			ui.Text(c, st.connErr).FontSize(11).Font(mono()).TextColor(p.faint).TextAlign(ui.Center).MaxWidth(520)
+		}
+	})
+}
+
 // statusBar is the chrome's bottom: how the daemon is, and the counts.
 func (a *app) statusBar(c *ui.Context, p *palette) {
 	st := a.snapshotState()
 	ui.Row(c).Height(statusBarH).Padding(0, 12).Gap(12).AlignItems(ui.Center).
 		Background(p.chrome).BorderWidth(1, 0, 0, 0).BorderColor(p.border).Children(func() {
-		dotCol, label := p.faint, "connecting"
-		switch st.conn {
-		case connConnected:
-			dotCol, label = p.added, "daemon connected"
-		case connDown:
-			dotCol, label = p.removed, "daemon down"
+		if st.conn != connConnected {
+			dotCol, label := p.faint, "connecting"
+			if st.conn == connDown {
+				dotCol, label = p.removed, "daemon down"
+			}
+			if st.connErr != "" {
+				label += " — " + st.connErr
+			}
+			ui.Box(c.Key("conn-dot")).Width(7).Height(7).Radius(4).Background(dotCol)
+			ui.Text(c, label).FontSize(11.5).TextColor(p.muted).SingleLine().Shrink(1).MinWidth(40)
+		} else if st.session != nil && st.session.Recording {
+			ui.Text(c, "Recording · "+st.status.ProxyAddr).FontSize(11.5).Font(mono()).TextColor(p.muted).SingleLine()
+		} else {
+			ui.Text(c, "Listening on "+st.status.ProxyAddr).FontSize(11.5).Font(mono()).TextColor(p.faint).SingleLine()
 		}
-		if st.connErr != "" {
-			label += " — " + st.connErr
-		}
-		// The dot turns from one state's color to the next as the text
-		// crossfades, as the trajectory's links do.
-		dot := ui.Box(c.Key("conn-dot")).Width(7).Height(7).Radius(4)
-		dot.Background(dot.AnimateColor("conn", dotCol, ui.Animation{Duration: hoverFade.Duration}))
-		ui.Text(c, label).FontSize(11.5).TextColor(p.muted).SingleLine().Shrink(1).MinWidth(40).
-			ContentTransition(ui.ContentTransition{})
 		if a.busy != "" {
 			ui.Row(c).Gap(5).AlignItems(ui.Center).Transition(busyFade).Children(func() {
 				ui.Spinner(c).Size(11, 11)

@@ -18,13 +18,13 @@ func (a *app) daemonPage(c *ui.Context, p *palette) {
 	ui.Scroll(c).Grow(1).Draw(func(pt *ui.Painter, r ui.Rect) {
 		pt.FillGradient(r, pageWash(p), 0)
 	}).Children(func() {
-		ui.Column(c).FillWidth().Padding(18, 20, 28).Gap(20).Children(func() {
+		ui.Column(c).FillWidth().MaxWidth(960).Padding(18, 20, 28).Gap(20).Children(func() {
 			switch {
 			case st.conn == connDown:
 				a.daemonSection(c, p, "Daemon", 0, func() {
 					ui.Column(c).FillWidth().Gap(8).Children(func() {
 						ui.Text(c, st.connErr).FontSize(12).TextColor(p.removed).FillWidth()
-						ui.Row(c).Gap(8).Children(func() {
+						ui.Row(c).Gap(8).Margin(2, 0, 0, 0).Children(func() {
 							a.fillButton(c, "daemon-start", "Start chilingd", iconPlay).
 								Clicked(func() { a.actStartDaemon() })
 						})
@@ -43,11 +43,13 @@ func (a *app) daemonPage(c *ui.Context, p *palette) {
 					statTile(c, p, "req", "Requests", fmt.Sprint(st.status.RequestCount), p.text)
 					statTile(c, p, "rules", "Rules", fmt.Sprint(st.status.RuleCount), p.accent)
 					statTile(c, p, "up", "Uptime", uptimeLabel(st.status.UptimeSeconds), p.text)
-					statTile(c, p, "proxy", "Proxy", st.status.ProxyAddr, p.muted)
+					statTile(c, p, "proxy", "Proxy", st.status.ProxyAddr, p.text)
 				})
 				a.daemonSection(c, p, "Status", 0, func() {
 					a.fact(c, p, "Version", st.status.Version)
-					a.factRoll(c, p, "Last event", fmt.Sprint(st.lastEvent))
+					if st.lastEvent > 0 {
+						a.factRoll(c, p, "Last event", fmt.Sprint(st.lastEvent))
+					}
 				})
 				a.daemonSection(c, p, "Recording", 40*time.Millisecond, func() {
 					if st.session != nil && st.session.Recording {
@@ -76,13 +78,13 @@ func (a *app) daemonPage(c *ui.Context, p *palette) {
 						if st.session.Name == "scope" {
 							ui.Text(c, "Implicit scope session — no recording window is open.").FontSize(12).TextColor(p.muted)
 						}
-						ui.Row(c).Gap(8).Children(func() {
+						ui.Row(c).Gap(8).Margin(2, 0, 0, -9).Children(func() {
 							a.ghostButton(c, "daemon-stop-record", "Stop recording", nil).
 								Clicked(func() { a.actStopRecording() })
 						})
 					} else {
 						ui.Text(c, "Not recording.").FontSize(12).TextColor(p.muted)
-						ui.Row(c).Gap(8).Children(func() {
+						ui.Row(c).Gap(8).Margin(2, 0, 0, 0).Children(func() {
 							a.fillButton(c, "daemon-start-record", "Start recording", iconRecord).
 								Clicked(func() { a.actStartRecording() })
 						})
@@ -120,7 +122,7 @@ func (a *app) daemonPage(c *ui.Context, p *palette) {
 						a.factList(c, p, "Bypass", st.scope.Bypass)
 						a.factList(c, p, "Durable allow", st.scope.ConfigAllow)
 						a.factList(c, p, "Durable deny", st.scope.ConfigDeny)
-						ui.Row(c).Gap(8).Children(func() {
+						ui.Row(c).Gap(8).Margin(2, 0, 0, -9).Children(func() {
 							a.ghostButton(c, "scope-reset", "Reset scope", iconUndo).
 								Clicked(func() { a.actScopeReset() })
 						})
@@ -196,7 +198,7 @@ func (a *app) factList(c *ui.Context, p *palette, label string, items []string) 
 // content where it was: the padding that rooms it is pulled back out by
 // the margin.
 func (a *app) factRow(c *ui.Context, p *palette, label string, value func()) {
-	row := ui.Row(c.Key("fact:"+label)).FillWidth().Gap(10).AlignItems(ui.Start).
+	row := ui.Row(c.Key("fact:"+label)).FillWidth().Gap(10).AlignItems(ui.Center).
 		Padding(3, 6).Margin(-3, -6).Radius(6)
 	if row.Hovered() {
 		row.Background(p.hover)
