@@ -90,12 +90,12 @@ func pageTitle(page string) string {
 	switch page {
 	case pageRules:
 		return "/ Rules"
-	case pageTrajectory:
-		return "/ Trajectory"
+	case pageRequests:
+		return "/ Requests"
 	case pageDaemon:
 		return "/ Daemon"
 	}
-	return "/ Requests"
+	return "/ Trace"
 }
 
 // recordControls is the recording pill and its start and stop.
@@ -242,9 +242,9 @@ func (a *app) sidebar(c *ui.Context, p *palette) {
 				a.page = key
 			}
 		}
+		item(pageTrajectory, "Trace", iconClock, len(st.traj))
 		item(pageRequests, "Requests", iconList, len(st.requests))
 		item(pageRules, "Rules", iconSliders, len(st.rules))
-		item(pageTrajectory, "Trajectory", iconClock, 0)
 		item(pageDaemon, "Daemon", iconServer, 0)
 		ui.Spacer(c)
 		a.sidebarFooter(c, p, st)
@@ -277,14 +277,14 @@ func (a *app) sidebarFooter(c *ui.Context, p *palette, st store) {
 // pageBody is the page the sidebar chose.
 func (a *app) pageBody(c *ui.Context, p *palette) {
 	switch a.page {
+	case pageRequests:
+		a.requestsPage(c, p)
 	case pageRules:
 		a.rulesPage(c, p)
-	case pageTrajectory:
-		a.trajectoryPage(c, p)
 	case pageDaemon:
 		a.daemonPage(c, p)
 	default:
-		a.requestsPage(c, p)
+		a.trajectoryPage(c, p)
 	}
 }
 
