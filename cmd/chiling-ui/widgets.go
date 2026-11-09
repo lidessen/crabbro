@@ -68,7 +68,7 @@ func statTile(c *ui.Context, p *palette, key, label, value string, tone ui.Color
 		Background(p.surface).Border(1, p.border).Children(func() {
 		ui.Text(c, strings.ToUpper(label)).FontSize(10.5).FontWeight(650).LetterSpacing(0.7).
 			TextColor(p.faint).SingleLine()
-		ui.Text(c, value).FontSize(22).FontWeight(650).TextColor(tone).SingleLine().
+		ui.Text(c, value).FontSize(20).FontWeight(650).TextColor(tone).SingleLine().
 			ContentTransition(ui.ContentTransition{Numeric: true})
 	})
 }

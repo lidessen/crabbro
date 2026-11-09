@@ -75,7 +75,7 @@ func (a *app) requestsPage(c *ui.Context, p *palette) {
 				} else {
 					cols := []ui.TableColumn{
 						{Title: "Status", ID: "status", Width: 74, Sortable: true},
-						{Title: "Method", ID: "method", Width: 84, Sortable: true},
+						{Title: "Method", ID: "method", Width: 100, Sortable: true},
 						{Title: "Host", ID: "host", Width: 200, Sortable: true},
 						{Title: "Path", ID: "path"},
 						{Title: "Time", ID: "time", Width: 72, Align: ui.End, Sortable: true},
