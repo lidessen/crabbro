@@ -273,7 +273,7 @@ assemble_app() {
 	local res="${app}/Contents/Resources"
 	local ui=0
 	mkdir -p "$macos" "$res"
-	cp "$ROOT/assets/logos/Chiling.icns" "$res/"
+	cp "$ROOT/assets/logos/chiling-crab-coral.icns" "$res/Chiling.icns"
 	cp "$bins/chiling" "$bins/chilingd" "$bins/chiling-plugin-host" "$macos/"
 	chmod 755 "$macos/chiling" "$macos/chilingd" "$macos/chiling-plugin-host"
 	if [[ -x "$bins/chiling-ui" && -f "$bins/chiling-ui.ok" ]]; then
