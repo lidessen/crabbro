@@ -30,9 +30,9 @@ func (a *app) menu() *mygo.Menu {
 		}},
 		{Role: mygo.RoleEditMenu},
 		{Label: "View", Submenu: []*mygo.MenuItem{
-			page(pageRequests, "Requests", "CmdOrCtrl+1"),
-			page(pageRules, "Rules", "CmdOrCtrl+2"),
-			page(pageTrajectory, "Trajectory", "CmdOrCtrl+3"),
+			page(pageTrajectory, "Trace", "CmdOrCtrl+1"),
+			page(pageRequests, "Requests", "CmdOrCtrl+2"),
+			page(pageRules, "Rules", "CmdOrCtrl+3"),
 			page(pageDaemon, "Daemon", "CmdOrCtrl+4"),
 			mygo.Separator(),
 			{Role: mygo.RoleToggleFullScreen},

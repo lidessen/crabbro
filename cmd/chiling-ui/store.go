@@ -105,7 +105,7 @@ type app struct {
 var hoverFade = ui.ElementTransition{Colors: true, Duration: 110 * time.Millisecond}
 
 func newApp(c *client.Client, ctx context.Context) *app {
-	a := &app{c: c, ctx: ctx, page: pageRequests}
+	a := &app{c: c, ctx: ctx, page: pageTrajectory}
 	a.refresh = make(chan refreshMsg, 1)
 	return a
 }
