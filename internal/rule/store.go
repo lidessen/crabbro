@@ -60,11 +60,27 @@ func (s *RuleStore) Get(id shared.RuleID) (*shared.Rule, error) {
 	return r, nil
 }
 
-// Create inserts a new rule with the given fields and a generated ID.
-// The script field is required.
-func (s *RuleStore) Create(name string, priority int, script string) (*shared.Rule, error) {
+// validateRuleScript rejects anything that is not a YAML rule v1 document.
+// There is no legacy JavaScript rule format: a script either parses as a
+// rule document or the rule is rejected at the boundary.
+func validateRuleScript(script string) error {
 	if script == "" {
-		return nil, fmt.Errorf("rule script must not be empty")
+		return fmt.Errorf("rule script must not be empty")
+	}
+	if _, err := ParseYAML(script); err != nil {
+		return fmt.Errorf("%s", notYAMLMessage(err))
+	}
+	if diags := schemaDiagnostics(script); len(diags) > 0 {
+		return fmt.Errorf("rule script failed schema validation: %s", diags[0].Error())
+	}
+	return nil
+}
+
+// Create inserts a new rule with the given fields and a generated ID.
+// The script field is required and must be a YAML rule v1 document.
+func (s *RuleStore) Create(name string, priority int, script string) (*shared.Rule, error) {
+	if err := validateRuleScript(script); err != nil {
+		return nil, err
 	}
 
 	if priority == 0 {
@@ -112,8 +128,8 @@ func (s *RuleStore) Update(id shared.RuleID, name *string, priority *int, script
 		r.Priority = *priority
 	}
 	if script != nil {
-		if *script == "" {
-			return nil, fmt.Errorf("rule script must not be empty")
+		if err := validateRuleScript(*script); err != nil {
+			return nil, err
 		}
 		r.Script = *script
 		r.Version++

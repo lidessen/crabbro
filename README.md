@@ -1,8 +1,8 @@
 # Chiling (敕令)
 
 Chiling is a local HTTP proxy that an agent drives and a person can inspect.
-The daemon owns capture, rules, and MITM. The CLI is a client of that daemon.
-A desktop UI can attach later to the same control API.
+The daemon owns capture, rules, and MITM. The CLI is a client of that daemon,
+and the desktop UI attaches to the same control API.
 
 The loop the CLI is built for:
 
@@ -20,7 +20,7 @@ Requires Go 1.26 or newer. From a checkout, one command builds the binaries and 
 ./scripts/install.sh
 ```
 
-On macOS that replaces `/Applications/Chiling.app` (a bundle around the CLI and daemon; there is no GUI yet) and links `chiling` onto `PATH`. On Linux it installs the CLI into `~/.local/bin` or `/usr/local/bin`. It does not trust the MITM CA or change the system proxy. After it finishes:
+On macOS that replaces `/Applications/Chiling.app` — the MyGo window is the app's executable, with the CLI and daemon beside it — and links `chiling` onto `PATH`. On Linux it installs the CLI into `~/.local/bin` or `/usr/local/bin`. It does not trust the MITM CA or change the system proxy. After it finishes:
 
 ```sh
 chiling daemon start
@@ -67,13 +67,13 @@ chiling record stop
 chiling daemon stop
 ```
 
-`rules from` scaffolds JavaScript from the captured host, method, and path.
-`rules draft` asks the decision API to pick or write a rule. Both are optional
-relative to hand-writing a file:
+`rules from` scaffolds a YAML pipeline from the captured host, method, and
+path. `rules draft` asks the decision API to pick or write a rule. Both are
+optional relative to hand-writing a file:
 
 ```sh
-chiling rules create ./mock-login.js --name mock-login --priority 100
-chiling rules test ./mock-login.js --fixture login-ok
+chiling rules create ./mock-login.yaml --name mock-login --priority 100
+chiling rules test ./mock-login.yaml --fixture login-ok
 ```
 
 ## HTTPS
@@ -190,88 +190,104 @@ reads the token file itself.
 
 `chiling sources list` shows apps and pages. `chiling scope pick`, `omit`, `off`, `on`, `reset`, and `bypass` narrow the current recording session. If none is recording, the first scope command opens one and says so. Omit hides rows from `requests list` (`hiddenCount`, `hiddenReason`) without stopping forwarding or rules. `requests list --all` shows the hidden rows. `requests list --type xhr --initiator <url>` and the same flags on `find` filter further. Durable lists are `~/.chiling/scope/allow.yaml` and `deny.yaml`, edited with `config draft/validate/commit/discard --scope`. An empty allow list does not narrow.
 
-New rules are YAML, one file per rule, with a `pipeline` of `uses` stages. `chiling rules from <id>` prints that YAML. `chiling rules migrate <file.js>` wraps an older script as a literal `run` stage (`runtime: goja`); the script text is not an expression expansion site. A legacy script that does not start with `version:` still runs as JavaScript. The schema is `schemas/rule.v1.json`. The full format, including `if`, `select`, and observe-only `parallel`, is [docs/design/rules.md](docs/design/rules.md).
+Every rule is a YAML document — one file per rule in `rules/`, with a
+`pipeline` of `uses` stages. There is no JavaScript rule format anymore: a
+script that does not parse as a rule document is rejected at creation, and
+`chiling rules migrate <file.js>` wraps an older script as a literal `run`
+stage (`runtime: goja`) inside the YAML. The schema is
+`schemas/rule.v1.json`. The full format, including `if`, `select`, and
+observe-only `parallel`, is [docs/design/rules.md](docs/design/rules.md).
 
 Plugins are npm packages loaded by one Node host, with a worker per active plugin. `chiling plugin install ./pkg` requires `package-lock.json` and runs `npm ci --ignore-scripts`. A pipeline stage calls `uses: <plugin>.<capability>`. See [docs/design/plugins.md](docs/design/plugins.md).
 
-Rules that are still JavaScript run in a fresh Goja VM with no
-filesystem, network, process, or environment access. Each evaluation has a
-500ms timeout. The whole result must validate or none of its actions apply.
-Enabled rules run in ascending priority, then rule id. A later rule sees
-request patches from earlier rules. The original URL is kept on the capture.
+Stages run in a fresh Goja VM only when a stage is a literal `run` — the
+escape hatch inside an otherwise declarative pipeline. A `run` script has no
+filesystem, network, process, or environment access, each execution has a
+500ms timeout, and the whole result must validate or none of its actions
+apply. Everything else is a `chiling.*` builtin, compiled to Go. Enabled
+rules run in ascending priority, then rule id. A later rule sees request
+patches from earlier rules. The original URL is kept on the capture.
 
-```js
-export default function rule(ctx) {
-  if (ctx.request.host !== "api.example.com") return { match: false };
-  if (ctx.request.path !== "/v1/login") return { match: false };
-  return {
-    match: true,
-    actions: [
-      {
-        type: "mockResponse",
-        params: {
-          status: 200,
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ ok: true })
-        }
-      }
-    ]
-  };
-}
+The login mock from the JS days, as the pipeline that replaces it:
+
+```yaml
+version: 1
+id: mock-login
+description: Synthetic login response
+enabled: true
+on:
+  request:
+    method: POST
+    host: api.example.com
+    path: /v1/login
+request:
+  pipeline:
+    - id: mock
+      uses: chiling.mock-response
+      with:
+        status: 200
+        headers:
+          content-type: application/json
+        body: '{"ok":true,"token":"mocked"}'
 ```
 
-Flat action fields (`status`, `body`, `headers`, `name`, `value`, `url`, `tags`
-next to `type`) are accepted and lifted into `params`.
-
-| Action | Params | Effect |
+| Stage `uses` | `with` | Effect |
 |---|---|---|
-| `tag` | `tags: string[]` | Add tags on the capture |
-| `setRequestHeader` | `name`, `value` | Set a request header |
-| `removeRequestHeader` | `name` | Remove a request header |
-| `rewriteURL` | `url` (http/https, no userinfo) | Change URL, dial host, TLS name, and Host together |
-| `mockResponse` | `status`, optional `headers`, optional `body` | Skip upstream |
-| `block` | `status`, optional `body` | Skip upstream with that status |
-| `abort` | none | Reject with HTTP 403 |
-| `setResponseHeader` | `name`, `value` | Set a response header on the way back |
-| `removeResponseHeader` | `name` | Remove a response header |
-| `setResponseStatus` | `status` | Change the response status |
-| `rewriteResponseBody` | `body`, or `find` + `replace` | Replace the body, or substitute within it. Bodies over 256 KiB are left unchanged |
-| `delay` | `milliseconds` (max 30000) | Wait before the response is written |
-| `throttle` | `bytesPerSecond` | Limit how fast the response body is copied |
-| `replaceFrame` | `payload` or `payloadBase64` | Replace a WebSocket text/binary frame |
-| `dropFrame` | none | Drop a WebSocket text/binary frame |
+| `chiling.tag` | `tags: string[]` | Add tags on the capture |
+| `chiling.set-request-header` | `name`, `value` | Set a request header |
+| `chiling.remove-request-header` | `name` | Remove a request header |
+| `chiling.rewrite-url` | `url` (http/https, no userinfo) | Change URL, dial host, TLS name, and Host together |
+| `chiling.mock-response` | `status`, optional `headers`, optional `body` | Skip upstream |
+| `chiling.block` | `status`, optional `body` | Skip upstream with that status |
+| `chiling.abort` | none | Reject with HTTP 403 |
+| `chiling.set-response-header` | `name`, `value` | Set a response header on the way back |
+| `chiling.remove-response-header` | `name` | Remove a response header |
+| `chiling.set-response-status` | `status` | Change the response status |
+| `chiling.rewrite-response-body` | `body`, or `find` + `replace` | Replace the body, or substitute within it. Bodies over 256 KiB are left unchanged |
+| `chiling.delay` | `milliseconds` (max 30000) | Wait before the response is written |
+| `chiling.throttle` | `bytesPerSecond` | Limit how fast the response body is copied |
+| `chiling.replace-frame` | `payload` or `payloadBase64` | Replace a WebSocket text/binary frame |
+| `chiling.drop-frame` | none | Drop a WebSocket text/binary frame |
 
-A rule cannot return more than one of `mockResponse`, `block`, and `abort`.
-`failureMode` on the stored rule is `fail-open` (default) or `fail-closed`.
-fail-open skips a rule that errors. fail-closed answers 403.
+A pipeline cannot produce more than one of `chiling.mock-response`,
+`chiling.block`, and `chiling.abort`. `failureMode` on the stored rule is
+`fail-open` (default) or `fail-closed`. fail-open skips a rule that errors.
+fail-closed answers 403.
 
-Response actions returned with the request-phase result are applied on the way
-back out, after inner rules. If that result has no response actions, and the
-rule matched, the function runs again with `ctx.response` (`status`, `headers`,
-`body`, `bodyTruncated`). A WebSocket rule should match the HTTP upgrade first
-(for example with `tag`), then handle `ctx.frame`:
+A `run` stage returns `{match, actions}` against the same `ctx` the old
+script rules saw (`ctx.request`, `ctx.response` with `status`, `headers`,
+`body`, `bodyTruncated`, and `ctx.frame` for WebSocket data frames). The
+frame phase of a document does what the JS upgrade-match dance did:
 
-```js
-export default function rule(ctx) {
-  if (ctx.frame) {
-    if (ctx.frame.direction === "client" && ctx.frame.opcode === "text") {
-      return { match: true, actions: [{ type: "replaceFrame", params: { payload: "rewritten" } }] };
-    }
-    return { match: false };
-  }
-  if (ctx.request.path !== "/ws") return { match: false };
-  return { match: true, actions: [{ type: "tag", params: { tags: ["ws"] } }] };
-}
+```yaml
+version: 1
+id: ws-rewrite
+on:
+  request:
+    path: /ws
+frame:
+  pipeline:
+    - id: rewrite-client-text
+      if: "frame.direction == 'client' && frame.opcode == 'text'"
+      uses: chiling.replace-frame
+      with:
+        payload: "rewritten"
 ```
 
 `ctx.frame` is `{direction, opcode, payload, fin}`. `direction` is `client` or
-`server`. Control frames (ping, pong, close) are relayed unchanged. Rules see
-each data frame on its own, not a reassembled message.
+`server`. Control frames (ping, pong, close) are relayed unchanged. Frame
+stages see each data frame on its own, not a reassembled message.
 
-Create from a file or inline JSON:
+Create from a file:
 
 ```sh
-chiling rules create ./rule.js --name mock-login --priority 100
+chiling rules create ./mock-login.yaml --name mock-login --priority 100
+```
+
+A `.js` file is refused with a pointer at the converter:
+
+```sh
+chiling rules migrate ./old-rule.js --id old-rule
 ```
 
 `POST /v1/rules` body: `{"name","priority","script","failureMode"}`.
@@ -315,23 +331,46 @@ control socket, unless `--history off`). `chiling requests list` and
 to 7 days and 10000 rows. `chiling history status` and `chiling history prune`
 report and apply that policy.
 
-## How a UI plugs in
+## The desktop UI
 
-No UI is built here. A future native view imports `pkg/api` (the JSON types)
-and `pkg/client` (calls over the control socket, including `Subscribe`).
-Those packages do not import a UI toolkit. The contract, the event types, and
-the snapshot-then-follow pattern are in [docs/design/ui-api.md](docs/design/ui-api.md).
+`cmd/chiling-ui` is the native window, drawn by [MyGo](https://mygo.egoist.dev/docs/ui) from Go,
+with no webview. It is a client of the same control API the CLI uses: `pkg/api` for the JSON
+types and `pkg/client` for the calls, including `Subscribe`. Neither package imports a UI
+toolkit. The contract, the event types, and the snapshot-then-follow pattern are in
+[docs/design/ui-api.md](docs/design/ui-api.md).
+
+```sh
+go run ./cmd/chiling-ui
+```
+
+The window has four pages:
+
+- **Requests** — the live table (newest first, search, hidden rows) and, below it, the detail of
+  the request chosen: headers, bodies, and the rule trace. A replay button sends it back through
+  the proxy.
+- **Rules** — the list, with enable, disable, delete, and an editor that switches between a visual form
+  (match, description, priority, and the builtin stages with their parameters) and the raw YAML code; rules
+  the form cannot express — hooks, `vars`, `select`, `parallel`, plugin stages — open in code. Saving goes
+  through `PUT /v1/rules/{id}`.
+- **Trajectory** — the timeline tail, newest first; a step's request id opens it in Requests.
+- **Daemon** — status, the recording session, history, MITM, and the scope.
+
+A goroutine keeps the state fresh: ensure the daemon (`EnsureDaemon` starts `chilingd` when
+`/v1/status` does not answer), take a snapshot, follow the event stream, and start over when the
+stream drops. The frame function only reads that state and calls client methods for clicks.
+Closing the window leaves capture, rules, and MITM running.
+
+`scripts/install.sh` builds the UI and installs it as the app's executable
+(`Contents/MacOS/chiling-ui`); when the UI does not build, the app keeps a launcher that starts
+the daemon. MyGo's own packaging (`mygo.json`, signing, notarization, auto-update) can replace
+that script for the app later; the script stays until then.
+
+`examples/ui-client` prints the same feed as the window, from the same packages, without a UI
+toolkit:
 
 ```sh
 go run ./examples/ui-client
 ```
-
-The view reads state that a goroutine updates from `Subscribe`. It does not
-keep a second copy of proxy state. `examples/ui-client` prints the same feed.
-
-`scripts/install.sh` is still how the `.app` and the CLI are installed. A
-MyGo bundle (`mygo.json`, signing, notarization, auto-update) should replace
-that script for the app once the native UI exists. The script is unchanged.
 
 ## What is still not in this tree
 
@@ -348,6 +387,7 @@ that script for the app once the native UI exists. The script is unchanged.
 |---|---|
 | `cmd/chilingd` | Daemon |
 | `cmd/chiling` | CLI |
+| `cmd/chiling-ui` | MyGo native UI (the Chiling.app window) |
 | `pkg/api` | `/v1` JSON types shared by the daemon and clients |
 | `pkg/client` | Typed control-socket client (`Subscribe`, trajectory, scope, rules) |
 | `examples/ui-client` | Prints the trajectory and the live event stream |

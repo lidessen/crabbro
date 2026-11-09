@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Install Chiling from this checkout.
 #
-# macOS: build the CLI and daemon, wrap them in Chiling.app, and replace
-# /Applications/Chiling.app. There is no GUI yet (the mygo.dev shell is not
-# in this tree). LSUIElement keeps the bundle out of the Dock until a UI
-# replaces Contents/MacOS/Chiling.
+# macOS: build the CLI, daemon, and MyGo UI, wrap them in Chiling.app, and
+# replace /Applications/Chiling.app. Contents/MacOS/chiling-ui is the UI
+# when that build succeeds, and a launcher that starts the daemon otherwise
+# (the name keeps the app's executable off the CLI's: macOS filesystems are
+# case-insensitive, so Chiling would overwrite chiling).
 #
 # Linux and other Unix: install the CLI binaries into a prefix. The .app
 # bundle is macOS-only.
@@ -137,6 +138,16 @@ build_bins() {
 		CGO_ENABLED=0 go build -trimpath -ldflags "$ldflags" -o "$out/chiling" ./cmd/chiling
 		CGO_ENABLED=0 go build -trimpath -ldflags "$ldflags" -o "$out/chilingd" ./cmd/chilingd
 		CGO_ENABLED=0 go build -trimpath -ldflags "$ldflags" -o "$out/chiling-plugin-host" ./cmd/chiling-plugin-host
+		if [[ "$OS" == "Darwin" ]]; then
+			# The UI is optional: when its build fails the bundle keeps the
+			# launcher, which starts the daemon as before.
+			log "building chiling-ui (the Chiling.app window)"
+			if CGO_ENABLED=0 go build -trimpath -ldflags "$ldflags" -o "$out/chiling-ui" ./cmd/chiling-ui; then
+				touch "$out/chiling-ui.ok"
+			else
+				log "warning: chiling-ui did not build; Chiling.app will start the daemon without a window"
+			fi
+		fi
 	)
 }
 
@@ -196,7 +207,11 @@ stop_running() {
 }
 
 write_plist() {
-	local dest=$1
+	local dest=$1 ui=$2
+	local lsuielement=""
+	if [[ "$ui" != "1" ]]; then
+		lsuielement=$'\t<key>LSUIElement</key>\n\t<true/>'
+	fi
 	cat >"$dest" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -213,7 +228,7 @@ write_plist() {
 	<key>CFBundleShortVersionString</key>
 	<string>${VERSION}</string>
 	<key>CFBundleExecutable</key>
-	<string>${APP_NAME}</string>
+	<string>chiling-ui</string>
 	<key>CFBundleIconFile</key>
 	<string>Chiling.icns</string>
 	<key>CFBundlePackageType</key>
@@ -222,8 +237,7 @@ write_plist() {
 	<string>6.0</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>12.0</string>
-	<key>LSUIElement</key>
-	<true/>
+${lsuielement}
 	<key>NSHighResolutionCapable</key>
 	<true/>
 </dict>
@@ -231,12 +245,17 @@ write_plist() {
 EOF
 }
 
+# write_launcher is the chiling-ui executable when the UI did not build:
+# a script that starts the daemon, as double-clicking the app should. The
+# name keeps it off the CLI's: macOS filesystems are case-insensitive, so a
+# file named Chiling would overwrite the chiling binary beside it.
 write_launcher() {
 	local dest=$1
 	cat >"$dest" <<'EOF'
 #!/bin/bash
-# Finder launches this with no arguments. A future UI can replace this file.
-# The CLI and daemon stay beside it so `chiling daemon start` finds chilingd.
+# Finder launches this with no arguments. The UI binary replaces this file
+# when it builds. The CLI and daemon stay beside it so `chiling daemon
+# start` finds chilingd.
 set -euo pipefail
 dir="$(cd "$(dirname "$0")" && pwd)"
 if [[ $# -eq 0 ]]; then
@@ -252,25 +271,48 @@ assemble_app() {
 	local app="${stage}/${APP_NAME}.app"
 	local macos="${app}/Contents/MacOS"
 	local res="${app}/Contents/Resources"
+	local ui=0
 	mkdir -p "$macos" "$res"
 	cp "$ROOT/assets/logos/Chiling.icns" "$res/"
 	cp "$bins/chiling" "$bins/chilingd" "$bins/chiling-plugin-host" "$macos/"
 	chmod 755 "$macos/chiling" "$macos/chilingd" "$macos/chiling-plugin-host"
-	write_launcher "$macos/${APP_NAME}"
-	write_plist "${app}/Contents/Info.plist"
-	cat >"${res}/README.txt" <<EOF
+	if [[ -x "$bins/chiling-ui" && -f "$bins/chiling-ui.ok" ]]; then
+		# The window: it talks to the daemon over the control socket, so the
+		# daemon keeps running when the window closes.
+		cp "$bins/chiling-ui" "$macos/chiling-ui"
+		chmod 755 "$macos/chiling-ui"
+		ui=1
+	else
+		write_launcher "$macos/chiling-ui"
+	fi
+	write_plist "${app}/Contents/Info.plist" "$ui"
+	if [[ "$ui" -eq 1 ]]; then
+		cat >"${res}/README.txt" <<EOF
 Chiling ${VERSION} (${COMMIT})
 
-This bundle has no GUI yet. The mygo.dev shell is not part of this build.
 Contents/MacOS holds:
-  Chiling                 launcher (double-click starts the daemon)
+  chiling-ui              the desktop UI (MyGo native window)
   chiling                 CLI
   chilingd                daemon
   chiling-plugin-host     plugin host entry
 
-A later UI can replace Contents/MacOS/Chiling and set LSUIElement to false
-in Contents/Info.plist. Re-run scripts/install.sh to replace this app in place.
+Double-clicking the app opens the window, which starts the daemon if it is
+not running. Closing the window leaves capture, rules, and MITM running.
 EOF
+	else
+		cat >"${res}/README.txt" <<EOF
+Chiling ${VERSION} (${COMMIT})
+
+This bundle has no window in this build; the UI binary did not compile.
+Contents/MacOS holds:
+  chiling-ui              launcher (double-click starts the daemon)
+  chiling                 CLI
+  chilingd                daemon
+  chiling-plugin-host     plugin host entry
+
+Re-run scripts/install.sh once the UI builds to replace this app in place.
+EOF
+	fi
 }
 
 codesign_and_unquarantine() {
@@ -329,7 +371,7 @@ install_macos() {
 	local work bins app
 	if [[ "$DRY_RUN" -eq 1 ]]; then
 		log "dry-run: would build into a temp dir and assemble ${APP_NAME}.app"
-		log "dry-run: bundle id ${BUNDLE_ID}, version ${VERSION} (${COMMIT}), LSUIElement=true"
+		log "dry-run: bundle id ${BUNDLE_ID}, version ${VERSION} (${COMMIT}), Chiling is the UI when it builds"
 		log "dry-run: would replace ${APP_DIR}/${APP_NAME}.app"
 		link_cli_into "$CLI_DIR" "${APP_DIR}/${APP_NAME}.app/Contents/MacOS"
 		codesign_and_unquarantine "${APP_DIR}/${APP_NAME}.app"

@@ -1,6 +1,7 @@
 package rule
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -22,6 +23,40 @@ func newTestRequest() *shared.Request {
 	}
 }
 
+// yamlRun wraps a literal Goja script as the only run stage of a minimal
+// YAML rule v1 document. Rule scripts are YAML documents now; the sandbox,
+// context, timeout, and action-validation behavior these tests exercise is
+// reached through a run stage. The script is trimmed, every line is
+// right-trimmed, and each content line is re-indented under the block
+// scalar (indent >= the "script:" key indent) so YAML block indentation
+// detection is stable regardless of the script's own indentation.
+func yamlRun(js string) string {
+	const contentIndent = "          " // ten spaces; the script key sits at eight
+	var b strings.Builder
+	b.WriteString("version: 1\n")
+	b.WriteString("id: t\n")
+	b.WriteString("on:\n")
+	b.WriteString("  request:\n")
+	b.WriteString("    method: POST\n")
+	b.WriteString("request:\n")
+	b.WriteString("  pipeline:\n")
+	b.WriteString("    - id: r\n")
+	b.WriteString("      run:\n")
+	b.WriteString("        runtime: goja\n")
+	b.WriteString("        script: |\n")
+	for _, line := range strings.Split(strings.TrimSpace(js), "\n") {
+		line = strings.TrimRight(line, " \t")
+		if line == "" {
+			b.WriteString("\n")
+			continue
+		}
+		b.WriteString(contentIndent)
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
 func TestEvaluate_SimpleMatch(t *testing.T) {
 	e := NewRuleEngine()
 	req := newTestRequest()
@@ -31,7 +66,7 @@ func TestEvaluate_SimpleMatch(t *testing.T) {
 			return { match: true, actions: [{ type: "tag", params: { tags: ["test"] } }] };
 		}
 	`
-	result := e.Evaluate(script, req, "", shared.DefaultRuleTimeout)
+	result := e.Evaluate(yamlRun(script), req, "", shared.DefaultRuleTimeout)
 
 	if !result.Matched {
 		t.Error("expected match=true")
@@ -56,7 +91,7 @@ func TestEvaluate_NoMatch(t *testing.T) {
 			return { match: false };
 		}
 	`
-	result := e.Evaluate(script, req, "", shared.DefaultRuleTimeout)
+	result := e.Evaluate(yamlRun(script), req, "", shared.DefaultRuleTimeout)
 
 	if result.Matched {
 		t.Error("expected match=false")
@@ -78,7 +113,7 @@ func TestEvaluate_ContextAvailable(t *testing.T) {
 			return { match: true, actions: [{ type: "tag", params: { tags: ["verified"] } }] };
 		}
 	`
-	result := e.Evaluate(script, req, "", shared.DefaultRuleTimeout)
+	result := e.Evaluate(yamlRun(script), req, "", shared.DefaultRuleTimeout)
 
 	if !result.Matched {
 		t.Error("expected match=true when context is correct")
@@ -97,7 +132,7 @@ func TestEvaluate_BlockAction(t *testing.T) {
 			return { match: true, actions: [{ type: "block", params: { status: 403, body: "forbidden" } }] };
 		}
 	`
-	result := e.Evaluate(script, req, "", shared.DefaultRuleTimeout)
+	result := e.Evaluate(yamlRun(script), req, "", shared.DefaultRuleTimeout)
 
 	if !result.Matched {
 		t.Error("expected match=true")
@@ -128,7 +163,7 @@ func TestEvaluate_MockResponseAction(t *testing.T) {
 			};
 		}
 	`
-	result := e.Evaluate(script, req, "", shared.DefaultRuleTimeout)
+	result := e.Evaluate(yamlRun(script), req, "", shared.DefaultRuleTimeout)
 
 	if !result.Matched {
 		t.Error("expected match=true")
@@ -153,7 +188,7 @@ func TestEvaluate_SetRequestHeader(t *testing.T) {
 			};
 		}
 	`
-	result := e.Evaluate(script, req, "", shared.DefaultRuleTimeout)
+	result := e.Evaluate(yamlRun(script), req, "", shared.DefaultRuleTimeout)
 
 	if !result.Matched {
 		t.Error("expected match=true")
@@ -175,7 +210,7 @@ func TestEvaluate_RemoveRequestHeader(t *testing.T) {
 			};
 		}
 	`
-	result := e.Evaluate(script, req, "", shared.DefaultRuleTimeout)
+	result := e.Evaluate(yamlRun(script), req, "", shared.DefaultRuleTimeout)
 
 	if !result.Matched {
 		t.Error("expected match=true")
@@ -197,7 +232,7 @@ func TestEvaluate_RewriteURL(t *testing.T) {
 			};
 		}
 	`
-	result := e.Evaluate(script, req, "", shared.DefaultRuleTimeout)
+	result := e.Evaluate(yamlRun(script), req, "", shared.DefaultRuleTimeout)
 
 	if !result.Matched {
 		t.Error("expected match=true")
@@ -216,7 +251,7 @@ func TestEvaluate_AbortAction(t *testing.T) {
 			return { match: true, actions: [{ type: "abort" }] };
 		}
 	`
-	result := e.Evaluate(script, req, "", shared.DefaultRuleTimeout)
+	result := e.Evaluate(yamlRun(script), req, "", shared.DefaultRuleTimeout)
 
 	if !result.Matched {
 		t.Error("expected match=true")
@@ -236,7 +271,7 @@ func TestEvaluate_ExportDefaultSyntax(t *testing.T) {
 	script := `export default function(ctx) {
 		return { match: true, actions: [{ type: "tag", params: { tags: ["export-test"] } }] };
 	}`
-	result := e.Evaluate(script, req, "", shared.DefaultRuleTimeout)
+	result := e.Evaluate(yamlRun(script), req, "", shared.DefaultRuleTimeout)
 
 	if !result.Matched {
 		t.Error("expected match=true with export default syntax")
@@ -256,7 +291,7 @@ func TestEvaluate_ExportDefaultArrow(t *testing.T) {
 	script := `export default (ctx) => {
 		return { match: true, actions: [{ type: "tag", params: { tags: ["arrow"] } }] };
 	}`
-	result := e.Evaluate(script, req, "", shared.DefaultRuleTimeout)
+	result := e.Evaluate(yamlRun(script), req, "", shared.DefaultRuleTimeout)
 
 	if !result.Matched {
 		t.Error("expected match=true with arrow function")
@@ -271,7 +306,7 @@ func TestEvaluate_RequestError(t *testing.T) {
 	req := newTestRequest()
 
 	script := `function rule(ctx) { throw new Error("test error"); }`
-	result := e.Evaluate(script, req, "", shared.DefaultRuleTimeout)
+	result := e.Evaluate(yamlRun(script), req, "", shared.DefaultRuleTimeout)
 
 	if result.Matched {
 		t.Error("expected match=false on error")
@@ -285,6 +320,8 @@ func TestEvaluate_InvalidScript(t *testing.T) {
 	e := NewRuleEngine()
 	req := newTestRequest()
 
+	// Rule scripts are YAML rule v1 documents now. This text does not parse
+	// as one, so dispatch rejects it before any stage runs.
 	script := `this is not valid javascript @@@`
 	result := e.Evaluate(script, req, "", shared.DefaultRuleTimeout)
 
@@ -294,12 +331,17 @@ func TestEvaluate_InvalidScript(t *testing.T) {
 	if result.Error == "" {
 		t.Error("expected non-empty error message")
 	}
+	if !strings.Contains(result.Error, "chiling rules migrate") {
+		t.Errorf("expected the not-YAML error to mention chiling rules migrate, got: %s", result.Error)
+	}
 }
 
 func TestEvaluate_NoEntryPoint(t *testing.T) {
 	e := NewRuleEngine()
 	req := newTestRequest()
 
+	// `var x = 1;` is not a YAML rule document either, so dispatch rejects it
+	// the same way before any stage runs.
 	script := `var x = 1;`
 	result := e.Evaluate(script, req, "", shared.DefaultRuleTimeout)
 
@@ -307,7 +349,10 @@ func TestEvaluate_NoEntryPoint(t *testing.T) {
 		t.Error("expected match=false when no entry point")
 	}
 	if result.Error == "" {
-		t.Error("expected error about missing entry point")
+		t.Error("expected error about the script not being a YAML rule document")
+	}
+	if !strings.Contains(result.Error, "chiling rules migrate") {
+		t.Errorf("expected the not-YAML error to mention chiling rules migrate, got: %s", result.Error)
 	}
 }
 
@@ -316,7 +361,7 @@ func TestEvaluate_Timeout(t *testing.T) {
 	req := newTestRequest()
 
 	script := `function rule(ctx) { while(true) {} }`
-	result := e.Evaluate(script, req, "", 50*time.Millisecond)
+	result := e.Evaluate(yamlRun(script), req, "", 50*time.Millisecond)
 
 	if result.Matched {
 		t.Error("expected match=false on timeout")
@@ -327,16 +372,20 @@ func TestEvaluate_SchemaValidationFails(t *testing.T) {
 	e := NewRuleEngine()
 	req := newTestRequest()
 
-	// Return an invalid action type.
+	// The run stage returns an invalid action type. ValidateOutput rejects it,
+	// the stage fails, and the whole rule is fatal.
 	script := `
 		function rule(ctx) {
 			return { match: true, actions: [{ type: "nonexistent", params: {} }] };
 		}
 	`
-	result := e.Evaluate(script, req, "", shared.DefaultRuleTimeout)
+	result := e.Evaluate(yamlRun(script), req, "", shared.DefaultRuleTimeout)
 
-	if !result.Matched {
-		t.Error("expected match=true (script itself ran)")
+	if result.Matched {
+		t.Error("expected match=false (invalid actions fail the rule)")
+	}
+	if result.Error == "" {
+		t.Error("expected non-empty error for the failed run stage")
 	}
 	if result.SchemaValid {
 		t.Error("expected schemaValid=false for unknown action type")
@@ -358,7 +407,7 @@ func TestEvaluate_BodyInContext(t *testing.T) {
 			return { match: false };
 		}
 	`
-	result := e.Evaluate(script, req, "hello", shared.DefaultRuleTimeout)
+	result := e.Evaluate(yamlRun(script), req, "hello", shared.DefaultRuleTimeout)
 
 	if !result.Matched {
 		t.Error("expected match=true when body is available")
@@ -386,7 +435,7 @@ func TestExecuteRule_ValidRequestContext(t *testing.T) {
 			return { match: checks.every(Boolean), actions: [] };
 		}
 	`
-	result := e.Evaluate(script, req, "", shared.DefaultRuleTimeout)
+	result := e.Evaluate(yamlRun(script), req, "", shared.DefaultRuleTimeout)
 
 	if !result.Matched {
 		t.Error("expected all request context fields to be correct")
@@ -399,7 +448,7 @@ func TestEvaluate_DurationMs(t *testing.T) {
 	req := newTestRequest()
 
 	script := `function rule(ctx) { return { match: true, actions: [] }; }`
-	result := e.Evaluate(script, req, "", shared.DefaultRuleTimeout)
+	result := e.Evaluate(yamlRun(script), req, "", shared.DefaultRuleTimeout)
 
 	if result.DurationMs < 0 {
 		t.Error("duration should be non-negative")

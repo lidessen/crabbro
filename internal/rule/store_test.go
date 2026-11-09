@@ -1,6 +1,7 @@
 package rule
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/lidessen/chiling/internal/shared"
@@ -16,12 +17,12 @@ func TestNewRuleStore(t *testing.T) {
 func TestCreateAndList(t *testing.T) {
 	s := NewRuleStore()
 
-	r1, err := s.Create("rule1", 100, "function rule(ctx) { return { match: true }; }")
+	r1, err := s.Create("rule1", 100, yamlRun("function rule(ctx) { return { match: true }; }"))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
-	r2, err := s.Create("rule2", 50, "function rule(ctx) { return { match: false }; }")
+	r2, err := s.Create("rule2", 50, yamlRun("function rule(ctx) { return { match: false }; }"))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -50,7 +51,7 @@ func TestCreate_EmptyScriptFails(t *testing.T) {
 
 func TestCreate_DefaultPriority(t *testing.T) {
 	s := NewRuleStore()
-	r, err := s.Create("test", 0, "function rule(ctx) { return { match: true }; }")
+	r, err := s.Create("test", 0, yamlRun("function rule(ctx) { return { match: true }; }"))
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -61,7 +62,7 @@ func TestCreate_DefaultPriority(t *testing.T) {
 
 func TestGet(t *testing.T) {
 	s := NewRuleStore()
-	created, _ := s.Create("test", 100, "function rule(ctx) { return { match: true }; }")
+	created, _ := s.Create("test", 100, yamlRun("function rule(ctx) { return { match: true }; }"))
 
 	got, err := s.Get(created.ID)
 	if err != nil {
@@ -85,11 +86,11 @@ func TestGet_NotFound(t *testing.T) {
 
 func TestUpdate(t *testing.T) {
 	s := NewRuleStore()
-	created, _ := s.Create("original", 100, "function rule(ctx) { return { match: true }; }")
+	created, _ := s.Create("original", 100, yamlRun("function rule(ctx) { return { match: true }; }"))
 
 	name := "updated"
 	priority := 50
-	script := "function rule(ctx) { return { match: false }; }"
+	script := yamlRun("function rule(ctx) { return { match: false }; }")
 
 	updated, err := s.Update(created.ID, &name, &priority, &script)
 	if err != nil {
@@ -108,7 +109,7 @@ func TestUpdate(t *testing.T) {
 
 func TestUpdate_Partial(t *testing.T) {
 	s := NewRuleStore()
-	created, _ := s.Create("original", 100, "function rule(ctx) { return { match: true }; }")
+	created, _ := s.Create("original", 100, yamlRun("function rule(ctx) { return { match: true }; }"))
 
 	name := "only-name"
 	updated, err := s.Update(created.ID, &name, nil, nil)
@@ -134,7 +135,7 @@ func TestUpdate_NotFound(t *testing.T) {
 
 func TestUpdate_EmptyScriptFails(t *testing.T) {
 	s := NewRuleStore()
-	created, _ := s.Create("test", 100, "function rule(ctx) { return { match: true }; }")
+	created, _ := s.Create("test", 100, yamlRun("function rule(ctx) { return { match: true }; }"))
 
 	empty := ""
 	_, err := s.Update(created.ID, nil, nil, &empty)
@@ -145,7 +146,7 @@ func TestUpdate_EmptyScriptFails(t *testing.T) {
 
 func TestDelete(t *testing.T) {
 	s := NewRuleStore()
-	created, _ := s.Create("test", 100, "function rule(ctx) { return { match: true }; }")
+	created, _ := s.Create("test", 100, yamlRun("function rule(ctx) { return { match: true }; }"))
 
 	if err := s.Delete(created.ID); err != nil {
 		t.Fatalf("Delete: %v", err)
@@ -169,7 +170,7 @@ func TestDelete_NotFound(t *testing.T) {
 
 func TestSetEnabled(t *testing.T) {
 	s := NewRuleStore()
-	created, _ := s.Create("test", 100, "function rule(ctx) { return { match: true }; }")
+	created, _ := s.Create("test", 100, yamlRun("function rule(ctx) { return { match: true }; }"))
 
 	if !created.Enabled {
 		t.Error("expected new rule to be enabled")
@@ -200,9 +201,9 @@ func TestSetEnabled_NotFound(t *testing.T) {
 
 func TestEnabledRules_SortedByPriority(t *testing.T) {
 	s := NewRuleStore()
-	s.Create("low", 200, "function rule(ctx) { return { match: true }; }")
-	s.Create("high", 50, "function rule(ctx) { return { match: true }; }")
-	s.Create("mid", 100, "function rule(ctx) { return { match: true }; }")
+	s.Create("low", 200, yamlRun("function rule(ctx) { return { match: true }; }"))
+	s.Create("high", 50, yamlRun("function rule(ctx) { return { match: true }; }"))
+	s.Create("mid", 100, yamlRun("function rule(ctx) { return { match: true }; }"))
 
 	enabled := s.EnabledRules()
 	if len(enabled) != 3 {
@@ -223,12 +224,55 @@ func TestEnabledRules_SortedByPriority(t *testing.T) {
 
 func TestEnabledRules_OnlyEnabled(t *testing.T) {
 	s := NewRuleStore()
-	s.Create("e1", 100, "function rule(ctx) { return { match: true }; }")
-	r2, _ := s.Create("e2", 100, "function rule(ctx) { return { match: true }; }")
+	s.Create("e1", 100, yamlRun("function rule(ctx) { return { match: true }; }"))
+	r2, _ := s.Create("e2", 100, yamlRun("function rule(ctx) { return { match: true }; }"))
 	s.SetEnabled(r2.ID, false)
 
 	enabled := s.EnabledRules()
 	if len(enabled) != 1 {
 		t.Errorf("expected 1 enabled rule, got %d", len(enabled))
+	}
+}
+
+func TestCreate_RejectsLegacyJavaScript(t *testing.T) {
+	s := NewRuleStore()
+
+	// Legacy JavaScript is not a rule format anymore: the script must be a
+	// YAML rule v1 document.
+	_, err := s.Create("legacy", 100, "function rule(ctx) { return { match: true }; }")
+	if err == nil {
+		t.Fatal("expected error when the script is legacy JavaScript")
+	}
+	if !strings.Contains(err.Error(), "chiling rules migrate") {
+		t.Errorf("error should point to chiling rules migrate, got: %s", err.Error())
+	}
+	if s.Count() != 0 {
+		t.Errorf("expected no rule to be stored, got %d", s.Count())
+	}
+}
+
+func TestUpdate_RejectsLegacyJavaScript(t *testing.T) {
+	s := NewRuleStore()
+	created, err := s.Create("test", 100, yamlRun("function rule(ctx) { return { match: true }; }"))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	js := "function rule(ctx) { return { match: false }; }"
+	_, err = s.Update(created.ID, nil, nil, &js)
+	if err == nil {
+		t.Fatal("expected error when the script is legacy JavaScript")
+	}
+	if !strings.Contains(err.Error(), "chiling rules migrate") {
+		t.Errorf("error should point to chiling rules migrate, got: %s", err.Error())
+	}
+
+	// The rejected script must not replace the stored one.
+	got, err := s.Get(created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Script != yamlRun("function rule(ctx) { return { match: true }; }") {
+		t.Error("script should be unchanged after a rejected update")
 	}
 }

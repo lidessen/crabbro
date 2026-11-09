@@ -740,7 +740,17 @@ func TestHandleMITMExchange_RuleBlock(t *testing.T) {
 	rs := rule.NewRuleStore()
 	re := rule.NewRuleEngine()
 	_, err := rs.Create("block-rule", 100,
-		`export default function(ctx) { return { match: true, actions: [{type: "block", params: {status: 403, body: "blocked by rule"}}] }; }`)
+		`version: 1
+id: block-rule
+on:
+  request: {}
+request:
+  pipeline:
+    - id: block
+      uses: chiling.block
+      with:
+        status: 403
+        body: blocked by rule`)
 	if err != nil {
 		t.Fatalf("create rule: %v", err)
 	}
@@ -796,7 +806,17 @@ func TestHandleMITMExchange_RuleMock(t *testing.T) {
 	rs := rule.NewRuleStore()
 	re := rule.NewRuleEngine()
 	_, err := rs.Create("mock-rule", 100,
-		`export default function(ctx) { return { match: true, actions: [{type: "mockResponse", params: {status: 201, body: "mocked response body"}}] }; }`)
+		`version: 1
+id: mock-rule
+on:
+  request: {}
+request:
+  pipeline:
+    - id: mock
+      uses: chiling.mock-response
+      with:
+        status: 201
+        body: mocked response body`)
 	if err != nil {
 		t.Fatalf("create rule: %v", err)
 	}
@@ -852,7 +872,14 @@ func TestHandleMITMExchange_RuleAbort(t *testing.T) {
 	rs := rule.NewRuleStore()
 	re := rule.NewRuleEngine()
 	_, err := rs.Create("abort-rule", 100,
-		`export default function(ctx) { return { match: true, actions: [{type: "abort"}] }; }`)
+		`version: 1
+id: abort-rule
+on:
+  request: {}
+request:
+  pipeline:
+    - id: abort
+      uses: chiling.abort`)
 	if err != nil {
 		t.Fatalf("create rule: %v", err)
 	}
@@ -917,9 +944,17 @@ func TestHandleMITMExchange_HeaderModification(t *testing.T) {
 	rs := rule.NewRuleStore()
 	re := rule.NewRuleEngine()
 	_, err := rs.Create("header-rule", 100,
-		`export default function(ctx) {
-			return { match: true, actions: [{type: "setRequestHeader", params: {name: "X-Custom-Test", value: "header-value"}}] };
-		}`)
+		`version: 1
+id: header-rule
+on:
+  request: {}
+request:
+  pipeline:
+    - id: header
+      uses: chiling.set-request-header
+      with:
+        name: X-Custom-Test
+        value: header-value`)
 	if err != nil {
 		t.Fatalf("create rule: %v", err)
 	}
@@ -970,7 +1005,16 @@ func TestHandleMITMExchange_FullEventEmission(t *testing.T) {
 	rs := rule.NewRuleStore()
 	re := rule.NewRuleEngine()
 	_, err := rs.Create("tag-rule", 100,
-		`export default function(ctx) { return { match: true, actions: [{type: "tag", params: {tags: ["test"]}}] }; }`)
+		`version: 1
+id: tag-rule
+on:
+  request: {}
+request:
+  pipeline:
+    - id: tag
+      uses: chiling.tag
+      with:
+        tags: ["test"]`)
 	if err != nil {
 		t.Fatalf("create rule: %v", err)
 	}

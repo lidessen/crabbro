@@ -22,7 +22,18 @@ func TestScopeHidesNoiseAndKeepsTheTarget(t *testing.T) {
 	defer upstream.Close()
 
 	rs := rule.NewRuleStore()
-	script := `export default function(ctx) { return { match: true, actions: [{ type: "tag", params: { tags: ["ran"] } }] }; }`
+	script := `
+version: 1
+id: always
+on:
+  request: {}
+request:
+  pipeline:
+    - id: ran
+      uses: chiling.tag
+      with:
+        tags: ["ran"]
+`
 	if _, err := rs.Create("always", 10, script); err != nil {
 		t.Fatal(err)
 	}

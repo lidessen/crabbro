@@ -29,17 +29,41 @@ func TestResponseRewriteAndDelay(t *testing.T) {
 
 	rs := rule.NewRuleStore()
 	re := rule.NewRuleEngine()
-	script := `export default function(ctx) {
-		if (ctx.request.path !== "/v1/profile") return { match: false };
-		return { match: true, actions: [
-			{ type: "setResponseHeader", params: { name: "X-Chiling", value: "rewritten" } },
-			{ type: "removeResponseHeader", params: { name: "X-Upstream" } },
-			{ type: "rewriteResponseBody", params: { find: "secret", replace: "public" } },
-			{ type: "setResponseStatus", params: { status: 201 } },
-			{ type: "delay", params: { milliseconds: 80 } },
-			{ type: "throttle", params: { bytesPerSecond: 1000000 } }
-		] };
-	}`
+	script := `
+version: 1
+id: rewrite
+on:
+  request:
+    path: /v1/profile
+response:
+  pipeline:
+    - id: set_header
+      uses: chiling.set-response-header
+      with:
+        name: X-Chiling
+        value: rewritten
+    - id: drop_header
+      uses: chiling.remove-response-header
+      with:
+        name: X-Upstream
+    - id: rewrite_body
+      uses: chiling.rewrite-response-body
+      with:
+        find: secret
+        replace: public
+    - id: set_status
+      uses: chiling.set-response-status
+      with:
+        status: 201
+    - id: slow_down
+      uses: chiling.delay
+      with:
+        milliseconds: 80
+    - id: throttled
+      uses: chiling.throttle
+      with:
+        bytesPerSecond: 1000000
+`
 	if _, err := rs.Create("rewrite", 10, script); err != nil {
 		t.Fatal(err)
 	}
@@ -102,16 +126,31 @@ func TestWebSocketFrameRule(t *testing.T) {
 
 	rs := rule.NewRuleStore()
 	re := rule.NewRuleEngine()
-	script := `export default function(ctx) {
-		if (ctx.frame) {
-			if (ctx.frame.direction === "client" && ctx.frame.payload === "hello") {
-				return { match: true, actions: [{ type: "replaceFrame", params: { payload: "rewritten" } }] };
-			}
-			return { match: false };
-		}
-		if (ctx.request.path !== "/ws") return { match: false };
-		return { match: true, actions: [{ type: "tag", params: { tags: ["ws"] } }] };
-	}`
+	script := `
+version: 1
+id: frames
+on:
+  request:
+    path: /ws
+request:
+  pipeline:
+    - id: tag_ws
+      uses: chiling.tag
+      with:
+        tags: ["ws"]
+frame:
+  pipeline:
+    - id: rewrite_frame
+      run:
+        runtime: goja
+        script: |
+          export default function(ctx) {
+            if (ctx.frame.direction === "client" && ctx.frame.payload === "hello") {
+              return { match: true, actions: [{ type: "replaceFrame", params: { payload: "rewritten" } }] };
+            }
+            return { match: false };
+          }
+`
 	if _, err := rs.Create("frames", 10, script); err != nil {
 		t.Fatal(err)
 	}

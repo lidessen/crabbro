@@ -19,12 +19,6 @@ const (
 
 var idPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
 
-// IsYAMLRule reports whether script is a YAML rule document rather than
-// legacy JavaScript.
-func IsYAMLRule(script string) bool {
-	return strings.HasPrefix(strings.TrimSpace(script), "version:")
-}
-
 // Document is one rule file.
 type Document struct {
 	Version     int            `yaml:"version" json:"version"`

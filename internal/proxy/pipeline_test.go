@@ -97,12 +97,12 @@ func TestInvalidRuleAppliesNothing(t *testing.T) {
 	rs := rule.NewRuleStore()
 	re := rule.NewRuleEngine()
 	// A valid header action plus an invalid action must apply neither.
-	if _, err := rs.Create("bad", 100, `export default function(ctx) {
+	if _, err := rs.Create("bad", 100, yamlRule("bad", `export default function(ctx) {
 		return { match: true, actions: [
 			{ type: "setRequestHeader", params: { name: "X-From-Rule", value: "yes" } },
 			{ type: "nope", params: {} }
 		] };
-	}`); err != nil {
+	}`)); err != nil {
 		t.Fatal(err)
 	}
 	pxy := New(":0", ring.NewRequestBuffer(8), rs, re)
@@ -126,15 +126,26 @@ func TestInvalidRuleAppliesNothing(t *testing.T) {
 func TestRuleOnionSeesOuterPatch(t *testing.T) {
 	rs := rule.NewRuleStore()
 	re := rule.NewRuleEngine()
-	if _, err := rs.Create("outer", 10, `export default function(ctx) {
-		return { match: true, actions: [{ type: "setRequestHeader", params: { name: "X-Stage", value: "outer" } }] };
-	}`); err != nil {
+	outer := `
+version: 1
+id: outer
+on:
+  request: {}
+request:
+  pipeline:
+    - id: stage
+      uses: chiling.set-request-header
+      with:
+        name: X-Stage
+        value: outer
+`
+	if _, err := rs.Create("outer", 10, outer); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := rs.Create("inner", 20, `export default function(ctx) {
+	if _, err := rs.Create("inner", 20, yamlRule("inner", `export default function(ctx) {
 		if (ctx.request.headers["X-Stage"] !== "outer") return { match: false };
 		return { match: true, actions: [{ type: "mockResponse", params: { status: 201, body: "saw-outer" } }] };
-	}`); err != nil {
+	}`)); err != nil {
 		t.Fatal(err)
 	}
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -301,4 +312,25 @@ func mustParse(t *testing.T, raw string) *url.URL {
 		t.Fatal(err)
 	}
 	return u
+}
+
+// yamlRule wraps a JavaScript rule body as the single run stage of a YAML
+// rule v1 document that matches every request. The script text is kept
+// verbatim; each line is re-indented so the block scalar stays valid.
+func yamlRule(id, js string) string {
+	var b strings.Builder
+	b.WriteString("version: 1\n")
+	b.WriteString("id: " + id + "\n")
+	b.WriteString("on:\n  request: {}\n")
+	b.WriteString("request:\n  pipeline:\n")
+	b.WriteString("    - id: r\n      run:\n        runtime: goja\n        script: |\n")
+	for _, line := range strings.Split(js, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			b.WriteString("\n")
+			continue
+		}
+		b.WriteString("          " + line + "\n")
+	}
+	return b.String()
 }

@@ -185,7 +185,7 @@ func TestClientAgainstDaemon(t *testing.T) {
 		t.Fatalf("start %v %+v", err, again)
 	}
 
-	created, err := srv.RuleStore.Create("demo", 10, "function onRequest(){return {actions:[]}}")
+	created, err := srv.RuleStore.Create("demo", 10, "version: 1\nid: demo\non:\n  request:\n    method: GET\nrequest:\n  pipeline:\n    - id: noop\n      uses: chiling.tag\n      with:\n        tags: [\"demo\"]\n")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,9 +208,26 @@ func TestClientAgainstDaemon(t *testing.T) {
 	if err != nil || got.Name != "demo" {
 		t.Fatalf("get rule %v %+v", err, got)
 	}
+	updated, err := c.UpdateRule(ctx, string(created.ID), api.UpdateRuleRequest{
+		Priority: ptrTo(30),
+		Script:   ptrTo("version: 1\nid: demo\non:\n  request:\n    method: GET\nrequest:\n  pipeline:\n    - id: noop\n      uses: chiling.tag\n      with:\n        tags: [\"demo\"]\n"),
+	})
+	if err != nil || updated.Priority != 30 || updated.Version != got.Version+1 {
+		t.Fatalf("update %v %+v", err, updated)
+	}
+	renamed, err := c.UpdateRule(ctx, string(created.ID), api.UpdateRuleRequest{Name: ptrTo("demo2")})
+	if err != nil || renamed.Name != "demo2" || renamed.Priority != 30 {
+		t.Fatalf("rename %v %+v", err, renamed)
+	}
 	preview, err := c.PreviewRules(ctx, "GET", "app.example", "/login")
 	if err != nil || !preview.Complete {
 		t.Fatalf("preview %v %+v", err, preview)
+	}
+	if err := c.DeleteRule(ctx, string(created.ID)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.GetRule(ctx, string(created.ID)); err == nil {
+		t.Fatal("expected the deleted rule to be gone")
 	}
 
 	if _, err := c.ListPlugins(ctx); err == nil {
@@ -327,3 +344,5 @@ func (c *cutReader) Read(p []byte) (int, error) {
 }
 
 func (c *cutReader) Close() error { return c.r.Close() }
+
+func ptrTo[T any](v T) *T { return &v }

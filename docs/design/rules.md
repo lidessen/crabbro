@@ -1,7 +1,7 @@
 # Chiling Rule Format
 
-Status: Implemented. Inspection scope is designed in [inspect.md](./inspect.md) and is not built. Hook `emits` and `chiling.pass` are not built.
-Date: 2026-11-04
+Status: Implemented. YAML only: the standalone legacy JavaScript rule format was removed (2026-11-06); scripts that do not parse as rule documents are rejected at creation, and `chiling rules migrate` wraps an old script as a `run` stage. Inspection scope is designed in [inspect.md](./inspect.md) and is not built. Hook `emits` and `chiling.pass` are not built.
+Date: 2026-11-06
 Scope: A rule is match patterns plus a `pipeline` of stages. Plugins are specified in [plugins.md](./plugins.md). The JSON Schema is [schemas/rule.v1.json](../../schemas/rule.v1.json). Inline JavaScript is only a fallback `run` stage.
 
 ## What was read

@@ -101,19 +101,20 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader, ti
 			return nil, err
 		}
 	}
+	stream := timeout == 0
 	if c.baseURL != "" {
-		return c.roundTrip(ctx, c.baseURL, method, path, payload, timeout, c.rt)
+		return c.roundTrip(ctx, c.baseURL, method, path, payload, timeout, stream, c.rt)
 	}
 	var first error
 	if c.uds != "" {
-		resp, err := c.roundTrip(ctx, "http://localhost", method, path, payload, timeout, c.unixTransport(timeout == 0))
+		resp, err := c.roundTrip(ctx, "http://localhost", method, path, payload, timeout, stream, c.unixTransport(stream))
 		if err == nil {
 			return resp, nil
 		}
 		first = err
 	}
 	if c.tcp != "" {
-		return c.roundTrip(ctx, "http://"+c.tcp, method, path, payload, timeout, c.rt)
+		return c.roundTrip(ctx, "http://"+c.tcp, method, path, payload, timeout, stream, c.rt)
 	}
 	if first != nil {
 		return nil, first
@@ -131,7 +132,12 @@ func (c *Client) unixTransport(stream bool) http.RoundTripper {
 	}
 }
 
-func (c *Client) roundTrip(ctx context.Context, base, method, path string, payload []byte, timeout time.Duration, rt http.RoundTripper) (*http.Response, error) {
+// roundTrip performs one HTTP request over rt. A streaming call (events)
+// marks the request non-reusable: when its body is closed early, the transport
+// closes the connection at once instead of draining it for up to 50ms before
+// the FIN, which would leave the daemon serving a dead subscriber while the
+// subscriber loop already reconnected.
+func (c *Client) roundTrip(ctx context.Context, base, method, path string, payload []byte, timeout time.Duration, stream bool, rt http.RoundTripper) (*http.Response, error) {
 	var rdr io.Reader
 	if payload != nil {
 		rdr = bytes.NewReader(payload)
@@ -140,6 +146,7 @@ func (c *Client) roundTrip(ctx context.Context, base, method, path string, paylo
 	if err != nil {
 		return nil, err
 	}
+	req.Close = stream
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
@@ -157,6 +164,14 @@ func (c *Client) getJSON(ctx context.Context, path string, out any) error {
 }
 
 func (c *Client) postJSON(ctx context.Context, path string, payload, out any) error {
+	return c.methodJSON(ctx, http.MethodPost, path, payload, out)
+}
+
+func (c *Client) putJSON(ctx context.Context, path string, payload, out any) error {
+	return c.methodJSON(ctx, http.MethodPut, path, payload, out)
+}
+
+func (c *Client) methodJSON(ctx context.Context, method, path string, payload, out any) error {
 	var rdr io.Reader
 	if payload != nil {
 		b, err := json.Marshal(payload)
@@ -165,7 +180,7 @@ func (c *Client) postJSON(ctx context.Context, path string, payload, out any) er
 		}
 		rdr = bytes.NewReader(b)
 	}
-	resp, err := c.Do(ctx, http.MethodPost, path, rdr)
+	resp, err := c.Do(ctx, method, path, rdr)
 	if err != nil {
 		return err
 	}
@@ -469,6 +484,24 @@ func (c *Client) EnableRule(ctx context.Context, id string) (api.Rule, error) {
 // DisableRule turns a rule off.
 func (c *Client) DisableRule(ctx context.Context, id string) (api.Rule, error) {
 	return c.toggleRule(ctx, id, false)
+}
+
+// UpdateRule changes a rule's name, priority, or script. A nil field keeps
+// the value the rule has. This is PUT /v1/rules/{id}.
+func (c *Client) UpdateRule(ctx context.Context, id string, req api.UpdateRuleRequest) (api.Rule, error) {
+	var out api.Rule
+	err := c.putJSON(ctx, "/v1/rules/"+url.PathEscape(id), req, &out)
+	return out, err
+}
+
+// DeleteRule removes a rule. This is DELETE /v1/rules/{id}.
+func (c *Client) DeleteRule(ctx context.Context, id string) error {
+	resp, err := c.Do(ctx, http.MethodDelete, "/v1/rules/"+url.PathEscape(id), nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return decode(resp, nil)
 }
 
 // ListPlugins is GET /v1/plugins.

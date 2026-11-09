@@ -162,7 +162,9 @@ func TestMigrateRoundTrip(t *testing.T) {
 
 func TestScaffoldIsYAML(t *testing.T) {
 	out := Scaffold(&shared.Request{Method: "POST", Host: "api.example.com:443", Path: "/v1/login"}, "mock", `{"ok":true}`, "application/json")
-	if !IsYAMLRule(out) || !strings.Contains(out, "chiling.mock-response") || !strings.Contains(out, "/v1/login") {
+	// The scaffold must emit a YAML rule v1 document; IsYAMLRule is gone now
+	// that the legacy JavaScript format is removed.
+	if !strings.HasPrefix(strings.TrimSpace(out), "version:") || !strings.Contains(out, "chiling.mock-response") || !strings.Contains(out, "/v1/login") {
 		t.Fatalf("scaffold = %s", out)
 	}
 	res := NewRuleEngine().Evaluate(out, &shared.Request{Method: "POST", Host: "api.example.com", Path: "/v1/login"}, "", 0)

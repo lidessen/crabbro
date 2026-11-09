@@ -4,9 +4,9 @@ The desktop UI is a client of `chilingd`. It is not a second proxy, and it does 
 
 The wire contract is HTTP `/v1` over the owner-only Unix socket (`~/.chiling/proxy.sock`) and, as a fallback, `localhost:16379` with the bearer token in `~/.chiling/api.token`. The CLI, agents, and the UI all use that contract. JSON objects only gain fields. Renaming or removing a field is a new major version (`/v2`), not a silent change.
 
-Go types live in `pkg/api`. `pkg/client` is the typed caller. Neither package imports a UI toolkit, and neither imports `internal/`, so a later module (Go 1.27, for a [MyGo](https://mygo.egoist.dev/docs/ui) native view) can depend on them. The daemon keeps compiling against the same structs through aliases in `internal/shared`, `internal/inspect`, `internal/plugin`, and `internal/history`.
+Go types live in `pkg/api`. `pkg/client` is the typed caller. Neither package imports a UI toolkit, and neither imports `internal/` (a test pins that), so the [MyGo](https://mygo.egoist.dev/docs/ui) native view depends on them and on nothing inside the daemon. The daemon keeps compiling against the same structs through aliases in `internal/shared`, `internal/inspect`, `internal/plugin`, and `internal/history`.
 
-This tree does not contain the view. A MyGo view is an immediate-mode function of app state, called every frame, and it may read state that another goroutine updates.
+The view is `cmd/chiling-ui`, in this module (`go` 1.27, which MyGo needs). A MyGo view is an immediate-mode function of app state, called every frame, and it may read state that another goroutine updates.
 
 ## How the view should consume it
 
@@ -116,8 +116,8 @@ Resume with `?after=4` or the `Last-Event-ID: 4` header. Events with `id` less t
 
 ## What is deferred
 
-- The MyGo view itself, and a separate module that needs Go 1.27.
-- MyGo's own packaging (`mygo.json`, signing, notarization, auto-update). That should replace `scripts/install.sh` for the `.app` once the native UI exists. The script stays the installer until then, and this change does not modify it.
+- MyGo's own packaging (`mygo.json`, signing, notarization, auto-update). `scripts/install.sh` builds `cmd/chiling-ui` and installs it as the app's executable; a `mygo.json` bundle can replace that later.
+- A TypeScript client. The UI calls Go directly.
 - A TypeScript client. The UI calls Go directly.
 - Plugin inspect and invoke results stay free-form JSON because the host returns that.
 - Browser-extension or DevTools attribution. Header-derived sources are what `ListSources` returns today.

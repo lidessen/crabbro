@@ -493,7 +493,10 @@ func (s *Server) handleRulesCreate(w http.ResponseWriter, r *http.Request) {
 
 	rule, err := s.RuleStore.Create(req.Name, req.Priority, req.Script)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, shared.ErrCodeInternal, fmt.Sprintf("failed to create rule: %v", err))
+		// A script the store refuses is the caller's mistake — a rule
+		// must be a YAML document — so it answers 400, not 500.
+		writeError(w, http.StatusBadRequest, shared.ErrCodeBadRequest, err.Error(),
+			shared.ErrorDetail{Field: "script", Message: "must be a YAML rule v1 document"})
 		return
 	}
 	if req.FailureMode != "" {

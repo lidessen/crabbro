@@ -135,9 +135,9 @@ func cmdRulesCreate(cfg *clientConfig, args []string) error {
 		}
 	}
 
-	script, err := os.ReadFile(filePath)
+	script, err := readRuleFile(filePath)
 	if err != nil {
-		return fmt.Errorf("reading script file: %w", err)
+		return err
 	}
 
 	body := shared.CreateRuleRequest{
@@ -295,9 +295,9 @@ func cmdRulesTest(cfg *clientConfig, args []string) error {
 		return fmt.Errorf("--fixture <name> is required")
 	}
 
-	script, err := os.ReadFile(filePath)
+	script, err := readRuleFile(filePath)
 	if err != nil {
-		return fmt.Errorf("reading script file: %w", err)
+		return err
 	}
 
 	body := shared.TestRuleRequest{
@@ -570,4 +570,18 @@ func cmdRulesPreview(cfg *clientConfig, args []string) error {
 func readBody(r io.Reader) string {
 	data, _ := io.ReadAll(r)
 	return strings.TrimSpace(string(data))
+}
+
+// readRuleFile reads a rule script file. Rules are YAML rule v1 documents;
+// a .js file is legacy JavaScript, which no rule path accepts anymore —
+// say so and point at the converter.
+func readRuleFile(path string) (string, error) {
+	if strings.HasSuffix(strings.ToLower(path), ".js") {
+		return "", fmt.Errorf("%s is legacy JavaScript; rules are YAML — convert it first: chiling rules migrate %s", path, path)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("reading rule file: %w", err)
+	}
+	return string(b), nil
 }

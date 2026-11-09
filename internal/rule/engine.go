@@ -106,40 +106,24 @@ func (e *RuleEngine) Evaluate(script string, req *shared.Request, body string, t
 }
 
 func (e *RuleEngine) dispatch(script string, req *shared.Request, body string, phase *Phase, timeout time.Duration) Result {
-	if IsYAMLRule(script) {
-		doc, err := ParseYAML(script)
-		if err != nil {
-			return evalError(time.Now(), err.Error())
-		}
-		if diags := schemaDiagnostics(script); len(diags) > 0 {
-			return Result{
-				Format: "yaml", DurationMs: 0, SchemaValid: false,
-				Error: diags[0].Error(), SchemaErrs: diagStrings(diags),
-			}
-		}
-		return e.evalDocument(doc, req, body, phase, timeout)
+	doc, err := ParseYAML(script)
+	if err != nil {
+		return evalError(time.Now(), notYAMLMessage(err))
 	}
-	res := e.evaluate(script, req, body, phase, timeout)
-	res.Format = "js"
-	return res
+	if diags := schemaDiagnostics(script); len(diags) > 0 {
+		return Result{
+			Format: "yaml", DurationMs: 0, SchemaValid: false,
+			Error: diags[0].Error(), SchemaErrs: diagStrings(diags),
+		}
+	}
+	return e.evalDocument(doc, req, body, phase, timeout)
 }
 
-func (e *RuleEngine) evaluate(script string, req *shared.Request, body string, phase *Phase, timeout time.Duration) Result {
-	start := time.Now()
-	out, outputs, err := e.callScript(script, req, body, phase, timeout)
-	if err != nil {
-		return evalError(start, err.Error())
-	}
-	_ = outputs
-	actions, errs := ValidateOutput(out)
-	return Result{
-		Matched:     out.Match,
-		Actions:     actions,
-		DurationMs:  time.Since(start).Milliseconds(),
-		SchemaValid: len(errs) == 0,
-		SchemaErrs:  errs,
-		Error:       errString(errs),
-	}
+// notYAMLMessage says a script that does not parse as a rule document is
+// not legacy JavaScript anymore: rules are YAML, and old scripts go
+// through chiling rules migrate.
+func notYAMLMessage(err error) string {
+	return "rule scripts must be YAML rule v1 documents (legacy JavaScript is not supported; convert it with chiling rules migrate): " + err.Error()
 }
 
 // callScript runs a Goja script and returns the raw result. The script text
