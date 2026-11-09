@@ -74,9 +74,7 @@ func (a *app) titleBar(c *ui.Context, p *palette) {
 		AlignItems(ui.Center).Background(p.chrome).BorderWidth(0, 0, 1, 0).BorderColor(p.border).
 		DragWindow().Children(func() {
 		ui.Row(c).Gap(9).AlignItems(ui.Center).Children(func() {
-			ui.Row(c).Size(22, 22).Center().Radius(7).Background(p.accent.Alpha(0.16)).Children(func() {
-				ui.Icon(c, iconShell).FontSize(13).TextColor(p.accent)
-			})
+			brandMark(c, p, 22)
 			ui.Text(c, "Chiling").FontSize(13.5).FontWeight(700).LetterSpacing(0.2).TextColor(p.text).SingleLine()
 			ui.Text(c, pageTitle(a.page)).FontSize(12).TextColor(p.faint).SingleLine()
 		})
