@@ -24,6 +24,10 @@ import (
 // the page's splitter keeps it.
 var detailSplitH float32 = 270
 
+// reqMaxMs is the slowest exchange of the table's rows, which the latency
+// bars are drawn against.
+var reqMaxMs int64 = 1
+
 // replayingID is the request whose replay the detail's button is showing
 // its wait for, "" for none, and startReplayAt when the wait began. Both
 // live on the view thread, set where the click is and read as the frame
@@ -46,6 +50,10 @@ func (a *app) requestsPage(c *ui.Context, p *palette) {
 	// The rows are the search's matches; the state keeps the table's own
 	// sort, which reorders them.
 	rows := a.sortRequests(st.requests)
+	reqMaxMs = 1
+	for _, r := range rows {
+		reqMaxMs = max(reqMaxMs, r.DurationMs)
+	}
 	if len(rows) > 0 {
 		a.reqState.Key = func(row int) any { return rows[row].ID }
 		a.reqState.Selected = &a.reqSel
@@ -78,7 +86,7 @@ func (a *app) requestsPage(c *ui.Context, p *palette) {
 						{Title: "Method", ID: "method", Width: 100, Sortable: true},
 						{Title: "Host", ID: "host", Width: 200, Sortable: true},
 						{Title: "Path", ID: "path"},
-						{Title: "Time", ID: "time", Width: 72, Align: ui.End, Sortable: true},
+						{Title: "Latency", ID: "time", Width: 150, Align: ui.End, Sortable: true},
 					}
 					ui.Table(c, &a.reqState, cols, len(rows), func(row, col int) {
 						a.requestCell(c, p, rows[row], col, row == a.reqSel)
@@ -217,8 +225,18 @@ func (a *app) requestCell(c *ui.Context, p *palette, r uiRequestRow, col int, ch
 			}
 		})
 	case 4:
-		ui.Text(c, durationLabel(r.DurationMs)).FontSize(11.5).Font(mono()).
-			TextColor(p.faint).TextAlign(ui.End).SingleLine()
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Justify(ui.End).Children(func() {
+			const barW = 56
+			scol, _ := statusColor(p, r.Status)
+			ui.Box(c).Width(barW).Height(4).Radius(2).Shrink(0).Background(p.faint.Alpha(0.14)).Children(func() {
+				if r.DurationMs > 0 {
+					w := max(float32(r.DurationMs)/float32(reqMaxMs)*barW, 3)
+					ui.Box(c).Absolute().Left(0).Top(0).Bottom(0).Width(w).Radius(2).Background(scol.Alpha(0.85))
+				}
+			})
+			ui.Text(c, durationLabel(r.DurationMs)).FontSize(11.5).Font(mono()).
+				TextColor(p.muted).Width(48).TextAlign(ui.End).SingleLine()
+		})
 	}
 }
 
@@ -513,23 +531,22 @@ func readableBody(source, contentType string) (string, string) {
 	return source, "body.txt"
 }
 
-// ruleTraceSection is which rules ran on the exchange and what they did.
+// ruleTraceSection is which rules ran on the exchange and what they did:
+// one card per rule, its stages below as a pipeline down a rail.
 func (a *app) ruleTraceSection(c *ui.Context, p *palette, traces []api.RuleTrace) {
 	if len(traces) == 0 {
-		ui.Text(c, "No rule ran on this exchange.").FontSize(12).TextColor(p.faint)
+		emptyState(c, p, iconSliders, "No rule ran", "No rule matched this exchange, so it passed through untouched.", "")
 		return
 	}
 	for _, tr := range traces {
 		card(c, p, func() {
 			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-				// The verdict rises in as the card shows it, a no match
-				// after its beat, so a list of cards settles in order.
 				if tr.Matched {
 					pillEl(c, "matched", p.added, p.added.Alpha(0.13))
 				} else {
 					pillEl(c, "no match", p.faint, p.faint.Alpha(0.12))
 				}
-				ui.Text(c, string(tr.RuleID)).FontSize(12.5).FontWeight(600).TextColor(p.text).SingleLine()
+				ui.Text(c, string(tr.RuleID)).FontSize(12.5).FontWeight(650).TextColor(p.text).SingleLine()
 				if tr.Phase != "" {
 					ui.Badge(c, tr.Phase)
 				}
@@ -537,33 +554,84 @@ func (a *app) ruleTraceSection(c *ui.Context, p *palette, traces []api.RuleTrace
 				ui.Text(c, durationLabel(tr.DurationMs)).FontSize(11).Font(mono()).TextColor(p.faint).SingleLine()
 			})
 			if tr.Error != "" {
-				ui.Text(c, tr.Error).FontSize(12).Font(mono()).TextColor(p.removed).FillWidth()
+				ui.Text(c, tr.Error).FontSize(12).Font(mono()).TextColor(p.removed).FillWidth().Margin(6, 0, 0)
 			}
-			for _, act := range tr.Actions {
-				ui.Text(c, "→ "+string(act.Type)+" "+actionParams(act)).FontSize(12).Font(mono()).
-					TextColor(p.muted).FillWidth()
-			}
+			steps := 0
 			for _, stg := range tr.Stages {
-				line := stg.ID
-				if stg.Uses != "" {
-					if line != "" {
-						line += " · "
+				if stg.ID != "" || stg.Uses != "" {
+					steps++
+				}
+			}
+			if steps == 0 && len(tr.Actions) == 0 {
+				return
+			}
+			ui.Box(c).FillWidth().Height(1).Background(p.border).Margin(8, 0, 6)
+			// The pipeline: a rail down the left, a dot per stage in the
+			// color of how it went, then what the rule did at the end.
+			node := func(key string, col ui.Color, body func()) {
+				ui.Row(c.Key(key)).FillWidth().Gap(10).AlignItems(ui.Stretch).Children(func() {
+					ui.Box(c).Width(12).Shrink(0).Children(func() {
+						ui.Box(c).Absolute().Left(5).Top(0).Bottom(0).Width(2).Background(p.border)
+						ui.Box(c).Absolute().Left(1).Top(7).Width(10).Height(10).Radius(5).
+							Background(p.surface).Border(2, col)
+					})
+					ui.Column(c).Grow(1).MinWidth(0).Gap(2).Padding(4, 0, 6).Children(body)
+				})
+			}
+			for i, stg := range tr.Stages {
+				if stg.ID == "" && stg.Uses == "" {
+					continue
+				}
+				col := p.added
+				switch {
+				case stg.Error != "":
+					col = p.removed
+				case stg.Skipped:
+					col = p.faint
+				}
+				node(fmt.Sprintf("stage:%s:%d", tr.RuleID, i), col, func() {
+					ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+						name := stg.ID
+						if name == "" {
+							name = stg.Uses
+						}
+						ui.Text(c, name).FontSize(12.5).FontWeight(600).TextColor(p.text).SingleLine().Shrink(1).MinWidth(20)
+						if stg.Uses != "" && stg.ID != "" {
+							ui.Text(c, stg.Uses).FontSize(11.5).Font(mono()).TextColor(p.faint).SingleLine()
+						}
+						if stg.Skipped {
+							a.pill(c, "skipped", p.faint, p.faint.Alpha(0.12), false)
+						}
+					})
+					switch {
+					case stg.Error != "":
+						ui.Text(c, stg.Error).FontSize(12).Font(mono()).TextColor(p.removed).FillWidth()
+					case stg.Skipped && stg.SkipReason != "":
+						ui.Text(c, skipLabel(stg.SkipReason)).FontSize(12).TextColor(p.faint).FillWidth()
+					case stg.Effect != "":
+						ui.Text(c, stg.Effect).FontSize(12).TextColor(p.muted).FillWidth()
 					}
-					line += stg.Uses
-				}
-				if stg.Skipped {
-					line += " (skipped: " + stg.SkipReason + ")"
-				}
-				if stg.Effect != "" {
-					line += " — " + stg.Effect
-				}
-				if stg.Error != "" {
-					line += " — error: " + stg.Error
-				}
-				if line != "" {
-					ui.Text(c, line).FontSize(11.5).Font(mono()).TextColor(p.faint).FillWidth()
-				}
+				})
+			}
+			for i, act := range tr.Actions {
+				node(fmt.Sprintf("act:%s:%d", tr.RuleID, i), p.accent, func() {
+					ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+						pillEl(c, string(act.Type), p.accent, p.accent.Alpha(0.14))
+						ui.Text(c, actionParams(act)).FontSize(11.5).Font(mono()).TextColor(p.muted).SingleLine().Shrink(1).MinWidth(20)
+					})
+				})
 			}
 		})
 	}
+}
+
+// skipLabel says in words why a stage did not run.
+func skipLabel(reason string) string {
+	switch reason {
+	case "if":
+		return "its condition was false"
+	case "unselected":
+		return "another branch was selected"
+	}
+	return reason
 }
