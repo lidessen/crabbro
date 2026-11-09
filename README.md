@@ -1,4 +1,4 @@
-# Chiling (敕令)
+# Chiling
 
 Chiling is a local HTTP proxy that an agent drives and a person can inspect.
 The daemon owns capture, rules, and MITM. The CLI is a client of that daemon,

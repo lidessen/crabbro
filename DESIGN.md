@@ -1,4 +1,4 @@
-# Chiling (敕令) Design
+# Chiling Design
 
 > Current network data plane, middleware, and rule execution proposal: [NETWORK_PIPELINE_DESIGN.md](./NETWORK_PIPELINE_DESIGN.md). The proposal is not implemented yet. The milestone sections below are retained as historical decision records; use the status notes here and the current source for as-built behavior.
 
