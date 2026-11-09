@@ -73,13 +73,29 @@ func (a *app) titleBar(c *ui.Context, p *palette) {
 	ui.Row(c).Height(max(bar.Height, titleBarH)).Padding(0, bar.Right+10, 0, bar.Left+12).
 		AlignItems(ui.Center).Background(p.chrome).BorderWidth(0, 0, 1, 0).BorderColor(p.border).
 		DragWindow().Children(func() {
-		ui.Row(c).Gap(7).AlignItems(ui.Center).Children(func() {
-			ui.Icon(c, iconShell).FontSize(15).TextColor(p.accent)
-			ui.Text(c, "Chiling").FontSize(13).FontWeight(650).TextColor(p.text).SingleLine()
+		ui.Row(c).Gap(9).AlignItems(ui.Center).Children(func() {
+			ui.Row(c).Size(22, 22).Center().Radius(7).Background(p.accent.Alpha(0.16)).Children(func() {
+				ui.Icon(c, iconShell).FontSize(13).TextColor(p.accent)
+			})
+			ui.Text(c, "Chiling").FontSize(13.5).FontWeight(700).LetterSpacing(0.2).TextColor(p.text).SingleLine()
+			ui.Text(c, pageTitle(a.page)).FontSize(12).TextColor(p.faint).SingleLine()
 		})
 		ui.Spacer(c)
 		a.recordControls(c, p)
 	})
+}
+
+// pageTitle is the name the title bar gives the page in view.
+func pageTitle(page string) string {
+	switch page {
+	case pageRules:
+		return "/ Rules"
+	case pageTrajectory:
+		return "/ Trajectory"
+	case pageDaemon:
+		return "/ Daemon"
+	}
+	return "/ Requests"
 }
 
 // recordControls is the recording pill and its start and stop.
@@ -179,11 +195,13 @@ func (a *app) ghostButton(c *ui.Context, key, label string, icon *ui.SVG) button
 func (a *app) sidebar(c *ui.Context, p *palette) {
 	st := a.snapshotState()
 	ui.Column(c.Key("sidebar")).Width(sidebarW).Background(p.chrome).
-		Padding(10, 8).Gap(2).Children(func() {
+		Padding(12, 10).Gap(3).Children(func() {
+		ui.Text(c, "WORKSPACE").FontSize(10).FontWeight(650).LetterSpacing(0.8).TextColor(p.faint).
+			Padding(2, 9, 6).SingleLine()
 		item := func(key, label string, icon *ui.SVG, count int) {
 			on := a.page == key
-			row := ui.ButtonBase(c.Key("side:"+key)).FillWidth().Height(28).Padding(0, 9).Gap(9).
-				Radius(6).AlignItems(ui.Center).Label(label)
+			row := ui.ButtonBase(c.Key("side:"+key)).FillWidth().Height(32).Padding(0, 10).Gap(10).
+				Radius(8).AlignItems(ui.Center).Label(label)
 			switch {
 			case on:
 				row.Background(p.active)
@@ -202,17 +220,22 @@ func (a *app) sidebar(c *ui.Context, p *palette) {
 			// middle as the choice lands, and away as it leaves.
 			railH := float32(0)
 			if on {
-				railH = 14
+				railH = 16
 			}
 			railH = row.Animate("rail", railH, 160*time.Millisecond)
 			row.Children(func() {
-				ui.Box(c.Key("rail")).Absolute().Left(0).Top((28 - railH) / 2).
+				ui.Box(c.Key("rail")).Absolute().Left(0).Top((32 - railH) / 2).
 					Width(3).Height(railH).Radius(1.5).Background(p.accent)
-				ui.Icon(c, icon).FontSize(15).TextColor(col)
+				iconCol := col
+				if on {
+					iconCol = p.accent
+				}
+				ui.Icon(c, icon).FontSize(15).TextColor(iconCol)
 				ui.Text(c, label).FontSize(13).FontWeight(550).TextColor(col).SingleLine().Grow(1)
 				if count > 0 {
-					ui.Text(c, fmt.Sprint(count)).FontSize(11).Font(mono()).
-						TextColor(p.faint).SingleLine().Transition(pillMotion)
+					ui.Text(c, fmt.Sprint(count)).FontSize(10.5).FontWeight(600).Font(mono()).
+						TextColor(p.muted).Padding(1, 7).Radius(9).Background(p.faint.Alpha(0.14)).
+						SingleLine().Transition(pillMotion)
 				}
 			})
 			if row.Clicked() {
@@ -223,6 +246,31 @@ func (a *app) sidebar(c *ui.Context, p *palette) {
 		item(pageRules, "Rules", iconSliders, len(st.rules))
 		item(pageTrajectory, "Trajectory", iconClock, 0)
 		item(pageDaemon, "Daemon", iconServer, 0)
+		ui.Spacer(c)
+		a.sidebarFooter(c, p, st)
+	})
+}
+
+// sidebarFooter is the daemon in brief at the sidebar's foot: a dot for
+// how it is, and the proxy address it listens on.
+func (a *app) sidebarFooter(c *ui.Context, p *palette, st store) {
+	dotCol, label := p.faint, "Connecting…"
+	switch st.conn {
+	case connConnected:
+		dotCol, label = p.added, "Proxy running"
+	case connDown:
+		dotCol, label = p.removed, "Daemon offline"
+	}
+	ui.Column(c.Key("side:foot")).FillWidth().Padding(9, 11).Gap(3).Radius(9).
+		Background(p.surface).Border(1, p.border).Children(func() {
+		ui.Row(c).Gap(7).AlignItems(ui.Center).Children(func() {
+			dot := ui.Box(c.Key("side-dot")).Width(7).Height(7).Radius(4)
+			dot.Background(dot.AnimateColor("conn", dotCol, ui.Animation{Duration: hoverFade.Duration}))
+			ui.Text(c, label).FontSize(12).FontWeight(600).TextColor(p.text).SingleLine()
+		})
+		if st.conn == connConnected && st.status.ProxyAddr != "" {
+			ui.Text(c, st.status.ProxyAddr).FontSize(11).Font(mono()).TextColor(p.muted).SingleLine()
+		}
 	})
 }
 
@@ -272,9 +320,6 @@ func (a *app) statusBar(c *ui.Context, p *palette) {
 			ui.Text(c, fmt.Sprintf("%d hidden", st.listHiddenCount)).FontSize(11.5).TextColor(p.faint).SingleLine()
 		}
 		if st.conn == connConnected {
-			ui.Text(c, st.status.ProxyAddr).FontSize(11.5).Font(mono()).TextColor(p.faint).SingleLine()
-			ui.Text(c, fmt.Sprintf("%d requests · %d rules", st.status.RequestCount, st.status.RuleCount)).
-				FontSize(11.5).TextColor(p.muted).SingleLine()
 			if v := st.status.Version; v != "" {
 				ui.Text(c, "v"+v).FontSize(11.5).TextColor(p.faint).SingleLine()
 			}

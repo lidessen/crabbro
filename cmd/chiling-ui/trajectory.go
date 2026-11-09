@@ -20,18 +20,12 @@ const trajGroupGap = 2 * time.Minute
 func (a *app) trajectoryPage(c *ui.Context, p *palette) {
 	st := a.snapshotState()
 	if len(st.traj) == 0 {
-		riseIn(ui.Column(c.Key("traj:empty")).Fill().Center().Gap(11).Padding(24), 0).Children(func() {
-			ui.Icon(c, iconClock).FontSize(28).TextColor(p.faint)
-			ui.Column(c).Center().MaxWidthPercent(100).Gap(3).Children(func() {
-				ui.Text(c, "No steps yet").FontSize(13).FontWeight(600).TextColor(p.muted).SingleLine()
-				ui.Text(c, "Start recording, send traffic through the proxy, and the steps land here.").
-					FontSize(12).TextColor(p.faint).SingleLine()
-			})
-		})
+		emptyState(c, p, iconClock, "No steps yet",
+			"Start recording, send traffic through the proxy, and every step lands here as a timeline.", "chiling record start")
 		return
 	}
 	ui.Scroll(c).Grow(1).Children(func() {
-		ui.Column(c).FillWidth().Padding(12, 14, 20).Gap(2).Children(func() {
+		ui.Column(c).FillWidth().Padding(14, 16, 22).Gap(2).Children(func() {
 			for i, it := range st.traj {
 				// A pause between steps is a chapter of its own: a
 				// hairline keeps the read of it.
@@ -40,7 +34,7 @@ func (a *app) trajectoryPage(c *ui.Context, p *palette) {
 						ui.Box(c).FillWidth().Height(1).Background(p.faint.Alpha(0.28))
 					})
 				}
-				row := ui.Row(c).FillWidth().Gap(9).AlignItems(ui.Center).Padding(4, 8).Radius(6)
+				row := ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Padding(6, 10).Radius(8)
 				if row.Hovered() {
 					row.Background(p.hover)
 				}
@@ -49,6 +43,7 @@ func (a *app) trajectoryPage(c *ui.Context, p *palette) {
 					ui.Text(c, trajTime(it.At)).FontSize(11).Font(mono()).MinWidth(54).
 						TextColor(p.faint).SingleLine().ContentTransition(ui.ContentTransition{Numeric: true})
 					kindCol, kindBg := kindColor(p, it.Kind)
+					ui.Box(c).Width(7).Height(7).Radius(4).Background(kindCol).Shrink(0)
 					a.pill(c, activityKind(it.Kind), kindCol, kindBg, false)
 					ui.Text(c, it.Summary).FontSize(12.5).TextColor(p.text).SingleLine().Shrink(1).MinWidth(40)
 					if it.RequestID != "" {

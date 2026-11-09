@@ -98,14 +98,9 @@ func (a *app) rulesPage(c *ui.Context, p *palette) {
 // sliders mark and the command that scaffolds the first one from a
 // capture, where the empty table would sit.
 func (a *app) rulesEmpty(c *ui.Context, p *palette) {
-	ui.Column(c.Key("rules:empty")).Fill().Center().Gap(11).Padding(24).Children(func() {
-		ui.Icon(c, iconSliders).FontSize(28).TextColor(p.faint)
-		ui.Column(c).Center().Gap(3).Children(func() {
-			ui.Text(c, "No rules yet").FontSize(13).FontWeight(600).TextColor(p.text).SingleLine()
-			ui.Text(c, "chiling rules from req_1 scaffolds one from a capture").
-				FontSize(11.5).Font(mono()).TextColor(p.muted).SingleLine()
-		})
-	})
+	emptyState(c, p, iconSliders, "No rules yet",
+		"Rules rewrite, mock or block traffic. Scaffold the first one from a captured request.",
+		"chiling rules from req_1 --action mock")
 }
 
 // methodOptions are the match methods the native select offers, "any"
@@ -199,8 +194,8 @@ func (a *app) ruleEditor(c *ui.Context, p *palette, st store, dirty bool) {
 			ui.Column(c).Grow(1).BorderWidth(1, 0, 0, 0).BorderColor(p.border)
 			return
 		}
-		ui.Column(c).Grow(1).Center().Padding(20).BorderWidth(1, 0, 0, 0).BorderColor(p.border).Children(func() {
-			ui.Text(c, "Choose a rule to read and edit its script.").FontSize(13).TextColor(p.faint)
+		ui.Column(c).Grow(1).BorderWidth(1, 0, 0, 0).BorderColor(p.border).Children(func() {
+			emptyState(c, p, iconSliders, "Select a rule", "Choose a rule to read and edit its script.", "")
 		})
 		return
 	}

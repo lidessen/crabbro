@@ -2,10 +2,19 @@ package main
 
 import "github.com/egoist/mygo/ui"
 
+// teal is the second voice beside the coral accent: it tints what the
+// coral would otherwise share with the errors, as POST does.
+func (p *palette) teal() ui.Color {
+	if p.dark {
+		return ui.Hex("#5ccfbf")
+	}
+	return ui.Hex("#1c8a7c")
+}
+
 // palette is the look of the window, in the roles Mayoi's workbench uses:
 // the chrome of the shell (title bar, sidebar, status bar), the editor the
-// pages sit on, the faces of controls, and the accent and its tints. The
-// colors are Mayoi's, so the two apps read as kin.
+// pages sit on, the faces of controls, and the accent and its tints. Chiling's own
+// voice is the coral of its crab, over quiet warm-neutral greys.
 type palette struct {
 	dark bool
 
@@ -35,28 +44,28 @@ type palette struct {
 func darkPalette() *palette {
 	p := &palette{
 		dark:           true,
-		editor:         ui.Hex("#18181d"),
-		chrome:         ui.Hex("#131317"),
-		border:         ui.Hex("#26262e"),
+		editor:         ui.Hex("#17171a"),
+		chrome:         ui.Hex("#111113"),
+		border:         ui.Hex("#2a2a30"),
 		hover:          ui.RGBA(255, 255, 255, 0.045),
-		active:         ui.RGBA(139, 124, 246, 0.16),
-		text:           ui.Hex("#d6d6de"),
-		muted:          ui.Hex("#8c8c99"),
-		faint:          ui.Hex("#666672"),
-		accent:         ui.Hex("#8b7cf6"),
-		fill:           ui.Hex("#7260e3"),
+		active:         ui.RGBA(255, 138, 91, 0.14),
+		text:           ui.Hex("#e8e5e1"),
+		muted:          ui.Hex("#9a9aa6"),
+		faint:          ui.Hex("#6e6e7a"),
+		accent:         ui.Hex("#ff8a5b"),
+		fill:           ui.Hex("#d9532a"),
 		fillText:       ui.Hex("#ffffff"),
-		dangerFill:     ui.Hex("#bb3253"),
-		surface:        ui.Hex("#202027"),
-		surfaceHover:   ui.Hex("#272730"),
-		surfacePressed: ui.Hex("#2e2e38"),
+		dangerFill:     ui.Hex("#c42b4d"),
+		surface:        ui.Hex("#1f1f24"),
+		surfaceHover:   ui.Hex("#28282e"),
+		surfacePressed: ui.Hex("#303038"),
 		scrollbar:      ui.RGBA(255, 255, 255, 0.16),
 		inverse:        ui.Hex("#2b2b34"),
 		inverseText:    ui.Hex("#e6e6ee"),
-		focus:          ui.RGBA(139, 124, 246, 0.55),
+		focus:          ui.RGBA(255, 138, 91, 0.5),
 		added:          ui.Hex("#a9d48f"),
 		changed:        ui.Hex("#8fb4ff"),
-		removed:        ui.Hex("#f0718b"),
+		removed:        ui.Hex("#f5627f"),
 	}
 	p.fillHover, p.fillPressed = p.fill.Mix(white, 0.1), p.fill.Mix(black, 0.15)
 	return p
@@ -64,25 +73,25 @@ func darkPalette() *palette {
 
 func lightPalette() *palette {
 	p := &palette{
-		editor:         ui.Hex("#fcfcfd"),
-		chrome:         ui.Hex("#f4f4f7"),
-		border:         ui.Hex("#e4e4ea"),
+		editor:         ui.Hex("#fdfcfb"),
+		chrome:         ui.Hex("#f6f4f2"),
+		border:         ui.Hex("#e8e5e1"),
 		hover:          ui.RGBA(0, 0, 0, 0.04),
-		active:         ui.RGBA(109, 91, 208, 0.12),
-		text:           ui.Hex("#2a2a33"),
-		muted:          ui.Hex("#6c6c79"),
-		faint:          ui.Hex("#8e8e9a"),
-		accent:         ui.Hex("#6d5bd0"),
-		fill:           ui.Hex("#6d5bd0"),
+		active:         ui.RGBA(224, 89, 42, 0.11),
+		text:           ui.Hex("#26262c"),
+		muted:          ui.Hex("#6b6a72"),
+		faint:          ui.Hex("#8f8e97"),
+		accent:         ui.Hex("#c9431b"),
+		fill:           ui.Hex("#d9532a"),
 		fillText:       ui.Hex("#ffffff"),
-		dangerFill:     ui.Hex("#d0365a"),
+		dangerFill:     ui.Hex("#c8264f"),
 		surface:        ui.Hex("#ffffff"),
-		surfaceHover:   ui.Hex("#f2f2f6"),
-		surfacePressed: ui.Hex("#eaeaf0"),
+		surfaceHover:   ui.Hex("#f3f1ee"),
+		surfacePressed: ui.Hex("#ebe8e4"),
 		scrollbar:      ui.RGBA(0, 0, 0, 0.18),
-		inverse:        ui.Hex("#2a2a33"),
-		inverseText:    ui.Hex("#f4f4f7"),
-		focus:          ui.RGBA(109, 91, 208, 0.5),
+		inverse:        ui.Hex("#26262c"),
+		inverseText:    ui.Hex("#f6f4f2"),
+		focus:          ui.RGBA(224, 89, 42, 0.45),
 		added:          ui.Hex("#3d8a28"),
 		changed:        ui.Hex("#2a5bd7"),
 		removed:        ui.Hex("#c8264f"),
