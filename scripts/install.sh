@@ -214,6 +214,8 @@ write_plist() {
 	<string>${VERSION}</string>
 	<key>CFBundleExecutable</key>
 	<string>${APP_NAME}</string>
+	<key>CFBundleIconFile</key>
+	<string>Chiling.icns</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleInfoDictionaryVersion</key>
@@ -251,6 +253,7 @@ assemble_app() {
 	local macos="${app}/Contents/MacOS"
 	local res="${app}/Contents/Resources"
 	mkdir -p "$macos" "$res"
+	cp "$ROOT/assets/logos/Chiling.icns" "$res/"
 	cp "$bins/chiling" "$bins/chilingd" "$bins/chiling-plugin-host" "$macos/"
 	chmod 755 "$macos/chiling" "$macos/chilingd" "$macos/chiling-plugin-host"
 	write_launcher "$macos/${APP_NAME}"
