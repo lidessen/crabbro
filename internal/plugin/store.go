@@ -9,8 +9,19 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
+
+// packageIDPattern is what a package id may be: an npm name, optionally
+// scoped. It becomes a directory name, so nothing that climbs or is absolute
+// can pass.
+var packageIDPattern = regexp.MustCompile(`^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$`)
+
+// knownPermissions are the grants a manifest may declare.
+var knownPermissions = map[string]bool{
+	"net": true, "net:private": true, "fs:data": true, "history:read": true, "secrets:read": true, "native": true,
+}
 
 // InstanceRecord is one named configuration of a package.
 type InstanceRecord struct {
@@ -70,10 +81,11 @@ func (m *Manager) Install(src string, enable bool) (PackageRecord, error) {
 	if err := checkAPI(meta.API); err != nil {
 		return PackageRecord{}, err
 	}
-	if err := rejectNative(src, meta.Permissions); err != nil {
-		return PackageRecord{}, err
+	pkgRoot := filepath.Join(m.Dir, "packages")
+	dest := filepath.Join(pkgRoot, meta.ID)
+	if rel, err := filepath.Rel(pkgRoot, dest); err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		return PackageRecord{}, fmt.Errorf("invalid package id")
 	}
-	dest := filepath.Join(m.Dir, "packages", meta.ID)
 	if err := os.RemoveAll(dest); err != nil {
 		return PackageRecord{}, err
 	}
@@ -83,13 +95,15 @@ func (m *Manager) Install(src string, enable bool) (PackageRecord, error) {
 	cmd := exec.Command("npm", "ci", "--ignore-scripts")
 	cmd.Dir = dest
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "npm_config_ignore_scripts=true"}
-	out, err := cmd.CombinedOutput()
-	if err != nil {
+	if _, err := cmd.CombinedOutput(); err != nil {
+		_ = os.RemoveAll(dest)
 		return PackageRecord{}, fmt.Errorf("npm ci failed")
 	}
-	_ = out
-	if _, err := os.Stat(filepath.Join(dest, "pwned")); err == nil {
-		return PackageRecord{}, fmt.Errorf("lifecycle script ran")
+	// Native addons live in dependencies, which exist only after npm ci, so
+	// the scan runs on the installed tree.
+	if err := rejectNative(dest, meta.Permissions); err != nil {
+		_ = os.RemoveAll(dest)
+		return PackageRecord{}, err
 	}
 	sum, _ := fileDigest(filepath.Join(dest, "package.json"))
 	rec := PackageRecord{
@@ -272,6 +286,14 @@ func readPackage(dir string) (packageMeta, error) {
 	id := raw.Chiling.ID
 	if id == "" {
 		id = raw.Name
+	}
+	if !packageIDPattern.MatchString(id) {
+		return packageMeta{}, fmt.Errorf("package id must be an npm package name")
+	}
+	for _, perm := range raw.Chiling.Permissions {
+		if !knownPermissions[perm] {
+			return packageMeta{}, fmt.Errorf("unknown permission %q", perm)
+		}
 	}
 	entry := raw.Chiling.Entry
 	if entry == "" || strings.Contains(entry, "..") || filepath.IsAbs(entry) {

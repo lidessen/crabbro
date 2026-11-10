@@ -4,8 +4,10 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
 	"embed"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -45,6 +47,7 @@ type Manager struct {
 	cmd       *exec.Cmd
 	conn      net.Conn
 	pending   map[string]chan map[string]any
+	active    map[string]bool // packages the host has been told to start, this host run
 	writeMu   sync.Mutex
 	lastBeat  time.Time
 	misses    int
@@ -53,6 +56,7 @@ type Manager struct {
 	seq       int
 	closed    bool
 	sock      string
+	sockDir   string
 	stopBeat  chan struct{}
 	stderr    bytes.Buffer
 }
@@ -109,17 +113,19 @@ func (m *Manager) stopLocked() {
 		m.stopBeat = nil
 	}
 	if m.conn != nil {
-		_ = m.write(map[string]any{"type": "shutdown", "id": "shutdown"})
+		_ = m.writeTo(m.conn, map[string]any{"type": "shutdown", "id": "shutdown"})
 		_ = m.conn.Close()
 		m.conn = nil
+		m.active = nil
 	}
 	if m.cmd != nil && m.cmd.Process != nil {
 		_ = m.cmd.Process.Kill()
 		_, _ = m.cmd.Process.Wait()
 		m.cmd = nil
 	}
-	if m.sock != "" {
-		_ = os.Remove(m.sock)
+	if m.sockDir != "" {
+		_ = os.RemoveAll(m.sockDir)
+		m.sockDir = ""
 	}
 }
 
@@ -224,9 +230,6 @@ func (m *Manager) Invoke(ctx context.Context, req rule.InvokeRequest) (rule.Invo
 			secrets[name] = v
 		}
 	}
-	if err := m.activate(rec, cfg); err != nil {
-		return rule.InvokeResult{}, err
-	}
 	timeout := req.Timeout
 	if timeout <= 0 {
 		timeout = 500 * time.Millisecond
@@ -235,18 +238,48 @@ func (m *Manager) Invoke(ctx context.Context, req rule.InvokeRequest) (rule.Invo
 	if kind == "" {
 		kind = "uses"
 	}
+	// A plugin sees the instance's credentials only if its manifest asked
+	// for secrets:read. Every credential is still scrubbed from what it
+	// returns, whether or not it was handed over.
+	visible := map[string]string{}
+	if hasPerm(rec.Permissions, "secrets:read") {
+		visible = secrets
+	}
 	msg := map[string]any{
 		"type": kind, "package": rec.ID, "instance": req.Instance, "capability": req.Capability,
 		"hook": req.Capability, "with": req.With, "env": req.Env, "payload": req.Payload,
-		"config": cfg, "secrets": secrets, "arguments": req.With,
+		"config": cfg, "secrets": visible, "arguments": req.With,
 	}
-	reply, err := m.roundTrip(ctx, msg, timeout)
-	if err != nil {
-		_ = m.terminate(rec.ID)
-		return rule.InvokeResult{}, fmt.Errorf("%s: %w", kind, err)
-	}
-	if errMsg, _ := reply["error"].(string); errMsg != "" {
-		return rule.InvokeResult{}, fmt.Errorf("plugin failed")
+	// The host may have dropped the worker since the last call (idle sweep,
+	// crash). It says so at once; start it again and ask once more.
+	var reply map[string]any
+	for attempt := 0; ; attempt++ {
+		if err := m.activate(rec, cfg); err != nil {
+			return rule.InvokeResult{}, err
+		}
+		var err error
+		call := map[string]any{}
+		for k, v := range msg {
+			call[k] = v
+		}
+		reply, err = m.roundTrip(ctx, call, timeout)
+		if err != nil {
+			// A caller that gave up is not the plugin's fault; a plugin
+			// that overran its deadline is stopped.
+			if !errors.Is(err, context.Canceled) {
+				_ = m.terminate(rec.ID)
+			}
+			return rule.InvokeResult{}, fmt.Errorf("%s: %w", kind, err)
+		}
+		errMsg, _ := reply["error"].(string)
+		if attempt == 0 && (errMsg == "plugin is not active" || errMsg == "plugin exited") {
+			m.forget(rec.ID)
+			continue
+		}
+		if errMsg != "" {
+			return rule.InvokeResult{}, fmt.Errorf("plugin failed")
+		}
+		break
 	}
 	result, _ := reply["result"].(map[string]any)
 	if result == nil {
@@ -297,6 +330,12 @@ func (m *Manager) Describe(id string) (map[string]any, error) {
 }
 
 func (m *Manager) activate(rec PackageRecord, cfg map[string]any) error {
+	m.mu.Lock()
+	known := m.active[rec.ID]
+	m.mu.Unlock()
+	if known {
+		return nil
+	}
 	_, err := m.roundTrip(context.Background(), map[string]any{
 		"type": "activate", "package": rec.ID, "entry": filepath.Join(rec.Path, rec.Entry),
 		"isolation": rec.Isolation, "heapMb": m.HeapMB, "permissions": rec.Permissions, "config": cfg,
@@ -304,10 +343,23 @@ func (m *Manager) activate(rec PackageRecord, cfg map[string]any) error {
 	if err != nil {
 		return fmt.Errorf("activate: %w", err)
 	}
+	m.mu.Lock()
+	if m.active != nil {
+		m.active[rec.ID] = true
+	}
+	m.mu.Unlock()
 	return nil
 }
 
+// forget drops what the manager believes about a package being started.
+func (m *Manager) forget(id string) {
+	m.mu.Lock()
+	delete(m.active, id)
+	m.mu.Unlock()
+}
+
 func (m *Manager) terminate(id string) error {
+	m.forget(id)
 	_, err := m.roundTrip(context.Background(), map[string]any{"type": "terminate", "package": id}, time.Second)
 	return err
 }
@@ -326,8 +378,20 @@ func (m *Manager) ensureHost() error {
 	if err := extractRuntime(dir); err != nil {
 		return err
 	}
-	sock := filepath.Join(os.TempDir(), fmt.Sprintf("chiling-plugin-%d-%d.sock", os.Getpid(), time.Now().UnixNano()))
-	_ = os.Remove(sock)
+	// The socket lives in a directory only this user can enter (MkdirTemp
+	// makes it 0700), so its own mode and the moment it is changed do not
+	// matter, on any platform.
+	sockDir, err := os.MkdirTemp("", "chiling-host-")
+	if err != nil {
+		return err
+	}
+	sock := filepath.Join(sockDir, "host.sock")
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		_ = os.RemoveAll(sockDir)
+		return err
+	}
+	token := hex.EncodeToString(raw[:])
 	cmd := exec.Command(node, filepath.Join(dir, "host.mjs"), sock)
 	m.stderr.Reset()
 	cmd.Stderr = &m.stderr
@@ -335,12 +399,15 @@ func (m *Manager) ensureHost() error {
 		"PATH=" + os.Getenv("PATH"),
 		"HOME=" + os.Getenv("HOME"),
 		"CHILING_PLUGIN_HEARTBEAT_MS=" + strconv.Itoa(int(m.Heartbeat/time.Millisecond)),
+		"CHILING_PLUGIN_TOKEN=" + token,
 	}
 	cmd.Dir = dir
 	if err := cmd.Start(); err != nil {
+		_ = os.RemoveAll(sockDir)
 		return err
 	}
 	m.cmd = cmd
+	m.sockDir = sockDir
 	deadline := time.Now().Add(5 * time.Second)
 	var conn net.Conn
 	for {
@@ -351,20 +418,22 @@ func (m *Manager) ensureHost() error {
 		}
 		if time.Now().After(deadline) {
 			_ = cmd.Process.Kill()
+			_ = os.RemoveAll(sockDir)
 			return fmt.Errorf("plugin host did not listen")
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	_ = os.Chmod(sock, 0o600)
 	m.conn = conn
 	m.sock = sock
 	m.pending = map[string]chan map[string]any{}
+	m.active = map[string]bool{}
+	go m.readLoop(conn, m.pending)
 	m.lastBeat = time.Now()
 	m.misses = 0
 	m.stopBeat = make(chan struct{})
 	go m.watch(m.stopBeat, cmd)
 	m.mu.Unlock()
-	_, err = m.roundTripLocked(map[string]any{"type": "hello", "api": "1.0.0", "token": "local"}, 2*time.Second)
+	_, err = m.roundTrip(context.Background(), map[string]any{"type": "hello", "api": "1.0.0", "token": token}, 2*time.Second)
 	m.mu.Lock()
 	if err != nil {
 		m.stopLocked()
@@ -402,32 +471,25 @@ func (m *Manager) watch(stop chan struct{}, cmd *exec.Cmd) {
 	}
 }
 
-func (m *Manager) readFrame() (map[string]any, error) {
-	m.mu.Lock()
-	conn := m.conn
-	m.mu.Unlock()
-	if conn == nil {
-		return nil, fmt.Errorf("plugin host is not running")
-	}
-	var n uint32
-	if err := binary.Read(conn, binary.BigEndian, &n); err != nil {
-		return nil, err
-	}
-	if n == 0 || n > 8*1024*1024 {
-		return nil, fmt.Errorf("bad frame")
-	}
-	buf := make([]byte, n)
-	if _, err := io.ReadFull(conn, buf); err != nil {
-		return nil, err
-	}
-	var msg map[string]any
-	if err := json.Unmarshal(buf, &msg); err != nil {
-		return nil, err
-	}
-	return msg, nil
-}
-
-func (m *Manager) readLoop(conn net.Conn) {
+// readLoop is the only reader of the host connection. It hands each reply
+// to the call waiting for its id, so calls to different plugins run side by
+// side, and it fails every waiter if the connection ends.
+func (m *Manager) readLoop(conn net.Conn, pending map[string]chan map[string]any) {
+	defer func() {
+		m.pendingMu.Lock()
+		for id, ch := range pending {
+			close(ch)
+			delete(pending, id)
+		}
+		m.pendingMu.Unlock()
+		// A host that went away on its own is replaced on the next call,
+		// rather than left in place with a dead socket.
+		m.mu.Lock()
+		if m.conn == conn && !m.closed {
+			m.stopLocked()
+		}
+		m.mu.Unlock()
+	}()
 	r := bufio.NewReader(conn)
 	for {
 		var n uint32
@@ -447,33 +509,27 @@ func (m *Manager) readLoop(conn net.Conn) {
 		}
 		switch msg["type"] {
 		case "heartbeat":
-			m.mu.Lock()
-			m.lastBeat = time.Now()
-			m.misses = 0
-			if f, ok := msg["rssBytes"].(float64); ok {
-				m.rss = int64(f)
-			}
-			if f, ok := msg["workers"].(float64); ok {
-				m.workers = int(f)
-			}
-			m.mu.Unlock()
+			m.noteHeartbeat(msg)
 		case "broker":
-			go m.handleBroker(msg)
+			go m.handleBroker(conn, msg)
 		case "log":
 			// Operator log. Not a trace, and not forwarded with secrets.
 		default:
 			id, _ := msg["id"].(string)
 			m.pendingMu.Lock()
-			ch := m.pending[id]
+			ch := pending[id]
 			m.pendingMu.Unlock()
 			if ch != nil {
-				ch <- msg
+				select {
+				case ch <- msg:
+				default:
+				}
 			}
 		}
 	}
 }
 
-func (m *Manager) handleBroker(msg map[string]any) {
+func (m *Manager) handleBroker(conn net.Conn, msg map[string]any) {
 	op, _ := msg["op"].(string)
 	pkg, _ := msg["package"].(string)
 	id, _ := msg["id"].(string)
@@ -494,6 +550,10 @@ func (m *Manager) handleBroker(msg map[string]any) {
 	case "fs.read", "fs.write":
 		body, err = m.brokerFS(pkg, op, payload)
 	case "secrets.get":
+		if !m.packageHasPerm(pkg, "secrets:read") {
+			err = fmt.Errorf("permission denied")
+			break
+		}
 		name, _ := payload["name"].(string)
 		instance, _ := payload["instance"].(string)
 		if instance == "" {
@@ -513,9 +573,7 @@ func (m *Manager) handleBroker(msg map[string]any) {
 		reply["error"] = "broker failed"
 		reply["payload"] = nil
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	_ = m.write(reply)
+	_ = m.writeTo(conn, reply)
 }
 
 func (m *Manager) decisionAsk(payload map[string]any) (any, error) {
@@ -532,7 +590,9 @@ func (m *Manager) decisionAsk(payload map[string]any) (any, error) {
 			}
 		}
 	}
-	res, err := m.Decision.Ask(context.Background(), prompt, kind, options)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	res, err := m.Decision.Ask(ctx, prompt, kind, options)
 	out := map[string]any{
 		"choice": res.Choice, "text": res.Text, "decisionDiagnostic": res.Diagnostic,
 		"model": res.Model, "provider": res.Provider,
@@ -541,6 +601,14 @@ func (m *Manager) decisionAsk(payload map[string]any) (any, error) {
 		out["noul"] = *res.Noul
 	}
 	return out, err
+}
+
+// packageHasPerm reports whether an installed package declared a permission.
+func (m *Manager) packageHasPerm(pkg, perm string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	rec := m.packageByID(pkg)
+	return rec != nil && hasPerm(rec.Permissions, perm)
 }
 
 func (m *Manager) brokerFS(pkg, op string, payload map[string]any) (any, error) {
@@ -580,49 +648,47 @@ func (m *Manager) brokerFS(pkg, op string, payload map[string]any) (any, error) 
 	return map[string]any{"ok": true}, nil
 }
 
+// roundTrip sends one frame and waits for the reply with its id. Only the
+// send and the bookkeeping are serialized; the wait is not, so a slow plugin
+// does not hold up another. The caller's context and the timeout both end
+// the wait.
 func (m *Manager) roundTrip(ctx context.Context, msg map[string]any, timeout time.Duration) (map[string]any, error) {
-	return m.roundTripLocked(msg, timeout)
-}
-
-func (m *Manager) roundTripLocked(msg map[string]any, timeout time.Duration) (map[string]any, error) {
-	m.pendingMu.Lock()
-	defer m.pendingMu.Unlock()
 	m.mu.Lock()
-	if m.conn == nil {
+	conn, pending := m.conn, m.pending
+	if conn == nil {
 		m.mu.Unlock()
 		return nil, fmt.Errorf("plugin host is not running")
 	}
 	m.seq++
 	id := fmt.Sprintf("m%d", m.seq)
-	msg["id"] = id
-	if m.conn != nil {
-		_ = m.conn.SetReadDeadline(time.Now().Add(timeout))
-	}
-	err := m.write(msg)
 	m.mu.Unlock()
-	if err != nil {
+	msg["id"] = id
+
+	ch := make(chan map[string]any, 1)
+	m.pendingMu.Lock()
+	pending[id] = ch
+	m.pendingMu.Unlock()
+	defer func() {
+		m.pendingMu.Lock()
+		delete(pending, id)
+		m.pendingMu.Unlock()
+	}()
+
+	if err := m.writeTo(conn, msg); err != nil {
 		return nil, err
 	}
-	deadline := time.Now().Add(timeout)
-	for {
-		frame, err := m.readFrame()
-		if err != nil {
-			return nil, fmt.Errorf("plugin timed out: %s", strings.TrimSpace(m.stderr.String()))
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case frame, ok := <-ch:
+		if !ok {
+			return nil, fmt.Errorf("plugin host exited")
 		}
-		switch frame["type"] {
-		case "heartbeat":
-			m.noteHeartbeat(frame)
-		case "broker":
-			m.handleBroker(frame)
-		case "log":
-		default:
-			if frame["id"] == id {
-				return frame, nil
-			}
-		}
-		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("plugin timed out: %s", strings.TrimSpace(m.stderr.String()))
-		}
+		return frame, nil
+	case <-timer.C:
+		return nil, fmt.Errorf("plugin timed out")
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
 }
 
@@ -639,22 +705,22 @@ func (m *Manager) noteHeartbeat(frame map[string]any) {
 	}
 }
 
-func (m *Manager) write(msg map[string]any) error {
-	if m.conn == nil {
+// writeTo sends one length-prefixed frame. One writer at a time, so frames
+// from concurrent calls do not interleave.
+func (m *Manager) writeTo(conn net.Conn, msg map[string]any) error {
+	if conn == nil {
 		return fmt.Errorf("plugin host is not running")
 	}
 	body, err := json.Marshal(msg)
 	if err != nil {
 		return err
 	}
+	frame := make([]byte, 4+len(body))
+	binary.BigEndian.PutUint32(frame, uint32(len(body)))
+	copy(frame[4:], body)
 	m.writeMu.Lock()
 	defer m.writeMu.Unlock()
-	var head [4]byte
-	binary.BigEndian.PutUint32(head[:], uint32(len(body)))
-	if _, err := m.conn.Write(head[:]); err != nil {
-		return err
-	}
-	_, err = m.conn.Write(body)
+	_, err = conn.Write(frame)
 	return err
 }
 

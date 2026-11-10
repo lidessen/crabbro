@@ -2,9 +2,12 @@ package rule
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/dop251/goja"
@@ -105,18 +108,57 @@ func (e *RuleEngine) Evaluate(script string, req *shared.Request, body string, t
 	return e.dispatch(script, req, body, nil, timeout)
 }
 
-func (e *RuleEngine) dispatch(script string, req *shared.Request, body string, phase *Phase, timeout time.Duration) Result {
-	doc, err := ParseYAML(script)
-	if err != nil {
-		return evalError(time.Now(), notYAMLMessage(err))
+// compiled is a rule script parsed and checked once: the document, and the
+// diagnostics that stop it from running. A rule is evaluated for every
+// exchange that reaches it, so none of this is repeated per request.
+type compiled struct {
+	doc      *Document
+	parseErr error
+	schema   []Diagnostic
+	semantic []Diagnostic
+}
+
+// maxCompiled bounds the cache. Scripts are immutable strings, so an entry
+// never goes stale; when the cache is full it starts over.
+const maxCompiled = 1024
+
+var compileCache sync.Map // [32]byte (sha256 of the script) -> *compiled
+
+var compileCount atomic.Int64
+
+func compileScript(script string) *compiled {
+	key := sha256.Sum256([]byte(script))
+	if v, ok := compileCache.Load(key); ok {
+		return v.(*compiled)
 	}
-	if diags := schemaDiagnostics(script); len(diags) > 0 {
-		return Result{
-			Format: "yaml", DurationMs: 0, SchemaValid: false,
-			Error: diags[0].Error(), SchemaErrs: diagStrings(diags),
+	c := &compiled{}
+	c.doc, c.parseErr = ParseYAML(script)
+	if c.parseErr == nil {
+		c.schema = schemaDiagnostics(script)
+		if len(c.schema) == 0 {
+			c.semantic = semanticDiagnostics(c.doc, true, nil)
 		}
 	}
-	return e.evalDocument(doc, req, body, phase, timeout)
+	if compileCount.Add(1) > maxCompiled {
+		compileCache.Range(func(k, _ any) bool { compileCache.Delete(k); return true })
+		compileCount.Store(1)
+	}
+	compileCache.Store(key, c)
+	return c
+}
+
+func (e *RuleEngine) dispatch(script string, req *shared.Request, body string, phase *Phase, timeout time.Duration) Result {
+	c := compileScript(script)
+	if c.parseErr != nil {
+		return evalError(time.Now(), notYAMLMessage(c.parseErr))
+	}
+	if len(c.schema) > 0 {
+		return Result{
+			Format: "yaml", DurationMs: 0, SchemaValid: false,
+			Error: c.schema[0].Error(), SchemaErrs: diagStrings(c.schema),
+		}
+	}
+	return e.evalDocument(c.doc, c.semantic, req, body, phase, timeout)
 }
 
 // notYAMLMessage says a script that does not parse as a rule document is

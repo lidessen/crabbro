@@ -1,6 +1,6 @@
 # Chiling Rule Format
 
-Status: Implemented. YAML only: the standalone legacy JavaScript rule format was removed (2026-11-06); scripts that do not parse as rule documents are rejected at creation, and `chiling rules migrate` wraps an old script as a `run` stage. Inspection scope is designed in [inspect.md](./inspect.md) and is not built. Hook `emits` and `chiling.pass` are not built.
+Status: Implemented, with the corrections in the 2026-11-10 review (one shared deadline per rule, `timeout` honoured, `parallel` bounded wait, last-known-good on a broken file, atomic commit). YAML only: the standalone legacy JavaScript rule format was removed (2026-11-06); scripts that do not parse as rule documents are rejected at creation, and `chiling rules migrate` wraps an old script as a `run` stage. Inspection scope is designed in [inspect.md](./inspect.md) and is not built. Hook `emits` and `chiling.pass` are not built.
 Date: 2026-11-06
 Scope: A rule is match patterns plus a `pipeline` of stages. Plugins are specified in [plugins.md](./plugins.md). The JSON Schema is [schemas/rule.v1.json](../../schemas/rule.v1.json). Inline JavaScript is only a fallback `run` stage.
 
@@ -37,6 +37,8 @@ request:
 
 `enabled: false` still loads. It does not run. `chiling rules preview` counts it separately.
 
+If a live file stops loading (a bad edit), the rule keeps running as it last loaded and `config status` reports the file; deleting the file is what removes it. `config commit` replaces the live file by rename, so a reload never reads half a file. Ids in `config` calls must match `^[a-z0-9][a-z0-9-]{0,63}$`. The 128-file and 8 MiB limits are enforced: files past them are not loaded and are reported.
+
 Drafts sit beside the live file as `mock-login.yaml.draft`. Drafts are not loaded into the proxy. `chiling config status` lists live files and drafts. `config validate` checks the draft if present, otherwise the live file. `config commit` promotes the draft. `config discard` deletes it. One file is committed even if another file in the directory is invalid.
 
 Limits, from workcells' per-file isolation and tightened for a proxy: 256 KiB per file, 8 MiB and 128 files in the directory. Symlinks, dotfiles, and a file whose name disagrees with `id` are invalid items. They do not hide the valid files.
@@ -71,7 +73,7 @@ An action stage:
 | `middleware` | Explicit list of `{plugin, instance, name}`, at most 8. Registering the plugin does not apply it. |
 | `if` | Skip when false. |
 | `continueOnError` | Default false. A failed stage stops the rest of that pipeline. |
-| `timeoutMs` | Default 500, max 2000. The phase still shares the 2 s exchange budget. |
+| `timeoutMs` | Default is the rule's `timeout` (500 ms unless the document says otherwise, max 2 s). Every stage of a rule shares one deadline, the exchange's remaining 2 s budget; a stage is cut to what is left of it, and a stage that starts with none left fails with `rule evaluation budget exceeded`. |
 
 `vars` are read-only, resolved once before the first stage, and stored on the trace. They may reference `request.*` and other vars. They may not reference `pipeline.*` outputs or secrets. Cycles fail at validate time. Limits: 64 vars, 64 KiB, depth 16. A whole-value expression keeps its JSON type. An expression embedded in a string becomes text. Lists and objects have no text form and are rejected. Secrets never go in `vars`. The trace can contain vars, so they are not credentials.
 
@@ -221,9 +223,9 @@ request:
 
 `select` is the multi-way branch. It is not a parallel fan-out. No match and no `default` skips every arm (`skipReason: unselected`). Nested `select` is rejected, matching workcells' current "no nested select". A case pipeline may contain actions and `parallel`, not another `select`.
 
-`parallel` is only for `effect: observe`. It does not join, which is the opposite of the parallel block in workcells' redesign. That redesign is for a durable run that waits for lint and tests. Waiting would hold the HTTP client. Chiling's block snapshots the view and the outputs of stages that already finished, then continues. Stages inside the block do not see each other. Later stages cannot read `pipeline.<id>.outputs` for an id declared inside the block. Those outputs are trace-only.
+`parallel` is only for `effect: observe`. It does not join results, which is the opposite of the parallel block in workcells' redesign. That redesign is for a durable run that waits for lint and tests. Chiling's block runs its stages side by side on a snapshot of the view and of the outputs of stages that already finished, **waits for them up to its `timeoutMs`**, then continues. The wait is bounded by the block's `timeoutMs` (default: the rule's `timeout`) and by what is left of the rule's deadline, so a block can hold the client for at most that long. A stage still running at the deadline is abandoned, traced as failed, and cannot write into the block's result. Stages inside the block do not see each other. Later stages cannot read `pipeline.<id>.outputs` for an id declared inside the block. Those outputs are trace-only.
 
-`timeoutMs` cancels the block. Timeout and error never fail the exchange and never trigger `fail-closed`. `delay` and `throttle` are mutate because they change when the client sees bytes. `tee` copies the snapshot, at most the body preview, not the live stream.
+`timeoutMs` ends the wait. Timeout and error never fail the exchange and never trigger `fail-closed`. `delay` and `throttle` are mutate because they change when the client sees bytes. `tee` copies the snapshot, at most the body preview, not the live stream.
 
 If the agent needs "notify, then forward only if it succeeded", that notify is a normal sequential stage.
 

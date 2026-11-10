@@ -43,7 +43,11 @@ func builtinEffect(uses string) string {
 	}
 }
 
-func (e *RuleEngine) evalDocument(doc *Document, req *shared.Request, body string, phase *Phase, timeout time.Duration) Result {
+// evalDocument runs one rule document. timeout is how long the caller can
+// spare for the whole rule, normally what is left of the exchange's budget:
+// it is a deadline over every stage together, not a per-stage allowance.
+// sem is the document's semantic diagnostics, checked once at compile time.
+func (e *RuleEngine) evalDocument(doc *Document, sem []Diagnostic, req *shared.Request, body string, phase *Phase, timeout time.Duration) Result {
 	start := time.Now()
 	finish := func(r Result) Result {
 		r.Format = "yaml"
@@ -55,7 +59,7 @@ func (e *RuleEngine) evalDocument(doc *Document, req *shared.Request, body strin
 	if req == nil {
 		req = &shared.Request{}
 	}
-	if sem := semanticDiagnostics(doc, true, nil); len(sem) > 0 {
+	if len(sem) > 0 {
 		return finish(Result{Error: sem[0].Error(), SchemaValid: false, SchemaErrs: diagStrings(sem)})
 	}
 	kind := "request"
@@ -91,10 +95,15 @@ func (e *RuleEngine) evalDocument(doc *Document, req *shared.Request, body strin
 		return finish(Result{Error: err.Error(), SchemaValid: false})
 	}
 	scope["vars"] = vars
-	limit := timeout
-	if limit <= 0 {
-		limit = doc.defaultTimeout()
+	// Each stage may take what the rule's timeout allows (500 ms unless the
+	// document says otherwise), and all of them together what the caller can
+	// spare. The deadline rides in the scope as a hidden key.
+	limit := doc.defaultTimeout()
+	budget := timeout
+	if budget <= 0 || budget > shared.DefaultRuleBudget {
+		budget = shared.DefaultRuleBudget
 	}
+	scope["__deadline"] = start.Add(budget)
 	pr := e.runPipeline(pipeline, scope, req, body, phase, kind, limit, false)
 	res := Result{
 		Matched:     true,
@@ -394,6 +403,16 @@ func (e *RuleEngine) runParallel(out *pipeOut, st Stage, scope map[string]any, r
 	if st.Parallel.TimeoutMs > 0 {
 		limit = time.Duration(st.Parallel.TimeoutMs) * time.Millisecond
 	}
+	limit, withinBudget := clampToDeadline(scope, limit)
+	if !withinBudget {
+		out.stages = append(out.stages, shared.StageTrace{ID: st.ID, Error: "rule evaluation budget exceeded"})
+		return
+	}
+	// The block waits for its stages, up to its timeout, then goes on: a
+	// stage still running is abandoned and traced as a timeout. It never
+	// fails the rule. Each child works on its own copy of the scope and its
+	// own result, which it hands over only when it finishes, so an abandoned
+	// child cannot write into what the block reads.
 	ctx, cancel := context.WithTimeout(context.Background(), limit)
 	defer cancel()
 	var wg sync.WaitGroup
@@ -403,20 +422,23 @@ func (e *RuleEngine) runParallel(out *pipeOut, st Stage, scope map[string]any, r
 		go func(i int, child Stage) {
 			defer wg.Done()
 			local := cloneScope(scope)
-			var sub pipeOut
-			done := make(chan struct{})
+			local["__deadline"] = scope["__deadline"]
+			finished := make(chan pipeOut, 1)
 			go func() {
+				var sub pipeOut
 				e.runAction(&sub, child, local, req, body, phase, kind, limit, true)
-				close(done)
+				finished <- sub
 			}()
+			var sub pipeOut
 			select {
-			case <-done:
+			case sub = <-finished:
 			case <-ctx.Done():
-				sub.stages = append(sub.stages, shared.StageTrace{ID: child.ID, Uses: child.Uses, Error: "timeout"})
+				sub.stages = []shared.StageTrace{{ID: child.ID, Uses: child.Uses, Error: "timeout"}}
 			}
-			if len(sub.stages) == 0 {
+			switch {
+			case len(sub.stages) == 0:
 				traces[i] = shared.StageTrace{ID: child.ID, Uses: child.Uses}
-			} else {
+			default:
 				traces[i] = sub.stages[0]
 				if traces[i].Error == "" && len(sub.stages) > 1 {
 					traces[i] = sub.stages[len(sub.stages)-1]
@@ -457,6 +479,11 @@ func (e *RuleEngine) runAction(out *pipeOut, st Stage, scope map[string]any, req
 		if limit > 2*time.Second {
 			limit = 2 * time.Second
 		}
+	}
+	limit, withinBudget := clampToDeadline(scope, limit)
+	if !withinBudget {
+		e.failStage(out, tr, "rule evaluation budget exceeded", st.ContinueOnError || inParallel)
+		return
 	}
 	inst := "local"
 	if st.Instance != "" {
@@ -643,6 +670,23 @@ func (e *RuleEngine) failStage(out *pipeOut, tr shared.StageTrace, msg string, c
 	if !cont {
 		out.fatal = fmt.Errorf("%s", msg)
 	}
+}
+
+// clampToDeadline shortens a stage's allowance to what is left of the
+// rule's deadline. ok is false when nothing is left.
+func clampToDeadline(scope map[string]any, limit time.Duration) (time.Duration, bool) {
+	dl, has := scope["__deadline"].(time.Time)
+	if !has {
+		return limit, true
+	}
+	left := time.Until(dl)
+	if left <= 0 {
+		return 0, false
+	}
+	if limit > left {
+		limit = left
+	}
+	return limit, true
 }
 
 func hasTerminal(actions []shared.RuleAction) bool {
