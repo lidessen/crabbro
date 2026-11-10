@@ -48,6 +48,7 @@ var busyFade = ui.ElementTransition{Duration: 130 * time.Millisecond, Enter: &ui
 func (a *app) view(c *ui.Context) {
 	a.setServices(c.Services())
 	a.drainQueue()
+	a.mirrorView()
 	p := applyPal(c)
 	a.pal = p
 

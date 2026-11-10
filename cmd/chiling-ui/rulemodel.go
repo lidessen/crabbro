@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -100,6 +101,9 @@ func parseRuleDoc(script string) (*vmDoc, error) {
 	return &doc, nil
 }
 
+// onKeyQuoted is yaml.v3's quoted top-level on key, at the start of a line.
+var onKeyQuoted = regexp.MustCompile(`(?m)^"on":`)
+
 // marshalRuleDoc writes the model back as the script text. yaml.v3 quotes
 // the `on` key — YAML 1.1 reads a bare on as true — and the rule documents
 // have always written it bare, so the quotes come back off.
@@ -108,9 +112,9 @@ func marshalRuleDoc(doc *vmDoc) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	out := string(b)
-	out = strings.ReplaceAll(out, "\"on\":", "on:")
-	return out, nil
+	// Only the top-level key: the same text inside a value (a mock body that
+	// holds "on":) is the person's own and stays as written.
+	return onKeyQuoted.ReplaceAllString(string(b), "on:"), nil
 }
 
 // docAdvanced reports why the visual editor cannot express the document,
