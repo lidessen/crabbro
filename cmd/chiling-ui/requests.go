@@ -24,6 +24,10 @@ import (
 // the page's splitter keeps it.
 var detailSplitH float32 = 270
 
+// requestListLimit is how many exchanges the table asks the daemon for; at
+// that count the toolbar says the list is the latest of more.
+const requestListLimit = 200
+
 // reqMaxMs is the slowest exchange of the table's rows, which the latency
 // bars are drawn against.
 var reqMaxMs int64 = 1
@@ -148,7 +152,11 @@ func (a *app) requestsToolbar(c *ui.Context, p *palette) {
 				failed++
 			}
 		}
-		chip(c, fmt.Sprintf("%d requests", len(st.requests)), p.muted)
+		if len(st.requests) >= requestListLimit {
+			chip(c, fmt.Sprintf("latest %d", requestListLimit), p.muted)
+		} else {
+			chip(c, fmt.Sprintf("%d requests", len(st.requests)), p.muted)
+		}
 		if failed > 0 {
 			chip(c, fmt.Sprintf("%d failed", failed), p.removed)
 		}

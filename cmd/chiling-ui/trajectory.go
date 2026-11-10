@@ -18,6 +18,9 @@ const trajStagger = 12
 // trajGroupGap is the pause between adjacent steps that opens a new group.
 const trajGroupGap = 2 * time.Minute
 
+// trajFetch is how many steps the snapshot asks the daemon for.
+const trajFetch = 100
+
 // trajOldest is the order of the trace: 0 newest first, as a live tail
 // reads, 1 oldest first, as a story does.
 var trajOldest int
@@ -67,6 +70,10 @@ func (a *app) trajectoryPage(c *ui.Context, p *palette) {
 						}
 					}
 					a.traceStep(c, p, it, byID, maxMs, i == 0, i == len(steps)-1)
+				}
+				if len(steps) >= trajFetch {
+					ui.Text(c, fmt.Sprintf("Showing the latest %d steps.", trajFetch)).FontSize(11).
+						TextColor(p.faint).Padding(10, 0, 0, 34).SingleLine()
 				}
 			})
 		})
