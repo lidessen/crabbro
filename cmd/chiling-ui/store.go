@@ -48,6 +48,7 @@ type store struct {
 	detail          *api.RequestDetailResponse
 	detailID        string
 	detailErr       string
+	traceReqs       []api.RequestSummary // every exchange, oldest first, for the trace
 	rules           []api.Rule
 	scope           api.ScopeState
 	hasScope        bool
@@ -95,11 +96,18 @@ type app struct {
 	scriptDraft      string
 	section          int // the daemon pane's segmented choice
 	sessionName      string
-	trajAt           time.Time
-	notes            []string
-	busy             string // what an action is doing, shown in the status bar
-	win              *mygo.Window
-	pal              *palette // the frame's look, set as each frame begins
+
+	// mirror* are the view thread's search, hidden switch and page as of the
+	// last frame, under mu: the sync goroutine reads these, never the fields
+	// the widgets write.
+	mirrorSearch string
+	mirrorHidden bool
+	mirrorPage   string
+	trajAt       time.Time
+	notes        []string
+	busy         string // what an action is doing, shown in the status bar
+	win          *mygo.Window
+	pal          *palette // the frame's look, set as each frame begins
 }
 
 var hoverFade = ui.ElementTransition{Colors: true, Duration: 110 * time.Millisecond}
@@ -142,6 +150,14 @@ func (a *app) drainQueue() {
 			fn()
 		}
 	}
+}
+
+// mirrorView copies the view thread's own state where the sync goroutine
+// can read it under the lock. Called once a frame.
+func (a *app) mirrorView() {
+	a.mu.Lock()
+	a.mirrorSearch, a.mirrorHidden, a.mirrorPage = a.search, a.showHidden, a.page
+	a.mu.Unlock()
 }
 
 func (a *app) setServices(sv ui.Services) {
@@ -198,7 +214,7 @@ func (a *app) nudgeLater() {
 func currentQuery(a *app) string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.search
+	return a.mirrorSearch
 }
 
 // run keeps the store fresh until the process ends: ensure the daemon,
@@ -206,14 +222,22 @@ func currentQuery(a *app) string {
 // stream drops. It is the only writer of the store outside the view's
 // own queue.
 func (a *app) run(ctx context.Context) {
+	// The window starts the daemon when it opens, once. After that a daemon
+	// that went away stays away until the person starts it (the button, or
+	// chiling daemon start): respawning it here would undo a deliberate
+	// chiling daemon stop.
+	first := true
 	for ctx.Err() == nil {
 		a.setConn(connConnecting, "")
-		if err := a.c.EnsureDaemon(ctx); err != nil {
-			a.setConn(connDown, err.Error())
-			if !sleepCtx(ctx, 3*time.Second) {
-				return
+		if first {
+			first = false
+			if err := a.c.EnsureDaemon(ctx); err != nil {
+				a.setConn(connDown, err.Error())
+				if !sleepCtx(ctx, 3*time.Second) {
+					return
+				}
+				continue
 			}
-			continue
 		}
 		if err := a.snapshot(ctx, ""); err != nil {
 			a.setConn(connDown, err.Error())
@@ -248,7 +272,7 @@ func (a *app) setConn(state connState, errStr string) {
 func (a *app) showHiddenNow() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.showHidden
+	return a.mirrorHidden
 }
 
 // snapshot fills the store from the list endpoints. It is the pattern the
@@ -260,7 +284,11 @@ func (a *app) snapshot(ctx context.Context, query string) error {
 	}
 	sess, _ := a.c.CurrentSession(ctx)
 	scope, hasScope := a.scopeIfNeeded(ctx, sess)
-	reqs, _ := a.c.SearchRequests(ctx, query, client.RequestQuery{Limit: 200, All: a.showHiddenNow()})
+	if query == "" {
+		query = currentQuery(a)
+	}
+	reqs, reqErr := a.c.SearchRequests(ctx, query, client.RequestQuery{Limit: 200, All: a.showHiddenNow()})
+	traceReqs, _ := a.traceRequests(ctx, query, reqs, reqErr)
 	rules, _ := a.c.ListRules(ctx)
 	mitm, _ := a.c.CAStatus(ctx)
 	hist, _ := a.c.History(ctx)
@@ -280,9 +308,22 @@ func (a *app) snapshot(ctx context.Context, query string) error {
 	a.st.mitm = mitm
 	a.st.history = hist
 	a.st.traj = reverseActivity(traj.Items)
+	a.st.traceReqs = traceReqs
 	a.mu.Unlock()
 	a.invalidate()
 	return nil
+}
+
+// traceRequests is the exchanges the trace joins its capture steps to. It
+// is the unfiltered list: the table's search and its hidden switch narrow
+// what the table shows, not what the trace can describe. When the table's
+// own fetch already is that list, it is reused.
+func (a *app) traceRequests(ctx context.Context, query string, table api.ListRequestsResponse, tableErr error) ([]api.RequestSummary, error) {
+	if tableErr == nil && query == "" && a.showHiddenNow() {
+		return table.Requests, nil
+	}
+	all, err := a.c.ListRequests(ctx, client.RequestQuery{Limit: 200, All: true})
+	return all.Requests, err
 }
 
 // scopeIfNeeded fetches the scope when something can show it: the daemon
@@ -300,7 +341,7 @@ func (a *app) scopeIfNeeded(ctx context.Context, sess *api.Session) (api.ScopeSt
 func (a *app) currentPage() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.page
+	return a.mirrorPage
 }
 
 // follow applies events as they come, refetching on request changes, and
@@ -330,16 +371,15 @@ func (a *app) follow(ctx context.Context, events <-chan api.Event) {
 // and the daemon status. The trajectory only grows by events and the
 // snapshot; the detail follows its own request id.
 func (a *app) refreshNow(ctx context.Context) {
-	a.mu.Lock()
-	query := a.search
-	a.mu.Unlock()
+	query := currentQuery(a)
 
 	status, err := a.c.Status(ctx)
 	reqs, reqErr := a.c.SearchRequests(ctx, query, client.RequestQuery{Limit: 200, All: a.showHiddenNow()})
-	rules, _ := a.c.ListRules(ctx)
-	sess, _ := a.c.CurrentSession(ctx)
+	rules, rulesErr := a.c.ListRules(ctx)
+	sess, sessErr := a.c.CurrentSession(ctx)
 	scope, hasScope := a.scopeIfNeeded(ctx, sess)
-	mitm, _ := a.c.CAStatus(ctx)
+	mitm, mitmErr := a.c.CAStatus(ctx)
+	traceReqs, traceErr := a.traceRequests(ctx, query, reqs, reqErr)
 
 	a.mu.Lock()
 	if err == nil {
@@ -351,11 +391,22 @@ func (a *app) refreshNow(ctx context.Context) {
 		a.st.listHiddenCount = reqs.HiddenCount
 		a.st.listScopeActive = reqs.ScopeActive
 	}
-	a.st.rules = rules
-	a.st.session = sess
-	a.st.scope = scope
-	a.st.hasScope = hasScope
-	a.st.mitm = mitm
+	// A failed fetch keeps what the screen had: an empty answer from a
+	// hiccup would read as "no rules" or "not recording".
+	if rulesErr == nil {
+		a.st.rules = rules
+	}
+	if sessErr == nil {
+		a.st.session = sess
+		a.st.scope = scope
+		a.st.hasScope = hasScope
+	}
+	if mitmErr == nil {
+		a.st.mitm = mitm
+	}
+	if traceErr == nil {
+		a.st.traceReqs = traceReqs
+	}
 	a.mu.Unlock()
 
 	a.refreshDetail(ctx)

@@ -36,9 +36,9 @@ func (a *app) trajectoryPage(c *ui.Context, p *palette) {
 			})
 		return
 	}
-	byID := make(map[string]uiRequestRow, len(st.requests))
+	byID := make(map[string]uiRequestRow, len(st.traceReqs))
 	maxMs := int64(1)
-	for _, r := range st.requests {
+	for _, r := range st.traceReqs {
 		byID[string(r.ID)] = r
 		maxMs = max(maxMs, r.DurationMs)
 	}
