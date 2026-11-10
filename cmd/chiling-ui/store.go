@@ -92,7 +92,7 @@ type app struct {
 	ruleState        ui.ListState
 	ruleSel          int
 	ruleShownID      string
-	ruleEditMode     int // 0 visual, 1 code
+	ruleEditMode     int // 0 overview, 1 code
 	scriptDraft      string
 	section          int // the daemon pane's segmented choice
 	sessionName      string
@@ -287,12 +287,12 @@ func (a *app) snapshot(ctx context.Context, query string) error {
 	if query == "" {
 		query = currentQuery(a)
 	}
-	reqs, reqErr := a.c.SearchRequests(ctx, query, client.RequestQuery{Limit: 200, All: a.showHiddenNow()})
+	reqs, reqErr := a.c.SearchRequests(ctx, query, client.RequestQuery{Limit: requestListLimit, All: a.showHiddenNow()})
 	traceReqs, _ := a.traceRequests(ctx, query, reqs, reqErr)
 	rules, _ := a.c.ListRules(ctx)
 	mitm, _ := a.c.CAStatus(ctx)
 	hist, _ := a.c.History(ctx)
-	traj, _ := a.c.Activity(ctx, "", "", 100)
+	traj, _ := a.c.Activity(ctx, "", "", trajFetch)
 
 	a.mu.Lock()
 	a.st.status = status
@@ -322,7 +322,7 @@ func (a *app) traceRequests(ctx context.Context, query string, table api.ListReq
 	if tableErr == nil && query == "" && a.showHiddenNow() {
 		return table.Requests, nil
 	}
-	all, err := a.c.ListRequests(ctx, client.RequestQuery{Limit: 200, All: true})
+	all, err := a.c.ListRequests(ctx, client.RequestQuery{Limit: requestListLimit, All: true})
 	return all.Requests, err
 }
 
@@ -349,6 +349,7 @@ func (a *app) currentPage() string {
 func (a *app) follow(ctx context.Context, events <-chan api.Event) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
+	ticks := 0
 	for {
 		select {
 		case ev, ok := <-events:
@@ -360,7 +361,12 @@ func (a *app) follow(ctx context.Context, events <-chan api.Event) {
 		case <-a.refresh:
 			a.refreshNow(ctx)
 		case <-ticker.C:
-			a.refreshNow(ctx)
+			// Events drive the lists; the tick is the safety net, and the
+			// uptime on the daemon page. Off that page it runs every third.
+			ticks++
+			if a.currentPage() == pageDaemon || ticks%3 == 0 {
+				a.refreshNow(ctx)
+			}
 		case <-ctx.Done():
 			return
 		}
@@ -374,7 +380,7 @@ func (a *app) refreshNow(ctx context.Context) {
 	query := currentQuery(a)
 
 	status, err := a.c.Status(ctx)
-	reqs, reqErr := a.c.SearchRequests(ctx, query, client.RequestQuery{Limit: 200, All: a.showHiddenNow()})
+	reqs, reqErr := a.c.SearchRequests(ctx, query, client.RequestQuery{Limit: requestListLimit, All: a.showHiddenNow()})
 	rules, rulesErr := a.c.ListRules(ctx)
 	sess, sessErr := a.c.CurrentSession(ctx)
 	scope, hasScope := a.scopeIfNeeded(ctx, sess)
@@ -527,7 +533,12 @@ func (a *app) selectRequest(id string) {
 func (a *app) actStartRecording() {
 	a.setBusy("starting recording")
 	go func() {
-		_, err := a.c.StartRecording(a.ctx, a.sessionNameLocked())
+		name := a.sessionNameLocked()
+		if name == "" {
+			// An unnamed session would head the trace as just "Trace".
+			name = "Recording " + time.Now().Format("15:04")
+		}
+		_, err := a.c.StartRecording(a.ctx, name)
 		a.post(func() {
 			a.setBusy("")
 			if err != nil {
@@ -585,12 +596,12 @@ func (a *app) actDeleteRule(id string) {
 	}()
 }
 
-// actSaveRule writes the script draft and the form's priority back to the
-// rule.
-func (a *app) actSaveRule(id, script string, priority int) {
+// actSaveRule writes the script draft back to the rule. Only the script is
+// sent: the priority and everything else stay as the daemon has them.
+func (a *app) actSaveRule(id, script string) {
 	a.setBusy("saving " + id)
 	go func() {
-		_, err := a.c.UpdateRule(a.ctx, id, api.UpdateRuleRequest{Script: &script, Priority: &priority})
+		_, err := a.c.UpdateRule(a.ctx, id, api.UpdateRuleRequest{Script: &script})
 		a.post(func() {
 			a.setBusy("")
 			if err != nil {
