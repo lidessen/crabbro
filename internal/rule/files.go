@@ -89,19 +89,25 @@ func (d *Dir) validateFile(path, id string) []Diagnostic {
 	if err != nil {
 		return []Diagnostic{{File: filepath.Base(path), Path: "$", Message: "unreadable"}}
 	}
+	return validateBytes(filepath.Base(path), id, b, true, nil)
+}
+
+// validateBytes checks one rule file's content. The caller reads the bytes
+// once, so what is checked is what is used.
+func validateBytes(name, id string, b []byte, offline bool, rt Runtime) []Diagnostic {
 	if int64(len(b)) > maxRuleFileBytes {
-		return []Diagnostic{{File: filepath.Base(path), Path: "$", Message: "file exceeds 256 KiB"}}
+		return []Diagnostic{{File: name, Path: "$", Message: "file exceeds 256 KiB"}}
 	}
 	doc, err := ParseYAML(string(b))
 	if err != nil {
-		return []Diagnostic{{File: filepath.Base(path), Path: "$", Message: err.Error()}}
+		return []Diagnostic{{File: name, Path: "$", Message: err.Error()}}
 	}
 	if doc.ID != id {
-		return []Diagnostic{{File: filepath.Base(path), Path: "$.id", Message: "id does not match the filename"}}
+		return []Diagnostic{{File: name, Path: "$.id", Message: "id does not match the filename"}}
 	}
-	diags := Validate(string(b), true, nil)
+	diags := Validate(string(b), offline, rt)
 	for i := range diags {
-		diags[i].File = filepath.Base(path)
+		diags[i].File = name
 	}
 	return diags
 }
@@ -116,19 +122,33 @@ func readDoc(path string) (*Document, error) {
 
 // Load reads live YAML files. Invalid files are reported and skipped.
 func (d *Dir) Load() ([]*shared.Rule, []Diagnostic, bool) {
+	rules, diags, complete, _ := d.loadAll()
+	return rules, diags, complete
+}
+
+// loadAll is Load, and also the ids of live files that exist but could not
+// be loaded, so a caller can tell a broken edit from a deleted file.
+func (d *Dir) loadAll() (rules []*shared.Rule, diags []Diagnostic, complete bool, broken []string) {
 	files, complete, err := d.Status()
 	if err != nil {
-		return nil, []Diagnostic{{Path: "$", Message: "unreadable"}}, false
+		return nil, []Diagnostic{{Path: "$", Message: "unreadable"}}, false, nil
 	}
-	var rules []*shared.Rule
-	var diags []Diagnostic
 	now := time.Now().UTC()
+	var loaded int
+	var loadedBytes int64
 	for _, f := range files {
 		if !f.Live {
 			continue
 		}
 		if len(f.Diagnostics) > 0 {
 			diags = append(diags, f.Diagnostics...)
+			broken = append(broken, f.ID)
+			continue
+		}
+		if loaded >= maxRuleFiles {
+			complete = false
+			diags = append(diags, Diagnostic{File: f.ID + ".yaml", Path: "$", Message: "rules directory exceeds the file limit"})
+			broken = append(broken, f.ID)
 			continue
 		}
 		path := filepath.Join(d.Path, f.ID+".yaml")
@@ -136,13 +156,22 @@ func (d *Dir) Load() ([]*shared.Rule, []Diagnostic, bool) {
 		if err != nil {
 			complete = false
 			diags = append(diags, Diagnostic{File: f.ID + ".yaml", Path: "$", Message: "unreadable"})
+			broken = append(broken, f.ID)
+			continue
+		}
+		if loadedBytes += int64(len(b)); loadedBytes > maxRuleDirBytes {
+			complete = false
+			diags = append(diags, Diagnostic{File: f.ID + ".yaml", Path: "$", Message: "rules directory exceeds the size limit"})
+			broken = append(broken, f.ID)
 			continue
 		}
 		doc, err := ParseYAML(string(b))
 		if err != nil {
 			complete = false
+			broken = append(broken, f.ID)
 			continue
 		}
+		loaded++
 		pri := doc.Priority
 		if pri == 0 {
 			pri = shared.DefaultRulePriority
@@ -160,16 +189,24 @@ func (d *Dir) Load() ([]*shared.Rule, []Diagnostic, bool) {
 			UpdatedAt:   now,
 		})
 	}
-	return rules, diags, complete
+	return rules, diags, complete, broken
 }
 
 // Sync replaces file-backed rules in the store. API-created rules stay.
+//
+// A file that exists but no longer loads (a typo in an edit) keeps the
+// version the store already has: a rule must not stop running, least of all
+// a fail-closed one, because its file broke. The diagnostics say which file
+// is stale. A file that is gone is dropped.
 func (d *Dir) Sync(store *RuleStore) ([]Diagnostic, bool) {
-	rules, diags, complete := d.Load()
+	rules, diags, complete, broken := d.loadAll()
 	if store == nil {
 		return diags, complete
 	}
 	keep := map[shared.RuleID]struct{}{}
+	for _, id := range broken {
+		keep[shared.RuleID(id)] = struct{}{}
+	}
 	for _, r := range rules {
 		keep[r.ID] = struct{}{}
 		_ = store.UpsertFile(r)
@@ -191,6 +228,9 @@ func (d *Dir) Draft(id string, body []byte) error {
 
 // ValidateFile checks the draft if present, otherwise the live file.
 func (d *Dir) ValidateFile(id string, offline bool, rt Runtime) []Diagnostic {
+	if !idPattern.MatchString(id) {
+		return []Diagnostic{{Path: "$.id", Message: "invalid id"}}
+	}
 	draft := filepath.Join(d.Path, id+".yaml.draft")
 	live := filepath.Join(d.Path, id+".yaml")
 	path := live
@@ -201,24 +241,15 @@ func (d *Dir) ValidateFile(id string, offline bool, rt Runtime) []Diagnostic {
 	if err != nil {
 		return []Diagnostic{{File: filepath.Base(path), Path: "$", Message: "unreadable"}}
 	}
-	doc, err := ParseYAML(string(b))
-	if err != nil {
-		return []Diagnostic{{File: filepath.Base(path), Path: "$", Message: err.Error()}}
-	}
-	if doc.ID != id {
-		return []Diagnostic{{File: filepath.Base(path), Path: "$.id", Message: "id does not match the filename"}}
-	}
-	diags := Validate(string(b), offline, rt)
-	for i := range diags {
-		diags[i].File = filepath.Base(path)
-	}
-	return diags
+	return validateBytes(filepath.Base(path), id, b, offline, rt)
 }
 
-// Commit promotes the draft. Other invalid files do not block this one.
+// Commit promotes the draft. Other invalid files do not block this one. The
+// draft is read once and that content is what is checked and written, and
+// the live file is replaced by a rename, so a reload never sees half a file.
 func (d *Dir) Commit(id string) error {
-	if len(d.ValidateFile(id, true, nil)) > 0 {
-		return fmt.Errorf("draft is invalid")
+	if !idPattern.MatchString(id) {
+		return fmt.Errorf("invalid id")
 	}
 	draft := filepath.Join(d.Path, id+".yaml.draft")
 	live := filepath.Join(d.Path, id+".yaml")
@@ -226,7 +257,30 @@ func (d *Dir) Commit(id string) error {
 	if err != nil {
 		return fmt.Errorf("no draft")
 	}
-	if err := os.WriteFile(live, b, 0o600); err != nil {
+	if len(validateBytes(id+".yaml.draft", id, b, true, nil)) > 0 {
+		return fmt.Errorf("draft is invalid")
+	}
+	tmp, err := os.CreateTemp(d.Path, "."+id+"-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(b); err != nil {
+		tmp.Close()
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, live); err != nil {
+		_ = os.Remove(tmpName)
 		return err
 	}
 	return os.Remove(draft)
@@ -234,6 +288,9 @@ func (d *Dir) Commit(id string) error {
 
 // Discard deletes the draft.
 func (d *Dir) Discard(id string) error {
+	if !idPattern.MatchString(id) {
+		return fmt.Errorf("invalid id")
+	}
 	err := os.Remove(filepath.Join(d.Path, id+".yaml.draft"))
 	if os.IsNotExist(err) {
 		return fmt.Errorf("no draft")
