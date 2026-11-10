@@ -351,7 +351,9 @@ func (m *ruleMiddleware) Wrap(next ExchangeHandler) ExchangeHandler {
 		}
 
 		view := ex.viewRequest()
-		result := m.proxy.RuleEngine.Evaluate(m.rule.Script, view, string(ex.preview), shared.DefaultRuleTimeout)
+		// What is left of the exchange's budget is the deadline for this
+		// rule, all stages together.
+		result := m.proxy.RuleEngine.Evaluate(m.rule.Script, view, string(ex.preview), shared.DefaultRuleBudget-time.Since(ex.started))
 		trace := shared.RuleTrace{
 			RuleID:      m.rule.ID,
 			RuleVersion: m.rule.Version,
@@ -439,7 +441,19 @@ func (m *ruleMiddleware) applyResponsePhase(ex *Exchange, resp *http.Response) (
 		ResponseBody:          string(preview),
 		ResponseBodyTruncated: truncated,
 	}
-	result := m.proxy.RuleEngine.EvaluatePhase(m.rule.Script, ex.viewRequest(), string(ex.preview), phase, shared.DefaultRuleTimeout)
+	remaining := shared.DefaultRuleBudget - time.Since(ex.started)
+	if remaining <= 0 {
+		ex.traces = append(ex.traces, shared.RuleTrace{
+			RuleID: m.rule.ID, RuleVersion: m.rule.Version, Phase: "response",
+			Error: "rule evaluation budget exceeded",
+		})
+		if m.rule.FailureMode == "fail-closed" {
+			ex.decision = "reject"
+			return nil, &errReject{status: http.StatusForbidden, body: "rule evaluation budget exceeded"}
+		}
+		return resp, nil
+	}
+	result := m.proxy.RuleEngine.EvaluatePhase(m.rule.Script, ex.viewRequest(), string(ex.preview), phase, remaining)
 	trace := shared.RuleTrace{
 		RuleID: m.rule.ID, RuleVersion: m.rule.Version, Phase: "response",
 		DurationMs: result.DurationMs, Error: result.Error,

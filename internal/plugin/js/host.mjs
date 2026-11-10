@@ -40,6 +40,14 @@ function post(msg) {
     send({ type: "result", id: msg.id, error: "plugin is poisoned" });
     return;
   }
+  if (slot.exited) {
+    // The worker is gone (crash, heap limit, failed import). Drop the slot
+    // so the next activate starts a fresh one, and answer now rather than
+    // let the caller wait out its deadline.
+    if (workers.get(msg.package) === slot) workers.delete(msg.package);
+    send({ type: "result", id: msg.id, error: "plugin exited" });
+    return;
+  }
   slot.lastUsed = Date.now();
   if (slot.child) {
     slot.child.stdin.write(encode(msg));
@@ -50,7 +58,7 @@ function post(msg) {
 
 function startWorker(msg) {
   const existing = workers.get(msg.package);
-  if (existing && !existing.poisoned) {
+  if (existing && !existing.poisoned && !existing.exited) {
     send({ type: "result", id: msg.id, ok: true });
     return;
   }
@@ -68,7 +76,19 @@ function startWorker(msg) {
     const slot = { child, packageName: msg.package, lastUsed: Date.now(), poisoned: false, buf: Buffer.alloc(0) };
     workers.set(msg.package, slot);
     child.stdout.on("data", (chunk) => readChild(slot, chunk));
+    // Drain stderr: an unread pipe fills at 64 KB and stalls the plugin.
+    child.stderr.on("data", (chunk) => {
+      send({ type: "log", package: msg.package, level: "error", message: chunk.toString("utf8").slice(0, 2000) });
+    });
+    // A child that dies between our write and its exit event must not
+    // become an uncaught error in the host, which every plugin shares.
+    child.stdin.on("error", () => {});
+    child.on("error", (err) => {
+      slot.exited = true;
+      send({ type: "log", package: msg.package, level: "error", message: String(err && err.message ? err.message : err) });
+    });
     child.on("exit", () => {
+      slot.exited = true;
       if (workers.get(msg.package) === slot) workers.delete(msg.package);
     });
     send({ type: "result", id: msg.id, ok: true });
@@ -102,10 +122,8 @@ function startWorker(msg) {
     send({ type: "log", package: msg.package, level: "error", message: String(err && err.message ? err.message : err) });
   });
   worker.on("exit", (code) => {
-    if (workers.get(msg.package) === slot) {
-      slot.exited = true;
-      if (slot.terminating) workers.delete(msg.package);
-    }
+    slot.exited = true;
+    if (workers.get(msg.package) === slot) workers.delete(msg.package);
     send({ type: "log", package: msg.package, message: "exit " + code });
   });
   send({ type: "result", id: msg.id, ok: true });
@@ -120,7 +138,9 @@ function readChild(slot, chunk) {
     slot.buf = slot.buf.subarray(4 + len);
     try {
       const msg = JSON.parse(body);
-      send(msg);
+      // The package is the one this child belongs to, whatever it claims:
+      // the daemon checks permissions by it.
+      if (msg && typeof msg === "object") send({ ...msg, package: slot.packageName });
     } catch {
       /* ignore a partial log line */
     }
@@ -150,6 +170,7 @@ function onDaemon(msg) {
     case "brokerResult": {
       const slot = workers.get(msg.package);
       if (slot && slot.worker) slot.worker.postMessage(msg);
+      else if (slot && slot.child && !slot.exited) slot.child.stdin.write(encode(msg));
       return;
     }
     case "terminate": {
@@ -194,8 +215,14 @@ function onDaemon(msg) {
   }
 }
 
+// The daemon proves itself in its first frame. Until then a connection is
+// not the one replies go to, and a wrong token closes it: whoever connects
+// last must not be able to take the plugin traffic over.
+const token = process.env.CHILING_PLUGIN_TOKEN || "";
+
 const server = net.createServer((conn) => {
-  socket = conn;
+  let authed = token === "";
+  if (authed) socket = conn;
   let buf = Buffer.alloc(0);
   conn.on("error", () => {});
   conn.on("data", (chunk) => {
@@ -210,7 +237,16 @@ const server = net.createServer((conn) => {
       const body = buf.subarray(4, 4 + len).toString("utf8");
       buf = buf.subarray(4 + len);
       try {
-        onDaemon(JSON.parse(body));
+        const frame = JSON.parse(body);
+        if (!authed) {
+          if (!frame || frame.type !== "hello" || frame.token !== token) {
+            conn.destroy();
+            return;
+          }
+          authed = true;
+          socket = conn;
+        }
+        onDaemon(frame);
       } catch (err) {
         send({ type: "log", level: "error", message: "bad frame" });
       }

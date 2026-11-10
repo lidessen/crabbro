@@ -1,6 +1,6 @@
 # Chiling Plugin Design
 
-Status: Implemented, with the deferrals below. Inspection scope is [inspect.md](./inspect.md) and is not built.
+Status: Implemented, with the deferrals below. Reviewed 2026-11-10: calls now run concurrently (one reader, replies matched by id), a crashed worker is replaced on the next call, installs validate the package id and permissions and scan the installed tree for native addons, and a package sees the instance's credentials only with `secrets:read`. `history:read` and `net` are declared but not implemented: the broker refuses both. Inspection scope is [inspect.md](./inspect.md) and is not built.
 Date: 2026-11-04
 Revised: plugins contribute middleware, hooks, and tools. Rules are YAML pathways, specified in [rules.md](./rules.md). The host runtime is unchanged: one lazy Node host, a worker per active plugin.
 Scope: JS plugins distributed as npm packages.
@@ -151,7 +151,7 @@ The daemon owns the deadline, same idea as Goja's interrupt, different mechanism
 
 ### RPC
 
-One socket, `~/.chiling/plugins/host.sock`, mode `0600`. Frames are length-prefixed JSON (`uint32` big-endian length, then one object). gRPC would match Grafana and cost a code generator for a protocol that only our host and our daemon speak. JSON matches the CLI and the rule action schema.
+One socket, `host.sock` inside a private (`0700`) temporary directory the daemon creates for each host process. The daemon passes the host a random token in its environment, and the host accepts a connection only after a `hello` frame that carries it; a connection that does not is closed and never receives replies. Frames are length-prefixed JSON (`uint32` big-endian length, then one object). gRPC would match Grafana and cost a code generator for a protocol that only our host and our daemon speak. JSON matches the CLI and the rule action schema.
 
 Daemon to host:
 
@@ -421,10 +421,10 @@ Declared permissions:
 
 So the enforcement plan is:
 
-1. The worker is started with a custom module loader that allows only the plugin's own package and `@chiling/plugin` (types are erased; the runtime shim is the broker client). `node:fs`, `node:net`, `node:child_process`, `node:vm`, `node:worker_threads` are blocked.
+1. The worker is started with a custom module loader that is an **allowlist** of Node built-ins: `assert`, `buffer`, `crypto`, `events`, `path`, `process`, `querystring`, `stream`, `string_decoder`, `timers`, `url`, `util`, `zlib`. Everything else (`fs`, `net`, `http*`, `https`, `tls`, `dgram`, `dns`, `os`, `child_process`, `vm`, `worker_threads`, `module`, and any built-in a later Node adds) is refused. The host's own files are trusted by exact URL, not by file name. The preload also removes `fetch`, `WebSocket`, `process.binding`, `process.dlopen`, `process.getBuiltinModule`, `process.kill` and `process.abort`.
 2. `fetch` is not on the global object. `ctx.net.fetch` is a function the shim sends as a broker frame.
 3. The daemon checks the permission again. The host check is not the only check.
-4. This stops accidents and most unmodified packages that expect full Node. It does not stop a package written to escape a loader (prototype tricks against a buggy shim, a bug in Node). Treat it the way VS Code treats the extension host: trusted-enough code the operator installed, in a process that is not the proxy.
+4. This stops accidents and most unmodified packages that expect full Node. A package written to escape a loader can still try: this is a reduction of the surface, not a sandbox, and `isolation: process` does not change that (it is the same uid). A package that holds credentials and runs arbitrary code can send them anywhere the host can reach. Install only code you would run. It does not stop a package written to escape a loader (prototype tricks against a buggy shim, a bug in Node). Treat it the way VS Code treats the extension host: trusted-enough code the operator installed, in a process that is not the proxy.
 5. `isolation: process` is the escape hatch when that is not enough. That process is still the same OS user. It is not a container. It does mean a crash and a `kill` stay inside that plugin.
 
 `chiling.api` is semver. One major at a time, starting at `1`. Exact version pins in `installed.json`. Upgrades are an explicit `plugin upgrade`, not a floating range on daemon start.
