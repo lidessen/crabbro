@@ -132,7 +132,14 @@ func (a *app) requestsToolbar(c *ui.Context, p *palette) {
 	ui.Row(c).FillWidth().Height(56).Shrink(0).Padding(8, 12).
 		Gap(10).AlignItems(ui.Center).Children(func() {
 		ui.SearchField(c, &a.search).Grow(1).Shrink(1).MinWidth(40).MaxWidth(300)
+		wasHidden := a.showHidden
 		ui.Checkbox(c, &a.showHidden, "Show hidden").FontSize(12.5)
+		if a.showHidden != wasHidden {
+			// Refetch now: waiting for the next tick leaves the table
+			// unchanged for seconds after the click.
+			a.mirrorView()
+			a.nudge(a.search)
+		}
 		ui.Spacer(c)
 		st := a.snapshotState()
 		failed := 0

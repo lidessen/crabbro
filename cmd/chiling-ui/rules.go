@@ -257,8 +257,14 @@ func (a *app) ruleEditor(c *ui.Context, p *palette, st store, dirty bool) {
 				Clicked(func() { a.confirmDeleteRule(rule) })
 			a.ghostButton(c, "rule-revert", "Revert", iconUndo).Disabled(!dirty && !invalidParams).
 				Clicked(func() { a.scriptDraft = a.scriptLoadedText(st.rules); ruleParamEditors = nil })
+			// The priority the rule has now, unless the form holds a
+			// newer one: a draft the form cannot parse must not save the
+			// priority as 0.
 			priority := 0
-			if ruleVM != nil {
+			if r != nil {
+				priority = r.Priority
+			}
+			if ruleVM != nil && ruleVMErr == "" {
 				priority = ruleVM.Priority
 			}
 			a.fillButton(c, "rule-save", "Save", iconSave).Disabled(!dirty || invalidParams).
