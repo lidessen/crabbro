@@ -1,31 +1,47 @@
 package main
 
-import (
-	"strings"
-	"testing"
-)
+import "testing"
 
-// A body that holds `"on":` must come back byte-for-byte: only the
-// document's own top-level on key loses its quotes.
-func TestMarshalRuleDocKeepsOnInBodies(t *testing.T) {
-	src := "version: 1\nid: r\non:\n  request:\n    host: example.com\nrequest:\n  pipeline:\n    - uses: chiling.mock-response\n      with:\n        status: 200\n        body: '{\"on\":true}'\n"
-	doc, err := parseRuleDoc(src)
+const sampleRule = `# keep me
+version: 1
+id: mock-login
+description: Mock the login call
+priority: 100
+on:
+  request:
+    method: POST
+    host: auth.example.com
+    path: /login
+request:
+  pipeline:
+    - id: respond
+      uses: chiling.mock-response
+      with:
+        status: 200
+        body: '{"on":true}'
+`
+
+func TestParseRuleDoc(t *testing.T) {
+	doc, err := parseRuleDoc(sampleRule)
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := marshalRuleDoc(doc)
-	if err != nil {
-		t.Fatal(err)
+	if m := doc.On.Request; m == nil || m.Method != "POST" || m.Host != "auth.example.com" || m.Path != "/login" {
+		t.Errorf("match = %+v", doc.On.Request)
 	}
-	if !strings.Contains(out, "\non:\n") && !strings.HasPrefix(out, "on:") {
-		t.Errorf("top-level on key was not written bare:\n%s", out)
+	ph := doc.phaseOf("request")
+	if ph == nil || len(ph.Pipeline) != 1 || ph.Pipeline[0].stageUses() != "chiling.mock-response" {
+		t.Fatalf("pipeline = %+v", ph)
 	}
-	if !strings.Contains(out, `{"on":true}`) {
-		t.Errorf("body text was rewritten:\n%s", out)
+	if got := paramString(ph.Pipeline[0].With["body"]); got != `{"on":true}` {
+		t.Errorf("body = %q", got)
 	}
-	if again, err := parseRuleDoc(out); err != nil {
-		t.Errorf("output does not parse: %v\n%s", err, out)
-	} else if again.On.Request == nil || again.On.Request.Host != "example.com" {
-		t.Errorf("match lost in round trip:\n%s", out)
+}
+
+// A field the model does not know is a parse error, so the overview never
+// shows a partial reading of a rule: the Code view takes it instead.
+func TestParseRuleDocRejectsUnknownFields(t *testing.T) {
+	if _, err := parseRuleDoc("version: 1\nid: r\nbogus: true\n"); err == nil {
+		t.Error("unknown field parsed")
 	}
 }

@@ -2,19 +2,17 @@ package main
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/editor"
-	"gopkg.in/yaml.v3"
 
 	"github.com/lidessen/chiling/pkg/api"
 )
 
 // The rules page: the rule list and, below it, the editor of the one
-// chosen — a visual form and the YAML code, switchable.
+// chosen — an overview to read it by and the YAML code to edit it in.
 
 // editorFade is how the script editor follows a theme change: its face and
 // hairline fade to the new palette rather than swap under the eye.
@@ -27,28 +25,15 @@ var editorFade = ui.ElementTransition{Colors: true, Duration: 180 * time.Millise
 // a time and no second dialog opens while one is up.
 var ruleConfirming string
 
-// The visual editor's working state, all of it on the view thread. ruleVM
-// is the document the form edits; ruleVMSeen is the script text it was
-// parsed from, so the form reparses only when the draft changed behind it;
-// ruleVisualBaseline is the form's own marshaling, so formatting alone
-// never reads as an edit.
+// The overview's working state, on the view thread. ruleVM is the rule's
+// document parsed for reading; ruleVMSeen is the script it was parsed from,
+// so it reparses only when the draft changed.
 var (
-	ruleVM             *vmDoc
-	ruleVMSeen         string
-	ruleVMErr          string
-	ruleVMAdv          string
-	ruleVisualBaseline string
-	rulePriorityStr    string
-	// rulePriorityApplied is the priority the model currently holds, so
-	// the store's value and the text field take turns without fighting.
-	rulePriorityApplied int
-	// ruleParamText mirrors the string parameters an input is editing,
-	// keyed by stage and parameter; a map value has no stable address, so
-	// the mirror holds its own and writes back into the model each frame.
-	ruleParamText    map[string]*string
-	ruleCodeState    *editor.State
-	ruleCodeSeen     string
-	ruleParamEditors map[string]*paramEditor
+	ruleVM        *vmDoc
+	ruleVMSeen    string
+	ruleVMErr     string
+	ruleCodeState *editor.State
+	ruleCodeSeen  string
 )
 
 // rulesPage is the rule list and, below it, the editor of the one chosen.
@@ -64,10 +49,7 @@ func (a *app) rulesPage(c *ui.Context, p *palette) {
 		a.scriptDraft = ""
 		ruleVMSeen = ""
 		ruleVM = nil
-		ruleParamText = nil
-		ruleParamEditors = nil
 		ruleCodeState = nil
-		ruleMethodSel = ""
 		a.loadRuleScript(id)
 	}
 	dirty := a.ruleShownID != "" && a.scriptDraft != "" && a.scriptDraft != a.scriptLoadedText(st.rules)
@@ -101,24 +83,6 @@ func (a *app) rulesEmpty(c *ui.Context, p *palette) {
 	emptyState(c, p, iconSliders, "No rules yet",
 		"Rules rewrite, mock or block traffic. Scaffold the first one from a captured request.",
 		"chiling rules from req_1 --action mock")
-}
-
-// methodOptions are the match methods the native select offers, "any"
-// standing for the empty match.
-var methodOptions = []string{"any", "GET", "POST", "PUT", "PATCH", "DELETE", "CONNECT"}
-
-// ruleMethodSel mirrors the match method of the rule in the editor, as
-// the select shows it.
-var ruleMethodSel string
-
-// methodIsReal tells a select value from the "any" sentinel.
-func methodIsReal(sel string) bool {
-	for _, opt := range methodOptions {
-		if opt == sel && sel != "any" {
-			return true
-		}
-	}
-	return false
 }
 
 // chosenRuleID is the rule the table's choice names, "" for none.
@@ -186,52 +150,30 @@ func ruleLabel(r api.Rule) string {
 }
 
 // ruleEditor is the rule the list chose: its toolbar — the name, the
-// meta, the visual and code views, and what to do — over the view itself.
+// meta, the overview and code views, and what to do — over the view itself.
+// The overview reads the rule; the YAML in the code view is what is edited.
 func (a *app) ruleEditor(c *ui.Context, p *palette, st store, dirty bool) {
 	if a.ruleShownID == "" {
 		if len(st.rules) == 0 {
-			// There is nothing to choose: the list above already says so.
 			ui.Column(c).Grow(1).BorderWidth(1, 0, 0, 0).BorderColor(p.border)
 			return
 		}
 		ui.Column(c).Grow(1).BorderWidth(1, 0, 0, 0).BorderColor(p.border).Children(func() {
-			emptyState(c, p, iconSliders, "Select a rule", "Choose a rule to read and edit its script.", "")
+			emptyState(c, p, iconSliders, "Select a rule", "Choose a rule to read it, or edit its YAML.", "")
 		})
 		return
 	}
 	rule := a.ruleShownID
 	r := ruleOf(st.rules, rule)
 
-	// The visual model follows the draft: it reparses when the text
-	// changed behind it (a load, a save, a revert, code typing) and says
-	// whether this rule is one the form can express.
 	a.syncRuleVM()
-	visualOK := ruleVM != nil && ruleVMErr == "" && ruleVMAdv == ""
-	invalidParams := false
-	for _, e := range ruleParamEditors {
-		invalidParams = invalidParams || e.err != ""
-	}
-	// Fall back to code only when a real draft is in and the form cannot
-	// hold it — not while the load is still in flight.
-	if a.ruleEditMode == 0 && a.scriptDraft != "" && !visualOK {
-		a.ruleEditMode = 1 // an advanced rule: the form cannot hold it
-	}
-	// The store's priority is the one that orders rules; a document the
-	// API made carries none. The form shows and edits that one, and the
-	// baseline follows, so the merge alone is never an edit.
-	if ruleVM != nil && ruleVMErr == "" {
-		if r := ruleOf(st.rules, rule); r != nil && r.Priority != rulePriorityApplied {
-			rulePriorityApplied = r.Priority
-			ruleVM.Priority = r.Priority
-			rulePriorityStr = strconv.Itoa(r.Priority)
-			ruleVisualBaseline = mustMarshalRule(ruleVM)
-		}
+	// A draft the overview cannot read opens in the code view.
+	if a.ruleEditMode == 0 && a.scriptDraft != "" && ruleVM == nil {
+		a.ruleEditMode = 1
 	}
 
 	ui.Column(c).Grow(1).MinHeight(0).BorderWidth(1, 0, 0, 0).BorderColor(p.border).Children(func() {
 		ui.Row(c).Height(38).Shrink(0).Padding(0, 14).Gap(8).AlignItems(ui.Center).Children(func() {
-			// The rule, as the list names it, its id beside the name as a
-			// quiet afterthought, as a tab's marks read.
 			ui.Row(c).Gap(7).AlignItems(ui.Center).Children(func() {
 				if r != nil && r.Name != "" {
 					ui.Text(c, r.Name).FontSize(12.5).FontWeight(600).TextColor(p.text).SingleLine().Shrink(1).MinWidth(20)
@@ -241,47 +183,33 @@ func (a *app) ruleEditor(c *ui.Context, p *palette, st store, dirty bool) {
 					ui.Text(c, rule).FontSize(12).Font(mono()).FontWeight(600).TextColor(p.text).SingleLine().Shrink(1).MinWidth(40)
 				}
 			})
-			if dirty || invalidParams {
-				// The mark of unsaved work: it drops in as editing starts
-				// and lifts away as the draft is saved or reverted.
+			if dirty {
 				pillEl(c.Key("rule-edited"), "edited", p.warning(), p.warning().Alpha(0.14))
 			}
 			ui.Spacer(c)
 			if meta := ruleMeta(r); meta != "" {
 				ui.Text(c, meta).FontSize(11).Font(mono()).TextColor(p.faint).SingleLine().Shrink(1).MinWidth(0)
 			}
-			a.viewSwitch(c, p, visualOK, invalidParams)
+			a.viewSwitch(c, p)
 			a.ghostButton(c, "rule-toggle", toggleLabel(st.rules, rule), iconSwitch).
 				Clicked(func() { a.actToggleRule(rule, !enabledOf(st.rules, rule)) })
 			a.ghostButton(c, "rule-delete", "Delete", iconTrash).Disabled(ruleConfirming == rule).
 				Clicked(func() { a.confirmDeleteRule(rule) })
-			a.ghostButton(c, "rule-revert", "Revert", iconUndo).Disabled(!dirty && !invalidParams).
-				Clicked(func() { a.scriptDraft = a.scriptLoadedText(st.rules); ruleParamEditors = nil })
-			// The priority the rule has now, unless the form holds a
-			// newer one: a draft the form cannot parse must not save the
-			// priority as 0.
-			priority := 0
-			if r != nil {
-				priority = r.Priority
-			}
-			if ruleVM != nil && ruleVMErr == "" {
-				priority = ruleVM.Priority
-			}
-			a.fillButton(c, "rule-save", "Save", iconSave).Disabled(!dirty || invalidParams).
-				Clicked(func() { a.actSaveRule(rule, a.scriptDraft, priority) })
+			a.ghostButton(c, "rule-revert", "Revert", iconUndo).Disabled(!dirty).
+				Clicked(func() { a.scriptDraft = a.scriptLoadedText(st.rules) })
+			a.fillButton(c, "rule-save", "Save", iconSave).Disabled(!dirty).
+				Clicked(func() { a.actSaveRule(rule, a.scriptDraft) })
 		})
-		switch {
-		case a.ruleEditMode == 0 && visualOK:
-			a.ruleVisual(c, p, st, rule)
-		default:
+		if a.ruleEditMode == 0 {
+			a.ruleOverview(c, p, st, r)
+		} else {
 			a.ruleCode(c, p)
 		}
 	})
 }
 
-// viewSwitch is the visual and code pair of tabs. The visual one dims when
-// the rule is more than the form can express.
-func (a *app) viewSwitch(c *ui.Context, p *palette, visualOK, invalidParams bool) {
+// viewSwitch is the overview and code pair of tabs.
+func (a *app) viewSwitch(c *ui.Context, p *palette) {
 	tab := func(key, label string, on bool, disabled bool, fn func()) {
 		b := ui.ButtonBase(c.Key(key)).Height(24).Padding(0, 10).Radius(6).
 			AlignItems(ui.Center).Label(label).Tooltip(label).Disabled(disabled)
@@ -300,223 +228,110 @@ func (a *app) viewSwitch(c *ui.Context, p *palette, visualOK, invalidParams bool
 			fn()
 		}
 	}
-	tab("view-visual", "Visual", a.ruleEditMode == 0, !visualOK, func() { a.ruleEditMode = 0 })
-	tab("view-code", "Code", a.ruleEditMode == 1, invalidParams, func() { a.ruleEditMode = 1 })
+	tab("view-overview", "Overview", a.ruleEditMode == 0, ruleVM == nil, func() { a.ruleEditMode = 0 })
+	tab("view-code", "Code", a.ruleEditMode == 1, false, func() { a.ruleEditMode = 1 })
 }
 
-// syncRuleVM keeps the visual model in step with the draft: it reparses
-// when the text changed behind the form, and refreshes the mirrors the
-// inputs bind to.
+// syncRuleVM keeps the parsed document in step with the draft: it reparses
+// when the text changed.
 func (a *app) syncRuleVM() {
 	if ruleVMSeen == a.scriptDraft {
 		return
 	}
+	ruleVMSeen = a.scriptDraft
 	doc, err := parseRuleDoc(a.scriptDraft)
-	ruleParamText = nil
-	ruleParamEditors = nil
 	if err != nil {
-		ruleVM, ruleVMErr, ruleVMAdv = nil, err.Error(), ""
-		ruleVMSeen = a.scriptDraft
+		ruleVM, ruleVMErr = nil, err.Error()
 		return
 	}
 	ruleVM, ruleVMErr = doc, ""
-	ruleVMAdv = doc.docAdvanced()
-	ruleVMSeen = a.scriptDraft
-	if ruleVMAdv == "" {
-		ruleVisualBaseline = mustMarshalRule(doc)
-		rulePriorityStr = strconv.Itoa(doc.Priority)
-		rulePriorityApplied = doc.Priority
-	}
 }
 
-// syncVisual writes the form's document back into the draft, when the form
-// has moved off its own baseline. Formatting alone never counts.
-func (a *app) syncVisual() {
-	if ruleVM == nil {
-		return
-	}
-	fresh := mustMarshalRule(ruleVM)
-	if fresh == ruleVisualBaseline {
-		return
-	}
-	ruleVisualBaseline = fresh
-	a.scriptDraft = fresh
-	ruleVMSeen = fresh
-}
-
-// mustMarshalRule marshals the form's document; a model the form built
-// cannot fail to serialize.
-func mustMarshalRule(doc *vmDoc) string {
-	out, err := marshalRuleDoc(doc)
-	if err != nil {
-		return ""
-	}
-	return out
-}
-
-// ruleVisual is the form: what the rule matches, its description and
-// priority, and its pipelines of stages.
-func (a *app) ruleVisual(c *ui.Context, p *palette, st store, rule string) {
+// ruleOverview is the rule read as cards: what it matches, its settings,
+// and the stages of each phase. It edits nothing; the code view does.
+func (a *app) ruleOverview(c *ui.Context, p *palette, st store, r *api.Rule) {
 	doc := ruleVM
 	if doc == nil {
+		if a.scriptDraft == "" {
+			return // still loading
+		}
+		ui.Column(c).Grow(1).Padding(14).Children(func() {
+			card(c, p, func() {
+				ui.Text(c, "This rule can't be read as an overview.").FontSize(12.5).FontWeight(600).TextColor(p.text)
+				ui.Text(c, ruleVMErr).FontSize(11.5).Font(mono()).TextColor(p.removed).FillWidth()
+				ui.Text(c, "Its YAML is in the Code view.").FontSize(12).TextColor(p.muted)
+			})
+		})
 		return
 	}
 	ui.Scroll(c).Grow(1).Children(func() {
 		ui.Column(c).FillWidth().Padding(14, 16, 24).Gap(14).Children(func() {
-			// Every field writes the model, then the model writes the
-			// draft: one place syncs, the controls only touch the model.
-			a.ruleMatchCard(c, p, doc)
-			a.ruleSettingsCard(c, p, doc, st, rule)
-			for _, kind := range []string{"request", "response", "frame"} {
-				a.rulePipelineCard(c, p, doc, kind)
-			}
-			a.syncVisual()
-		})
-	})
-}
-
-// ruleMatchCard is what the rule matches on.
-func (a *app) ruleMatchCard(c *ui.Context, p *palette, doc *vmDoc) {
-	card(c, p, func() {
-		cardTitle(c, p, "Match")
-		if doc.On.Request == nil {
-			ui.Text(c, "No request match — this rule never runs.").FontSize(12).TextColor(p.muted)
-			ui.Row(c).Gap(8).Children(func() {
-				a.fillButton(c, "match-add", "Add request match", iconPlus).Clicked(func() {
-					doc.On.Request = &vmMatch{}
-				})
-			})
-			return
-		}
-		m := doc.On.Request
-		a.matchRow(c, p, "Method", func() {
-			// The native select edits a mirror whose "any" stands for the
-			// empty match; it lands on the model after the field builds.
-			if ruleMethodSel == "" {
-				ruleMethodSel = "any"
-			}
-			if m.Method != "" && m.Method != ruleMethodSel {
-				ruleMethodSel = m.Method
-			}
-			if m.Method == "" && ruleMethodSel != "any" && !methodIsReal(ruleMethodSel) {
-				ruleMethodSel = "any"
-			}
-			ui.Select(c, &ruleMethodSel, methodOptions)
-			if sel := ruleMethodSel; (sel == "any") != (m.Method == "") || (sel != "any" && sel != m.Method) {
-				m.Method = map[bool]string{true: "", false: sel}[sel != "any"]
-			}
-		})
-		a.matchInput(c, p, "Host", &m.Host, "api.example.com")
-		a.matchInput(c, p, "Path", &m.Path, "/v1/login")
-		a.matchInput(c, p, "Path prefix", &m.PathPrefix, "/v1/")
-	})
-}
-
-// matchRow is one labeled row of the match card.
-func (a *app) matchRow(c *ui.Context, p *palette, label string, field func()) {
-	ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, label).FontSize(12).TextColor(p.muted).SingleLine().Width(80).Shrink(0)
-		field()
-	})
-}
-
-// matchInput is one text field of the match card.
-func (a *app) matchInput(c *ui.Context, p *palette, label string, value *string, placeholder string) {
-	a.matchRow(c, p, label, func() {
-		ui.TextInput(c, value).Grow(1).Font(mono()).FontSize(12).Placeholder(placeholder)
-	})
-}
-
-// ruleSettingsCard is the rule's description and priority. Enabled and the
-// failure mode stay read-only here — the toolbar toggles enabled, and both
-// have their own endpoints.
-func (a *app) ruleSettingsCard(c *ui.Context, p *palette, doc *vmDoc, st store, rule string) {
-	card(c, p, func() {
-		cardTitle(c, p, "Settings")
-		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "Description").FontSize(12).TextColor(p.muted).SingleLine().Width(80).Shrink(0)
-			ui.TextInput(c, &doc.Description).Grow(1).FontSize(12).Placeholder("What this rule is for")
-		})
-		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "Priority").FontSize(12).TextColor(p.muted).SingleLine().Width(80).Shrink(0)
-			ui.TextInput(c, &rulePriorityStr).Width(90).Font(mono()).FontSize(12)
-			ui.Spacer(c)
-			ui.Text(c, "Enabled").FontSize(12).TextColor(p.muted).SingleLine()
-			if enabledOf(st.rules, rule) {
-				a.pill(c, "on", p.added, p.added.Alpha(0.13), false)
-			} else {
-				a.pill(c, "off", p.faint, p.faint.Alpha(0.12), false)
-			}
-		})
-		// The priority text lands on the model as a number; junk keeps the
-		// last good value until it parses.
-		if n, err := strconv.Atoi(strings.TrimSpace(rulePriorityStr)); err == nil && n != rulePriorityApplied {
-			rulePriorityApplied = n
-			doc.Priority = n
-		}
-	})
-}
-
-// rulePipelineCard is one phase's stages and the add-stage menu.
-func (a *app) rulePipelineCard(c *ui.Context, p *palette, doc *vmDoc, kind string) {
-	ph := doc.phaseOf(kind)
-	empty := ph == nil || len(ph.Pipeline) == 0
-	title := strings.ToUpper(kind) + " PIPELINE"
-	ui.Column(c.Key("pipe:" + kind)).FillWidth().Gap(6).Children(func() {
-		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, title).FontSize(10.5).FontWeight(650).LetterSpacing(0.6).TextColor(p.faint).SingleLine()
-			ui.Spacer(c)
-			if !empty {
-				a.addStageButton(c, p, doc, kind)
-			}
-		})
-		if empty {
 			card(c, p, func() {
-				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, "No stages.").FontSize(12).TextColor(p.faint)
-					ui.Spacer(c)
-					a.addStageButton(c, p, doc, kind)
-				})
+				cardTitle(c, p, "Match")
+				switch {
+				case doc.On.Hook != "":
+					a.fact(c, p, "Hook", doc.On.Hook)
+				case doc.On.Request == nil:
+					ui.Text(c, "No request match — this rule never runs.").FontSize(12).TextColor(p.muted)
+				default:
+					m := doc.On.Request
+					any := func(s string) string {
+						if s == "" {
+							return "any"
+						}
+						return s
+					}
+					a.fact(c, p, "Method", any(m.Method))
+					a.fact(c, p, "Host", any(m.Host))
+					if m.PathPrefix != "" {
+						a.fact(c, p, "Path prefix", m.PathPrefix)
+					} else {
+						a.fact(c, p, "Path", any(m.Path))
+					}
+				}
 			})
-			return
-		}
-		for i := range ph.Pipeline {
-			a.stageCard(c, p, doc, kind, i)
-		}
-	})
-}
-
-// addStageButton offers the builtin stages; choosing one appends a stage
-// the form can edit.
-func (a *app) addStageButton(c *ui.Context, p *palette, doc *vmDoc, kind string) {
-	b := ui.ButtonBase(c.Key("add:"+kind)).Height(24).Padding(0, 8).Gap(5).Radius(6).
-		AlignItems(ui.Center).Label("Add a stage to " + kind).Tooltip("Add a stage")
-	if b.Hovered() {
-		b.Background(p.hover)
-	}
-	b.Transition(hoverFade)
-	b.Children(func() {
-		ui.Icon(c, iconPlus).FontSize(12).TextColor(p.muted)
-		ui.Text(c, "Add stage").FontSize(11.5).TextColor(p.muted).SingleLine()
-	})
-	b.Menu(func(m *ui.Menu) {
-		for _, uses := range builtinStages {
-			name := strings.TrimPrefix(uses, "chiling.")
-			if m.Item(name).Chosen() {
-				doc.ensurePhase(kind).Pipeline = append(doc.ensurePhase(kind).Pipeline,
-					vmStage{ID: name, Uses: uses, With: map[string]any{}})
+			card(c, p, func() {
+				cardTitle(c, p, "Settings")
+				if doc.Description != "" {
+					a.fact(c, p, "Description", doc.Description)
+				}
+				if r != nil {
+					a.fact(c, p, "Priority", fmt.Sprint(r.Priority))
+					a.factYesNo(c, p, "Enabled", r.Enabled)
+				}
+				mode := doc.FailureMode
+				if r != nil && r.FailureMode != "" {
+					mode = r.FailureMode
+				}
+				if mode != "" {
+					a.fact(c, p, "Failure mode", mode)
+				}
+				if doc.Timeout != "" {
+					a.fact(c, p, "Timeout", doc.Timeout)
+				}
+				for _, k := range sortedKeys(doc.Vars) {
+					a.fact(c, p, "var "+k, paramString(doc.Vars[k]))
+				}
+			})
+			for _, kind := range []string{"request", "response", "frame"} {
+				ph := doc.phaseOf(kind)
+				if ph == nil || len(ph.Pipeline) == 0 {
+					continue
+				}
+				ui.Column(c.Key("pipe:" + kind)).FillWidth().Gap(6).Children(func() {
+					cardTitle(c, p, kind+" pipeline")
+					for i := range ph.Pipeline {
+						a.stageCard(c, p, &ph.Pipeline[i], fmt.Sprintf("%s:%d", kind, i))
+					}
+				})
 			}
-		}
+		})
 	})
 }
 
-// stageCard is one stage of the visual editor: its uses, its id and if,
-// its with rows — or, for a stage the form cannot express, the read-only
-// facts and a pointer at the Code view.
-func (a *app) stageCard(c *ui.Context, p *palette, doc *vmDoc, kind string, i int) {
-	ph := doc.phaseOf(kind)
-	s := &ph.Pipeline[i]
-	key := fmt.Sprintf("stage:%s:%d", kind, i)
+// stageCard is one stage, read: what it uses, its id and condition, and
+// its parameters as they are written.
+func (a *app) stageCard(c *ui.Context, p *palette, s *vmStage, key string) {
 	card(c, p, func() {
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 			uses := s.stageUses()
@@ -528,186 +343,18 @@ func (a *app) stageCard(c *ui.Context, p *palette, doc *vmDoc, kind string, i in
 			if s.If != "" {
 				ui.Text(c, "if "+s.If).FontSize(11).Font(mono()).TextColor(p.muted).SingleLine().Shrink(1).MinWidth(20)
 			}
-			if adv := s.stageAdvanced(); adv != "" {
+			if adv := s.stageNote(); adv != "" {
 				ui.Badge(c, adv)
 			}
-			ui.Spacer(c)
-			a.miniIcon(c, key+":up", iconUp, i > 0).Clicked(func() {
-				ph.Pipeline[i-1], ph.Pipeline[i] = ph.Pipeline[i], ph.Pipeline[i-1]
-				ruleParamEditors, ruleParamText = nil, nil
-			})
-			a.miniIcon(c, key+":down", iconDown, i < len(ph.Pipeline)-1).Clicked(func() {
-				ph.Pipeline[i+1], ph.Pipeline[i] = ph.Pipeline[i], ph.Pipeline[i+1]
-				ruleParamEditors, ruleParamText = nil, nil
-			})
-			a.miniIcon(c, key+":del", iconX, true).Clicked(func() {
-				ph.Pipeline = append(ph.Pipeline[:i], ph.Pipeline[i+1:]...)
-				ruleParamEditors, ruleParamText = nil, nil
-			})
 		})
-		if adv := s.stageAdvanced(); adv != "" {
-			ui.Column(c).FillWidth().Gap(4).Children(func() {
-				if s.Run != nil {
-					ui.Text(c, strings.TrimSpace(s.Run.Script)).FontSize(11).Font(mono()).
-						TextColor(p.muted).FillWidth()
-				}
-				ui.Text(c, "Edit in Code.").FontSize(11).TextColor(p.faint)
+		if s.Run != nil {
+			ui.Text(c, strings.TrimSpace(s.Run.Script)).FontSize(11.5).Font(mono()).TextColor(p.muted).FillWidth().Margin(4, 0, 0)
+		}
+		for _, k := range sortedKeys(s.With) {
+			ui.Row(c.Key("with:"+key+":"+k)).FillWidth().Gap(10).AlignItems(ui.Start).Padding(2, 0).Children(func() {
+				ui.Text(c, k).FontSize(12).Font(mono()).FontWeight(600).TextColor(p.text).SingleLine().Shrink(0)
+				ui.Text(c, paramString(s.With[k])).FontSize(12).Font(mono()).TextColor(p.muted).Shrink(1).MinWidth(40)
 			})
-			return
-		}
-		edit, shown := scalarParams(s)
-		if len(edit) == 0 && len(shown) == 0 {
-			ui.Text(c, "No parameters.").FontSize(11.5).TextColor(p.faint)
-			return
-		}
-		ui.Column(c).FillWidth().Gap(6).Children(func() {
-			for _, k := range edit {
-				kk := k
-				if value, ok := s.With[kk].(string); ok && (strings.Contains(strings.ToLower(kk), "body") || strings.Contains(value, "\n")) {
-					a.paramCode(c, p, key, s, kk, false)
-					continue
-				}
-				ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, kk).FontSize(12).Font(mono()).FontWeight(600).TextColor(p.text).SingleLine().Shrink(0)
-					ui.TextInput(c, paramText(key, s, kk)).Grow(1).Font(mono()).FontSize(12)
-					a.miniIcon(c, key+":del:"+kk, iconX, true).Clicked(func() {
-						delete(s.With, kk)
-						delete(ruleParamText, key+":"+kk)
-					})
-				})
-			}
-			for _, k := range shown {
-				a.paramCode(c, p, key, s, k, true)
-			}
-		})
-	})
-}
-
-// stageTone maps a stage's uses to the pill tone a request method would
-// wear, so the stage list reads at a glance.
-func stageTone(uses string) string {
-	switch {
-	case strings.Contains(uses, "mock-response"):
-		return "POST"
-	case strings.Contains(uses, "block"), strings.Contains(uses, "abort"):
-		return "DELETE"
-	case strings.Contains(uses, "set-"):
-		return "PUT"
-	case strings.Contains(uses, "delay"), strings.Contains(uses, "throttle"):
-		return "PATCH"
-	}
-	return "GET"
-}
-
-// paramText offers a string parameter's text to an input and writes the
-// text back into the model, as its YAML kind: a number stays a number.
-func paramText(stageKey string, s *vmStage, name string) *string {
-	if ruleParamText == nil {
-		ruleParamText = map[string]*string{}
-	}
-	k := stageKey + ":" + name
-	ps, ok := ruleParamText[k]
-	if !ok {
-		v := paramString(s.With[name])
-		ps = &v
-		ruleParamText[k] = ps
-	}
-	if *ps != paramString(s.With[name]) {
-		s.With[name] = coerceParam(*ps)
-	}
-	return ps
-}
-
-// miniIcon is a small icon-only button of a stage card. A dead one draws
-// faint and takes no clicks, as an edge of the list is.
-func (a *app) miniIcon(c *ui.Context, key string, icon *ui.SVG, enabled bool) button {
-	p := a.pal
-	b := ui.ButtonBase(c.Key(key)).Size(22, 20).Radius(5).Justify(ui.Center).AlignItems(ui.Center)
-	col := p.faint
-	if enabled {
-		switch {
-		case b.Hovered():
-			b.Background(p.hover)
-			col = p.text
-		}
-	} else {
-		b.Disabled(true)
-	}
-	b.Children(func() { ui.Icon(c, icon).FontSize(12).TextColor(col) })
-	return button(b)
-}
-
-// paramEditor preserves unfinished structured input until it parses.
-type paramEditor struct {
-	state *editor.State
-	seen  string
-	err   string
-}
-
-func (a *app) paramCode(c *ui.Context, p *palette, stageKey string, s *vmStage, name string, structured bool) {
-	if ruleParamEditors == nil {
-		ruleParamEditors = map[string]*paramEditor{}
-	}
-	key := stageKey + ":" + name
-	value := s.With[name]
-	text := ""
-	filename := "body.txt"
-	if structured {
-		data, err := yaml.Marshal(value)
-		if err != nil {
-			return
-		}
-		text, filename = string(data), "body.yaml"
-	} else {
-		text = value.(string)
-	}
-	e := ruleParamEditors[key]
-	if e == nil || e.seen != text {
-		buf := editor.NewBuffer(text)
-		buf.SetLanguage(editor.LanguageFor(filename))
-		e = &paramEditor{state: &editor.State{Buffer: buf, SoftWrap: true, NoScrollPastEnd: true, Label: name}, seen: text}
-		ruleParamEditors[key] = e
-	}
-	current := e.state.Buffer.String()
-	if current == text {
-		e.err = ""
-	}
-	if current != text {
-		if structured {
-			var parsed any
-			if err := yaml.Unmarshal([]byte(current), &parsed); err != nil {
-				e.err = err.Error()
-			} else {
-				// Keep a mapping or sequence a mapping or sequence.
-				valid := false
-				switch value.(type) {
-				case map[string]any:
-					_, valid = parsed.(map[string]any)
-				case []any:
-					_, valid = parsed.([]any)
-				}
-				if !valid {
-					e.err = "Keep this value a mapping or sequence."
-				} else {
-					s.With[name], e.err = parsed, ""
-					if b, err := yaml.Marshal(parsed); err == nil {
-						e.seen = string(b)
-					}
-				}
-			}
-		} else {
-			s.With[name], e.seen = current, current
-		}
-	}
-	ui.Column(c).FillWidth().Gap(5).Children(func() {
-		ui.Row(c).FillWidth().AlignItems(ui.Center).Children(func() {
-			ui.Text(c, name).FontSize(12).Font(mono()).FontWeight(600).TextColor(p.text)
-			ui.Spacer(c)
-			a.miniIcon(c, key+":del", iconX, true).Clicked(func() { delete(s.With, name); delete(ruleParamEditors, key) })
-		})
-		editor.View(c.Key("param:"+key), e.state).FillWidth().Height(140).MinWidth(0)
-		if e.err != "" {
-			ui.Text(c, e.err).FontSize(11).TextColor(p.removed).FillWidth()
 		}
 	})
 }
