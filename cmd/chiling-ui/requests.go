@@ -35,8 +35,8 @@ var reqMaxMs int64 = 1
 // replayingID is the request whose replay the detail's button is showing
 // its wait for, "" for none, and startReplayAt when the wait began. Both
 // live on the view thread, set where the click is and read as the frame
-// draws: the replay action reports no callback, so the wait ends by the
-// timeout below, in a frame of its own.
+// draws. The replay's answer clears it; the timeout below is only the
+// backstop for an answer that never comes, past the daemon's own 20 s.
 var (
 	replayingID   string
 	startReplayAt time.Time
@@ -44,7 +44,7 @@ var (
 
 // replayBusyFor is how long the replay button may spin without word of
 // the replay.
-const replayBusyFor = 3 * time.Second
+const replayBusyFor = 25 * time.Second
 
 // requestsPage is the live table of captured exchanges and, below it, the
 // detail of the one chosen.
@@ -249,7 +249,7 @@ func (a *app) requestCell(c *ui.Context, p *palette, r uiRequestRow, col int, ch
 					ui.Box(c).Absolute().Left(0).Top(0).Bottom(0).Width(w).Radius(2).Background(scol.Alpha(0.85))
 				}
 			})
-			ui.Text(c, durationLabel(r.DurationMs)).FontSize(11.5).Font(mono()).
+			ui.Text(c, latencyLabel(r)).FontSize(11.5).Font(mono()).
 				TextColor(p.muted).Width(48).TextAlign(ui.End).SingleLine()
 		})
 	}
@@ -634,7 +634,7 @@ func (a *app) ruleTraceSection(c *ui.Context, p *palette, traces []api.RuleTrace
 			for i, act := range tr.Actions {
 				node(fmt.Sprintf("act:%s:%d", tr.RuleID, i), p.accent, func() {
 					ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-						pillEl(c, string(act.Type), p.accent, p.accent.Alpha(0.14))
+						pillEl(c, string(act.Type), p.accent, p.accent.Alpha(0.14)).Shrink(0)
 						ui.Text(c, actionParams(act)).FontSize(11.5).Font(mono()).TextColor(p.muted).SingleLine().Shrink(1).MinWidth(20)
 					})
 				})

@@ -45,6 +45,8 @@ func (a *app) trajectoryPage(c *ui.Context, p *palette) {
 		byID[string(r.ID)] = r
 		maxMs = max(maxMs, r.DurationMs)
 	}
+	fetched := len(st.traj)
+	st.traj = foldTrace(st.traj)
 	steps := make([]api.Activity, len(st.traj))
 	copy(steps, st.traj)
 	if trajOldest == 1 {
@@ -71,13 +73,37 @@ func (a *app) trajectoryPage(c *ui.Context, p *palette) {
 					}
 					a.traceStep(c, p, it, byID, maxMs, i == 0, i == len(steps)-1)
 				}
-				if len(steps) >= trajFetch {
+				if fetched >= trajFetch {
 					ui.Text(c, fmt.Sprintf("Showing the latest %d steps.", trajFetch)).FontSize(11).
 						TextColor(p.faint).Padding(10, 0, 0, 34).SingleLine()
 				}
 			})
 		})
 	})
+}
+
+// foldTrace drops the step that says a request arrived once the step that
+// says it finished is there too. The daemon notes both, and both draw the
+// same exchange card, so unfolded every request reads twice and the counts
+// double. A request still in flight keeps its arrival step.
+func foldTrace(in []api.Activity) []api.Activity {
+	done := make(map[string]bool)
+	for _, it := range in {
+		if it.Kind == "request_completed" && it.RequestID != "" {
+			done[it.RequestID] = true
+		}
+	}
+	if len(done) == 0 {
+		return in
+	}
+	out := make([]api.Activity, 0, len(in))
+	for _, it := range in {
+		if it.Kind == "request_captured" && done[it.RequestID] {
+			continue
+		}
+		out = append(out, it)
+	}
+	return out
 }
 
 // traceHeader is the trace's top: the session it follows, the counts of
@@ -198,7 +224,7 @@ func (a *app) traceStep(c *ui.Context, p *palette, it api.Activity, byID map[str
 						ui.Text(c, hostOf(req.URL)).FontSize(12.5).FontWeight(600).TextColor(p.text).SingleLine().Shrink(0)
 						ui.Text(c, pathOf(req.URL)).FontSize(12).Font(mono()).TextColor(p.muted).SingleLine().Shrink(1).MinWidth(20)
 						ui.Spacer(c)
-						ui.Text(c, durationLabel(req.DurationMs)).FontSize(11.5).Font(mono()).TextColor(p.muted).SingleLine().Shrink(0)
+						ui.Text(c, latencyLabel(req)).FontSize(11.5).Font(mono()).TextColor(p.muted).SingleLine().Shrink(0)
 						if req.Status == 0 {
 							ui.Spinner(c).Size(11, 11)
 						} else {

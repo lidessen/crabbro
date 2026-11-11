@@ -100,25 +100,19 @@ func (rb *RingBuffer[T]) Do(f func(T) bool) {
 
 // Iterate returns a channel that yields items from oldest to newest. The
 // channel is closed when all items have been sent.
+//
+// The items are a snapshot taken before Iterate returns, already buffered in
+// the channel: a caller that stops reading early leaves nothing behind. An
+// earlier version sent from a goroutine that held the read lock, so a range
+// that returned on its first match parked that goroutine with the lock held
+// for ever, and the next Push waited on it — which stopped the proxy.
 func (rb *RingBuffer[T]) Iterate() <-chan T {
-	ch := make(chan T)
-	go func() {
-		if rb == nil {
-			close(ch)
-			return
-		}
-		rb.mu.RLock()
-		if rb.ring != nil && rb.items > 0 {
-			start := rb.ring.Move(-rb.items)
-			start.Do(func(v any) {
-				if v != nil {
-					ch <- v.(T)
-				}
-			})
-		}
-		rb.mu.RUnlock()
-		close(ch)
-	}()
+	vals := rb.Values()
+	ch := make(chan T, len(vals))
+	for _, v := range vals {
+		ch <- v
+	}
+	close(ch)
 	return ch
 }
 

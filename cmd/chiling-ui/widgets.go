@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -163,6 +164,16 @@ func durationLabel(ms int64) string {
 	return fmt.Sprintf("%.1fs", float64(ms)/1000)
 }
 
+// latencyLabel is durationLabel for an exchange: one that has its status
+// and took under a millisecond, as a mocked response does, reads "<1ms",
+// not the dash of one still running.
+func latencyLabel(r api.RequestSummary) string {
+	if r.DurationMs <= 0 && r.Status != 0 {
+		return "<1ms"
+	}
+	return durationLabel(r.DurationMs)
+}
+
 // detailHead is the URL the detail's header names, "" while it loads.
 func detailHead(d *api.RequestDetailResponse) string {
 	if d == nil || d.Request.Method == "" {
@@ -175,7 +186,14 @@ func detailHead(d *api.RequestDetailResponse) string {
 func actionParams(act api.RuleAction) string {
 	parts := make([]string, 0, len(act.Params))
 	for k, v := range act.Params {
-		parts = append(parts, fmt.Sprintf("%s=%v", k, v))
+		// JSON, not %v: a nested value would print as Go's map[...].
+		val := fmt.Sprint(v)
+		if _, plain := v.(string); !plain {
+			if b, err := json.Marshal(v); err == nil {
+				val = string(b)
+			}
+		}
+		parts = append(parts, k+"="+val)
 	}
 	sort.Strings(parts)
 	if len(parts) == 0 {
