@@ -14,35 +14,61 @@ import (
 
 // Shared widgets and small formatters the pages draw with.
 
-// pill is a rounded badge: a wash of the color behind text in it. On a
-// chosen row the wash drops, for the row's own tint to show.
-func (a *app) pill(c *ui.Context, label string, col, bg ui.Color, chosen bool) {
-	t := ui.Text(c, label).FontSize(11).FontWeight(650).Font(mono()).TextColor(col).
-		Padding(2, 7).Radius(10).SingleLine()
-	if !chosen {
-		t.Background(bg)
+// emptyMark is the mark an empty page is known by: its icon in the accent,
+// on a soft square of the same. It is the one ornament the page has, so it
+// is drawn with care: an even radius, the icon optically centered.
+func emptyMark(c *ui.Context, p *palette, icon *ui.SVG) {
+	ui.Row(c).Size(44, 44).Center().Radius(12).Background(p.accent.Alpha(0.1)).Children(func() {
+		ui.Icon(c, icon).FontSize(20).TextColor(p.accent)
+	})
+}
+
+// tag is a small neutral token: a rule id, a phase, a pattern. It carries
+// no color of its own; a quiet wash sets it apart from the text around it.
+func tag(c *ui.Context, p *palette, label string) ui.Element {
+	return ui.Text(c, label).FontSize(11).Font(mono()).TextColor(p.muted).
+		Padding(1, 6).Radius(5).Background(p.text.Alpha(0.055)).SingleLine().Shrink(0)
+}
+
+// stateDot is a state said plainly: a small dot in its color, and the word
+// beside it in the text's own. Color marks the state; it does not fill it.
+func stateDot(c *ui.Context, p *palette, col ui.Color, label string) {
+	ui.Row(c).Gap(6).AlignItems(ui.Center).Shrink(0).Children(func() {
+		ui.Box(c).Size(6, 6).Radius(3).Background(col)
+		ui.Text(c, label).FontSize(12).TextColor(p.muted).SingleLine()
+	})
+}
+
+// statusText is a response status as a number in mono, in the color of
+// how it went. The color is in the figure itself — no badge behind it — so
+// a column of statuses reads as a column of text, and a failure still
+// stands out of it.
+func statusText(c *ui.Context, p *palette, status int) ui.Element {
+	return ui.Text(c, fmt.Sprint(status)).FontSize(12).FontWeight(600).Font(mono()).
+		TextColor(statusTone(p, status)).SingleLine().Shrink(0)
+}
+
+// methodText is a request's verb in mono: GET, the common case, recedes;
+// a verb that changes something reads a step stronger.
+func methodText(c *ui.Context, p *palette, method string) ui.Element {
+	col := p.text
+	if method == "GET" || method == "CONNECT" || method == "" {
+		col = p.muted
 	}
+	return ui.Text(c, methodLabel(method)).FontSize(11.5).FontWeight(600).Font(mono()).
+		TextColor(col).SingleLine().Shrink(0)
 }
 
-// pageWash is the quiet vertical wash a page's own background draws, from
-// the editor toward the chrome, which the cards catch the light from.
-func pageWash(p *palette) ui.LinearGradient {
-	return ui.LinearGradient{From: p.editor, To: p.chrome.Mix(p.editor, 0.5), Angle: 180}
-}
-
-// card is a surface of the page: a rounded face the sections sit on.
+// card is a surface of the page: a rounded face under a hairline, which
+// groups what belongs together.
 func card(c *ui.Context, p *palette, fn func()) {
-	ui.Column(c).FillWidth().Padding(12, 14).Gap(2).Radius(10).
+	ui.Column(c).FillWidth().Padding(12, 14).Gap(2).Radius(8).
 		Background(p.surface).Border(1, p.border).Children(fn)
 }
 
-// cardTitle is what a card is of.
+// cardTitle is what a card is of: a small quiet label, in sentence case.
 func cardTitle(c *ui.Context, p *palette, title string) {
-	ui.Row(c).Gap(7).AlignItems(ui.Center).Children(func() {
-		ui.Box(c).Width(3).Height(11).Radius(2).Background(p.accent.Alpha(0.85))
-		ui.Text(c, strings.ToUpper(title)).FontSize(10.5).FontWeight(650).LetterSpacing(0.7).
-			TextColor(p.muted).SingleLine()
-	})
+	ui.Text(c, title).FontSize(12).FontWeight(600).TextColor(p.muted).SingleLine().Padding(0, 0, 4)
 }
 
 // emptyState is what a page shows while it has nothing: a tinted mark, a
@@ -55,14 +81,12 @@ func emptyState(c *ui.Context, p *palette, icon *ui.SVG, title, help, cmd string
 // emptyStateWith is emptyState with an action under the chip, drawn by act.
 func emptyStateWith(c *ui.Context, p *palette, icon *ui.SVG, title, help, cmd string, act func()) {
 	ui.Column(c).Grow(1).Center().Padding(24).Gap(10).Children(func() {
-		ui.Row(c).Size(52, 52).Center().Radius(16).Background(p.accent.Alpha(0.12)).Children(func() {
-			ui.Icon(c, icon).FontSize(24).TextColor(p.accent)
-		})
-		ui.Text(c, title).FontSize(14).FontWeight(650).TextColor(p.text).Margin(4, 0, 0, 0).SingleLine()
-		ui.Text(c, help).FontSize(12.5).TextColor(p.muted).TextAlign(ui.Center).LineHeight(1.5).MaxWidth(360)
+		emptyMark(c, p, icon)
+		ui.Text(c, title).FontSize(14).FontWeight(600).TextColor(p.text).Margin(6, 0, 0, 0).SingleLine()
+		ui.Text(c, help).FontSize(12.5).TextColor(p.muted).TextAlign(ui.Center).LineHeight(1.5).MaxWidth(340)
 		if cmd != "" {
-			ui.Text(c, cmd).FontSize(12).Font(mono()).TextColor(p.text).Padding(6, 11).Radius(7).
-				Background(p.surface).Border(1, p.border).SingleLine()
+			ui.Text(c, cmd).FontSize(12).Font(mono()).TextColor(p.muted).Padding(5, 10).Radius(6).
+				Background(p.text.Alpha(0.045)).Margin(2, 0, 0).SingleLine()
 		}
 		if act != nil {
 			ui.Row(c).Margin(4, 0, 0).Children(act)
@@ -70,14 +94,12 @@ func emptyStateWith(c *ui.Context, p *palette, icon *ui.SVG, title, help, cmd st
 	})
 }
 
-// statTile is one headline number of the daemon's overview: a small
-// label over a large value. The value rolls as it changes.
-func statTile(c *ui.Context, p *palette, key, label, value string, tone ui.Color) {
-	ui.Column(c.Key("stat:"+key)).Grow(1).Basis(0).MinWidth(0).Padding(12, 14).Gap(5).Radius(10).
-		Background(p.surface).Border(1, p.border).Children(func() {
-		ui.Text(c, strings.ToUpper(label)).FontSize(10.5).FontWeight(650).LetterSpacing(0.7).
-			TextColor(p.faint).SingleLine()
-		ui.Text(c, value).FontSize(20).FontWeight(650).TextColor(tone).SingleLine().
+// stat is one headline number of the daemon's overview: a small label over
+// a larger value, which rolls as it changes. The tiles share one card.
+func stat(c *ui.Context, p *palette, key, label, value string) {
+	ui.Column(c.Key("stat:"+key)).Grow(1).Basis(0).MinWidth(0).Padding(12, 16).Gap(4).Children(func() {
+		ui.Text(c, label).FontSize(12).TextColor(p.muted).SingleLine()
+		ui.Text(c, value).FontSize(18).FontWeight(600).TextColor(p.text).SingleLine().
 			ContentTransition(ui.ContentTransition{Numeric: true})
 	})
 }
@@ -93,37 +115,30 @@ func riseIn(e ui.Element, delay time.Duration) ui.Element {
 // popIn is how a floating thing takes the screen, as Mayoi's are.
 var popIn = ui.ElementTransition{Duration: 130 * time.Millisecond, Colors: true, Enter: &ui.Motion{Y: -6}, Exit: &ui.Motion{Y: -4}}
 
-// statusColor is the color and wash of a response status.
-func statusColor(p *palette, status int) (ui.Color, ui.Color) {
+// statusTone is the color a response status reads in: the four the window
+// keeps for how things went, and no others.
+func statusTone(p *palette, status int) ui.Color {
 	switch {
 	case status == 0:
-		return p.faint, p.faint.Alpha(0.12)
+		return p.faint
 	case status < 300:
-		return p.added, p.added.Alpha(0.13)
+		return p.added
 	case status < 400:
-		return p.changed, p.changed.Alpha(0.13)
+		return p.changed
 	case status < 500:
-		return p.warning(), p.warning().Alpha(0.13)
+		return p.warning()
 	default:
-		return p.removed, p.removed.Alpha(0.13)
+		return p.removed
 	}
 }
 
-// methodColor tints the verbs by what they do.
-func methodColor(p *palette, method string) (ui.Color, ui.Color) {
-	switch method {
-	case "GET":
-		return p.changed, p.changed.Alpha(0.11)
-	case "POST":
-		return p.teal(), p.teal().Alpha(0.13)
-	case "PUT", "PATCH":
-		return p.warning(), p.warning().Alpha(0.13)
-	case "DELETE":
-		return p.removed, p.removed.Alpha(0.12)
-	case "CONNECT":
-		return p.faint, p.faint.Alpha(0.12)
+// barTone is the fill of a latency bar: the status' color, held back, so
+// the bar agrees with the figure beside it without competing with it.
+func barTone(p *palette, status int) ui.Color {
+	if status >= 400 {
+		return statusTone(p, status).Alpha(0.85)
 	}
-	return p.muted, p.muted.Alpha(0.12)
+	return statusTone(p, status).Alpha(0.5)
 }
 
 func methodLabel(method string) string {
@@ -207,11 +222,4 @@ func bodyOrNone(b *string) string {
 		return "(none)"
 	}
 	return *b
-}
-
-// chip is a small count or note of a toolbar: a quiet wash behind plain
-// text, not the mono of the pills that name a status or a verb.
-func chip(c *ui.Context, label string, col ui.Color) {
-	ui.Text(c, label).FontSize(11.5).FontWeight(600).TextColor(col).Padding(2, 8).Radius(10).
-		Background(col.Alpha(0.12)).SingleLine()
 }

@@ -133,7 +133,7 @@ func (a *app) chosenRequestID(rows []uiRequestRow) string {
 
 // requestsToolbar occupies its own row above the table header.
 func (a *app) requestsToolbar(c *ui.Context, p *palette) {
-	ui.Row(c).FillWidth().Height(56).Shrink(0).Padding(8, 12).
+	ui.Row(c).FillWidth().Height(48).Shrink(0).Padding(0, 12).
 		Gap(10).AlignItems(ui.Center).Children(func() {
 		ui.SearchField(c, &a.search).Grow(1).Shrink(1).MinWidth(40).MaxWidth(300)
 		wasHidden := a.showHidden
@@ -152,13 +152,18 @@ func (a *app) requestsToolbar(c *ui.Context, p *palette) {
 				failed++
 			}
 		}
+		// The counts read as a line of text, not as badges: only the
+		// failures take a color.
+		count := fmt.Sprintf("%d requests", len(st.requests))
 		if len(st.requests) >= requestListLimit {
-			chip(c, fmt.Sprintf("latest %d", requestListLimit), p.muted)
-		} else {
-			chip(c, fmt.Sprintf("%d requests", len(st.requests)), p.muted)
+			count = fmt.Sprintf("Latest %d", requestListLimit)
 		}
+		ui.Text(c, count).FontSize(12).TextColor(p.muted).SingleLine().
+			ContentTransition(ui.ContentTransition{Numeric: true})
 		if failed > 0 {
-			chip(c, fmt.Sprintf("%d failed", failed), p.removed)
+			ui.Text(c, "·").FontSize(12).TextColor(p.faint).SingleLine()
+			ui.Text(c, fmt.Sprintf("%d failed", failed)).FontSize(12).TextColor(p.removed).SingleLine().
+				ContentTransition(ui.ContentTransition{Numeric: true})
 		}
 		if a.bounceSearch(c) {
 			a.nudge(a.search)
@@ -219,21 +224,19 @@ func (a *app) requestCell(c *ui.Context, p *palette, r uiRequestRow, col int, ch
 			ui.Spinner(c).Size(10, 10)
 			return
 		}
-		col, bg := statusColor(p, r.Status)
-		a.pill(c, fmt.Sprint(r.Status), col, bg, chosen)
+		statusText(c, p, r.Status)
 	case 1:
-		col, bg := methodColor(p, r.Method)
-		a.pill(c, methodLabel(r.Method), col, bg, chosen)
+		methodText(c, p, r.Method)
 	case 2:
 		ui.Text(c, hostOf(r.URL)).FontSize(12.5).TextColor(p.text).SingleLine()
 	case 3:
 		ui.Row(c).Grow(1).Gap(6).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, pathOf(r.URL)).FontSize(12).Font(mono()).TextColor(p.text).SingleLine().Shrink(1).MinWidth(20)
-			for i, tag := range r.Tags {
+			for i, name := range r.Tags {
 				if i > 2 {
 					break
 				}
-				ui.Badge(c, tag)
+				tag(c, p, name)
 			}
 			if r.Hidden {
 				ui.Text(c, "hidden").FontSize(11).TextColor(p.faint).SingleLine()
@@ -241,14 +244,7 @@ func (a *app) requestCell(c *ui.Context, p *palette, r uiRequestRow, col int, ch
 		})
 	case 4:
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Justify(ui.End).Children(func() {
-			const barW = 56
-			scol, _ := statusColor(p, r.Status)
-			ui.Box(c).Width(barW).Height(4).Radius(2).Shrink(0).Background(p.faint.Alpha(0.14)).Children(func() {
-				if r.DurationMs > 0 {
-					w := max(float32(r.DurationMs)/float32(reqMaxMs)*barW, 3)
-					ui.Box(c).Absolute().Left(0).Top(0).Bottom(0).Width(w).Radius(2).Background(scol.Alpha(0.85))
-				}
-			})
+			latencyBar(c, p, r, reqMaxMs)
 			ui.Text(c, latencyLabel(r)).FontSize(11.5).Font(mono()).
 				TextColor(p.muted).Width(48).TextAlign(ui.End).SingleLine()
 		})
@@ -291,15 +287,15 @@ func (a *app) requestDetail(c *ui.Context, p *palette, st store, rows []uiReques
 		})
 		ui.Box(c).Absolute().Top(0).Left(0).Right(0).Height(80).PassThrough().
 			Material(glass.ScrollEdge{})
-		ui.Row(c).Absolute().Top(8).Left(12).Right(12).Height(34).Padding(0, 10).
-			Gap(8).AlignItems(ui.Center).Radius(14).Material(glass.Glass{}).Children(func() {
+		ui.Row(c).Absolute().Top(8).Left(12).Right(12).Height(34).Padding(0, 6, 0, 12).
+			Gap(10).AlignItems(ui.Center).Radius(10).Material(glass.Glass{}).Children(func() {
+			// The status animates as it changes, as when the exchange
+			// completes or a replay lands.
 			if d != nil && d.Request.Status != 0 {
-				col, bg := statusColor(p, d.Request.Status)
-				detailPill(c, fmt.Sprint(d.Request.Status), col, bg)
+				statusText(c, p, d.Request.Status).ContentTransition(ui.ContentTransition{})
 			}
 			if d != nil && d.Request.Method != "" {
-				mcol, mbg := methodColor(p, d.Request.Method)
-				detailPill(c, methodLabel(d.Request.Method), mcol, mbg)
+				methodText(c, p, d.Request.Method)
 			}
 			if head := detailHead(d); head != "" {
 				ui.Text(c, head).FontSize(12).Font(mono()).TextColor(p.text).SingleLine().Shrink(1).MinWidth(40)
@@ -319,20 +315,6 @@ func (a *app) requestDetail(c *ui.Context, p *palette, st store, rows []uiReques
 // changes: a fade, without moving, as Mayoi's pages do.
 func tabFade(e ui.Element) ui.Element {
 	return e.Opacity(e.Keyframes("tab", []ui.Keyframe{{Value: 0}, {At: 150 * time.Millisecond, Value: 1, Ease: ui.EaseOut}}))
-}
-
-// pillEl is a pill that answers with its element, for the ones the page
-// animates.
-func pillEl(c *ui.Context, label string, col, bg ui.Color) ui.Element {
-	return ui.Text(c, label).FontSize(11).FontWeight(650).Font(mono()).TextColor(col).
-		Padding(2, 7).Radius(10).Background(bg).SingleLine()
-}
-
-// detailPill is a pill of the detail's header, whose label animates as it
-// changes, as the status does when the exchange completes or a replay
-// lands.
-func detailPill(c *ui.Context, label string, col, bg ui.Color) {
-	pillEl(c, label, col, bg).ContentTransition(ui.ContentTransition{})
 }
 
 // replayButton is the detail header's replay button, drawn here rather
@@ -393,7 +375,7 @@ func (a *app) replayBusy(c *ui.Context, id string) bool {
 func (a *app) detailSkeleton(c *ui.Context, p *palette) {
 	// bar draws one; w of 0 or less takes the card's width.
 	bar := func(w float32) {
-		b := ui.Box(c).Height(12).Radius(6).Background(p.faint.Alpha(0.06))
+		b := ui.Box(c).Height(10).Radius(5).Background(p.text.Alpha(0.05))
 		if w <= 0 {
 			b.FillWidth()
 		} else {
@@ -433,14 +415,16 @@ func (a *app) headersSection(c *ui.Context, p *palette, title string, list []api
 	card(c, p, func() {
 		cardTitle(c, p, title)
 		if len(list) == 0 && len(m) == 0 {
-			ui.Text(c, "none").FontSize(12).Font(mono()).TextColor(p.faint)
+			ui.Text(c, "None").FontSize(12).TextColor(p.faint)
 			return
 		}
 		ui.Column(c).FillWidth().Gap(1).Children(func() {
 			draw := func(name, value string) {
-				ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Start).Padding(2, 0).Children(func() {
-					ui.Text(c, name).FontSize(12).Font(mono()).FontWeight(600).TextColor(p.text).SingleLine().Shrink(0)
-					ui.Text(c, value).FontSize(12).Font(mono()).TextColor(p.muted).Shrink(1).MinWidth(40)
+				// The names keep one column, so the values line up to be
+				// read down; the name recedes, the value is what is read.
+				ui.Row(c).FillWidth().Gap(12).AlignItems(ui.Start).Padding(2.5, 0).Children(func() {
+					ui.Text(c, name).FontSize(12).Font(mono()).TextColor(p.muted).SingleLine().Width(190).Shrink(0)
+					ui.Text(c, value).FontSize(12).Font(mono()).TextColor(p.text).Shrink(1).MinWidth(40)
 				})
 			}
 			for _, h := range list {
@@ -559,17 +543,19 @@ func (a *app) ruleTraceSection(c *ui.Context, p *palette, traces []api.RuleTrace
 	for _, tr := range traces {
 		card(c, p, func() {
 			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-				if tr.Matched {
-					pillEl(c, "matched", p.added, p.added.Alpha(0.13))
-				} else {
-					pillEl(c, "no match", p.faint, p.faint.Alpha(0.12))
-				}
-				ui.Text(c, string(tr.RuleID)).FontSize(12.5).FontWeight(650).TextColor(p.text).SingleLine()
+				ui.Text(c, string(tr.RuleID)).FontSize(12.5).FontWeight(600).TextColor(p.text).SingleLine()
 				if tr.Phase != "" {
-					ui.Badge(c, tr.Phase)
+					tag(c, p, tr.Phase)
 				}
 				ui.Spacer(c)
-				ui.Text(c, durationLabel(tr.DurationMs)).FontSize(11).Font(mono()).TextColor(p.faint).SingleLine()
+				if tr.DurationMs > 0 {
+					ui.Text(c, durationLabel(tr.DurationMs)).FontSize(11).Font(mono()).TextColor(p.faint).SingleLine()
+				}
+				if tr.Matched {
+					stateDot(c, p, p.added, "Matched")
+				} else {
+					stateDot(c, p, p.faint.Alpha(0.6), "No match")
+				}
 			})
 			if tr.Error != "" {
 				ui.Text(c, tr.Error).FontSize(12).Font(mono()).TextColor(p.removed).FillWidth().Margin(6, 0, 0)
@@ -583,15 +569,15 @@ func (a *app) ruleTraceSection(c *ui.Context, p *palette, traces []api.RuleTrace
 			if steps == 0 && len(tr.Actions) == 0 {
 				return
 			}
-			ui.Box(c).FillWidth().Height(1).Background(p.border).Margin(8, 0, 6)
+			ui.Box(c).FillWidth().Height(1).Background(p.border).Margin(10, 0, 6)
 			// The pipeline: a rail down the left, a dot per stage in the
 			// color of how it went, then what the rule did at the end.
 			node := func(key string, col ui.Color, body func()) {
 				ui.Row(c.Key(key)).FillWidth().Gap(10).AlignItems(ui.Stretch).Children(func() {
 					ui.Box(c).Width(12).Shrink(0).Children(func() {
-						ui.Box(c).Absolute().Left(5).Top(0).Bottom(0).Width(2).Background(p.border)
-						ui.Box(c).Absolute().Left(1).Top(7).Width(10).Height(10).Radius(5).
-							Background(p.surface).Border(2, col)
+						ui.Box(c).Absolute().Left(5.5).Top(0).Bottom(0).Width(1).Background(p.border)
+						ui.Box(c).Absolute().Left(0.5).Top(6).Size(11, 11).Radius(5.5).
+							Background(col).Border(2.5, p.surface)
 					})
 					ui.Column(c).Grow(1).MinWidth(0).Gap(2).Padding(4, 0, 6).Children(body)
 				})
@@ -605,7 +591,7 @@ func (a *app) ruleTraceSection(c *ui.Context, p *palette, traces []api.RuleTrace
 				case stg.Error != "":
 					col = p.removed
 				case stg.Skipped:
-					col = p.faint
+					col = p.faint.Alpha(0.6)
 				}
 				node(fmt.Sprintf("stage:%s:%d", tr.RuleID, i), col, func() {
 					ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
@@ -618,7 +604,7 @@ func (a *app) ruleTraceSection(c *ui.Context, p *palette, traces []api.RuleTrace
 							ui.Text(c, stg.Uses).FontSize(11.5).Font(mono()).TextColor(p.faint).SingleLine()
 						}
 						if stg.Skipped {
-							a.pill(c, "skipped", p.faint, p.faint.Alpha(0.12), false)
+							tag(c, p, "skipped")
 						}
 					})
 					switch {
@@ -634,7 +620,7 @@ func (a *app) ruleTraceSection(c *ui.Context, p *palette, traces []api.RuleTrace
 			for i, act := range tr.Actions {
 				node(fmt.Sprintf("act:%s:%d", tr.RuleID, i), p.accent, func() {
 					ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-						pillEl(c, string(act.Type), p.accent, p.accent.Alpha(0.14)).Shrink(0)
+						ui.Text(c, string(act.Type)).FontSize(12).FontWeight(600).Font(mono()).TextColor(p.text).SingleLine().Shrink(0)
 						ui.Text(c, actionParams(act)).FontSize(11.5).Font(mono()).TextColor(p.muted).SingleLine().Shrink(1).MinWidth(20)
 					})
 				})
