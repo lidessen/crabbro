@@ -127,16 +127,16 @@ func (a *app) ruleCell(c *ui.Context, p *palette, r api.Rule, col int) {
 		ui.Row(c).Grow(1).Gap(6).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, ruleLabel(r)).FontSize(12.5).FontWeight(550).TextColor(map[bool]ui.Color{true: p.text, false: p.muted}[r.Enabled]).SingleLine().Shrink(1).MinWidth(20)
 			if r.FailureMode == "fail-closed" {
-				ui.Badge(c, "fail-closed")
+				tag(c, p, "fail-closed")
 			}
 		})
 	case 1:
 		ui.Text(c, fmt.Sprint(r.Priority)).FontSize(11.5).Font(mono()).TextColor(p.faint).TextAlign(ui.End).SingleLine()
 	case 2:
 		if r.Enabled {
-			a.pill(c, "on", p.added, p.added.Alpha(0.13), false)
+			stateDot(c, p, p.added, "On")
 		} else {
-			a.pill(c, "off", p.faint, p.faint.Alpha(0.12), false)
+			stateDot(c, p, p.faint.Alpha(0.6), "Off")
 		}
 	}
 }
@@ -184,7 +184,7 @@ func (a *app) ruleEditor(c *ui.Context, p *palette, st store, dirty bool) {
 				}
 			})
 			if dirty {
-				pillEl(c.Key("rule-edited"), "edited", p.warning(), p.warning().Alpha(0.14))
+				stateDot(c, p, p.warning(), "Edited")
 			}
 			ui.Spacer(c)
 			if meta := ruleMeta(r); meta != "" {
@@ -319,7 +319,7 @@ func (a *app) ruleOverview(c *ui.Context, p *palette, st store, r *api.Rule) {
 					continue
 				}
 				ui.Column(c.Key("pipe:" + kind)).FillWidth().Gap(6).Children(func() {
-					cardTitle(c, p, kind+" pipeline")
+					cardTitle(c, p, strings.ToUpper(kind[:1])+kind[1:]+" pipeline")
 					for i := range ph.Pipeline {
 						a.stageCard(c, p, &ph.Pipeline[i], fmt.Sprintf("%s:%d", kind, i))
 					}
@@ -335,8 +335,7 @@ func (a *app) stageCard(c *ui.Context, p *palette, s *vmStage, key string) {
 	card(c, p, func() {
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 			uses := s.stageUses()
-			col, bg := methodColor(p, stageTone(uses))
-			a.pill(c, uses, col, bg, false)
+			ui.Text(c, uses).FontSize(12).FontWeight(600).Font(mono()).TextColor(p.text).SingleLine().Shrink(0)
 			if s.ID != "" && s.ID != s.Uses {
 				ui.Text(c, s.ID).FontSize(11.5).Font(mono()).TextColor(p.faint).SingleLine()
 			}
@@ -344,16 +343,16 @@ func (a *app) stageCard(c *ui.Context, p *palette, s *vmStage, key string) {
 				ui.Text(c, "if "+s.If).FontSize(11).Font(mono()).TextColor(p.muted).SingleLine().Shrink(1).MinWidth(20)
 			}
 			if adv := s.stageNote(); adv != "" {
-				ui.Badge(c, adv)
+				tag(c, p, adv)
 			}
 		})
 		if s.Run != nil {
 			ui.Text(c, strings.TrimSpace(s.Run.Script)).FontSize(11.5).Font(mono()).TextColor(p.muted).FillWidth().Margin(4, 0, 0)
 		}
 		for _, k := range sortedKeys(s.With) {
-			ui.Row(c.Key("with:"+key+":"+k)).FillWidth().Gap(10).AlignItems(ui.Start).Padding(2, 0).Children(func() {
-				ui.Text(c, k).FontSize(12).Font(mono()).FontWeight(600).TextColor(p.text).SingleLine().Shrink(0)
-				ui.Text(c, paramString(s.With[k])).FontSize(12).Font(mono()).TextColor(p.muted).Shrink(1).MinWidth(40)
+			ui.Row(c.Key("with:"+key+":"+k)).FillWidth().Gap(10).AlignItems(ui.Start).Padding(2.5, 0).Children(func() {
+				ui.Text(c, k).FontSize(12).Font(mono()).TextColor(p.muted).SingleLine().Width(120).Shrink(0)
+				ui.Text(c, paramString(s.With[k])).FontSize(12).Font(mono()).TextColor(p.text).Shrink(1).MinWidth(40)
 			})
 		}
 	})

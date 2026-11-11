@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/egoist/mygo/ui"
@@ -58,7 +59,7 @@ func (a *app) trajectoryPage(c *ui.Context, p *palette) {
 	ui.Column(c).Grow(1).MinHeight(0).Children(func() {
 		a.traceHeader(c, p, st, byID)
 		ui.Scroll(c).Grow(1).Children(func() {
-			ui.Column(c).FillWidth().Padding(6, 18, 24).Children(func() {
+			ui.Column(c).FillWidth().Padding(2, 14, 24, 12).Children(func() {
 				for i, it := range steps {
 					// A pause between steps is a chapter of its own: a
 					// labelled hairline marks how long it was.
@@ -75,7 +76,7 @@ func (a *app) trajectoryPage(c *ui.Context, p *palette) {
 				}
 				if fetched >= trajFetch {
 					ui.Text(c, fmt.Sprintf("Showing the latest %d steps.", trajFetch)).FontSize(11).
-						TextColor(p.faint).Padding(10, 0, 0, 34).SingleLine()
+						TextColor(p.faint).Padding(10, 0, 0, 30).SingleLine()
 				}
 			})
 		})
@@ -106,8 +107,9 @@ func foldTrace(in []api.Activity) []api.Activity {
 	return out
 }
 
-// traceHeader is the trace's top: the session it follows, the counts of
-// what happened in it, and the order the steps read in.
+// traceHeader is the trace's top: the session it follows, what happened in
+// it as one quiet line, and the order the steps read in. Only what failed
+// takes a color.
 func (a *app) traceHeader(c *ui.Context, p *palette, st store, byID map[string]uiRequestRow) {
 	captures, rules, verifies, failed := 0, 0, 0, 0
 	for _, it := range st.traj {
@@ -123,132 +125,159 @@ func (a *app) traceHeader(c *ui.Context, p *palette, st store, byID map[string]u
 			verifies++
 		}
 	}
-	ui.Row(c.Key("trace:head")).FillWidth().Shrink(0).Padding(14, 18, 10).Gap(10).AlignItems(ui.Center).Children(func() {
-		ui.Column(c).Gap(3).Shrink(1).MinWidth(0).Children(func() {
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				title := "Trace"
-				if st.session != nil && st.session.Name != "" {
-					title = st.session.Name
-				}
-				ui.Text(c, title).FontSize(16).FontWeight(700).TextColor(p.text).SingleLine()
-				if st.session != nil && st.session.Recording {
-					recDot(c, p)
-					ui.Text(c, "recording").FontSize(11.5).FontWeight(600).TextColor(p.removed).SingleLine()
-				}
-			})
-			sub := fmt.Sprintf("%d steps", len(st.traj))
-			if st.session != nil && st.session.ID != "" {
-				sub = st.session.ID + " · " + sub
+	ui.Row(c.Key("trace:head")).FillWidth().Shrink(0).Padding(16, 20, 12).Gap(12).AlignItems(ui.Center).Children(func() {
+		ui.Column(c).Gap(4).Shrink(1).MinWidth(0).Children(func() {
+			title := "Trace"
+			if st.session != nil && st.session.Name != "" && st.session.Name != "scope" {
+				title = st.session.Name
 			}
-			ui.Text(c, sub).FontSize(11.5).Font(mono()).TextColor(p.faint).SingleLine()
+			ui.Text(c, title).FontSize(15).FontWeight(650).TextColor(p.text).SingleLine()
+			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+				first := true
+				part := func(n int, one, many string, col ui.Color) {
+					if n == 0 {
+						return
+					}
+					if !first {
+						ui.Text(c, "·").FontSize(12).TextColor(p.faint).SingleLine()
+					}
+					first = false
+					word := many
+					if n == 1 {
+						word = one
+					}
+					ui.Text(c, fmt.Sprintf("%d %s", n, word)).FontSize(12).TextColor(col).SingleLine().
+						ContentTransition(ui.ContentTransition{Numeric: true})
+				}
+				part(len(st.traj), "step", "steps", p.muted)
+				part(captures, "request", "requests", p.muted)
+				part(failed, "failed", "failed", p.removed)
+				part(rules, "rule hit", "rule hits", p.muted)
+				part(verifies, "verified", "verified", p.muted)
+			})
 		})
 		ui.Spacer(c)
-		chip := func(label string, n int, col ui.Color) {
-			if n == 0 {
-				return
-			}
-			ui.Row(c).Gap(6).AlignItems(ui.Center).Padding(4, 10).Radius(9).Background(col.Alpha(0.11)).Children(func() {
-				ui.Text(c, fmt.Sprint(n)).FontSize(13).FontWeight(700).Font(mono()).TextColor(col).SingleLine().
-					ContentTransition(ui.ContentTransition{Numeric: true})
-				ui.Text(c, label).FontSize(11.5).TextColor(col).SingleLine()
-			})
-		}
-		chip("captures", captures, p.teal())
-		chip("failed", failed, p.removed)
-		chip("rules", rules, p.accent)
-		chip("verified", verifies, p.added)
 		ui.Segmented(c, &trajOldest, "Newest", "Oldest")
 	})
 }
 
 // traceGap is the labelled hairline between two chapters of the trace.
 func (a *app) traceGap(c *ui.Context, p *palette, id string, gap time.Duration) {
-	ui.Row(c.Key("trajgap:"+id)).FillWidth().Gap(10).AlignItems(ui.Center).Padding(8, 0, 8, 34).Children(func() {
-		ui.Box(c).Grow(1).Height(1).Background(p.border)
-		ui.Text(c, "paused "+gap.Truncate(time.Second).String()).FontSize(10.5).TextColor(p.faint).SingleLine()
+	ui.Row(c.Key("trajgap:"+id)).FillWidth().Gap(10).AlignItems(ui.Center).Padding(8, 10, 8, 30).Children(func() {
+		ui.Text(c, gap.Truncate(time.Second).String()+" later").FontSize(11).TextColor(p.faint).SingleLine()
 		ui.Box(c).Grow(1).Height(1).Background(p.border)
 	})
 }
 
-// traceStep is one step: a dot on the rail, and a card of what it was.
+// traceRowH is the height of one step of the trace.
+const traceRowH = 34
+
+// traceStep is one step: a dot on the rail and, beside it, one line of
+// what it was. A capture reads as its exchange — verb, host, path, how
+// long, what came back — and a click opens it in Requests.
 func (a *app) traceStep(c *ui.Context, p *palette, it api.Activity, byID map[string]uiRequestRow, maxMs int64, first, last bool) {
-	kindCol, kindBg := kindColor(p, it.Kind)
-	ui.Row(c.Key("step:" + it.ID)).FillWidth().Gap(10).AlignItems(ui.Stretch).Children(func() {
-		// The rail: a hairline through the steps, the dot on it.
-		ui.Box(c).Width(24).Shrink(0).Children(func() {
+	req, hasReq := byID[it.RequestID]
+	capture := hasReq && (it.Kind == "request_captured" || it.Kind == "request_completed")
+	ui.Row(c.Key("step:" + it.ID)).FillWidth().Height(traceRowH).AlignItems(ui.Stretch).Children(func() {
+		// The rail: a hairline through the steps, the dot on it, ringed in
+		// the page's ground so the line stops short of it.
+		ui.Box(c).Width(18).Shrink(0).Children(func() {
 			top, bottom := float32(0), float32(0)
 			if first {
-				top = 20
+				top = traceRowH / 2
 			}
-			ui.Box(c).Absolute().Left(11).Top(top).Bottom(bottom).Width(2).Background(p.border)
 			if last {
-				ui.Box(c).Absolute().Left(11).Top(20).Bottom(0).Width(2).Background(p.editor)
+				bottom = traceRowH / 2
 			}
-			ui.Box(c).Absolute().Left(6).Top(15).Width(12).Height(12).Radius(6).
-				Background(p.editor).Border(2, kindCol)
-		})
-		var card ui.Element
-		req, hasReq := byID[it.RequestID]
-		if it.RequestID != "" {
-			b := ui.ButtonBase(c.Key("traj:" + it.ID)).Label("Show the request " + it.RequestID).Tooltip("Show in Requests")
-			card = ui.Element(b)
-			if b.Hovered() {
-				card.Background(p.surfaceHover)
+			ui.Box(c).Absolute().Left(8.5).Top(top).Bottom(bottom).Width(1).Background(p.text.Alpha(0.14))
+			// A step that is an event of its own — a rule, a check, the
+			// recording — is a full dot; a request is a ring, so the eye
+			// tells the story's beats from the traffic between them.
+			tone := stepTone(p, it.Kind, req, capture)
+			ui.Box(c).Absolute().Left(2).Top((traceRowH-14)/2).Size(14, 14).Radius(7).Background(p.editor)
+			dot := ui.Box(c).Absolute().Left(4).Top((traceRowH-10)/2).Size(10, 10).Radius(5)
+			if capture {
+				dot.Background(p.editor).Border(2, tone)
 			} else {
-				card.Background(p.surface)
+				dot.Background(tone)
 			}
-			card.Transition(hoverFade)
-		} else {
-			card = ui.Column(c)
-			card.Background(p.surface)
-		}
-		card.Grow(1).MinWidth(0).Margin(5, 0).Padding(9, 12).Gap(6).Radius(10).Border(1, p.border)
-		card.Children(func() {
-			ui.Column(c).Grow(1).MinWidth(0).Gap(6).Children(func() {
-				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-					a.pill(c, activityKind(it.Kind), kindCol, kindBg, false)
-					ui.Text(c, trajTime(it.At)).FontSize(11).Font(mono()).TextColor(p.faint).SingleLine().
-						ContentTransition(ui.ContentTransition{Numeric: true})
-					ui.Spacer(c)
-					if it.RuleID != "" {
-						ui.Badge(c, it.RuleID)
-					}
-					if it.RequestID != "" {
-						ui.Text(c, it.RequestID).FontSize(11).Font(mono()).TextColor(p.faint).SingleLine()
+		})
+		line := func() {
+			ui.Text(c, trajTime(it.At)).FontSize(11).Font(mono()).TextColor(p.faint).SingleLine().
+				Width(58).Shrink(0).ContentTransition(ui.ContentTransition{Numeric: true})
+			if capture {
+				methodText(c, p, req.Method).Width(46)
+				ui.Text(c, hostOf(req.URL)).FontSize(12.5).FontWeight(550).TextColor(p.text).SingleLine().Shrink(0)
+				ui.Text(c, pathOf(req.URL)).FontSize(12).Font(mono()).TextColor(p.muted).SingleLine().Shrink(1).MinWidth(20)
+				ui.Spacer(c)
+				latencyBar(c, p, req, maxMs)
+				ui.Text(c, latencyLabel(req)).FontSize(11.5).Font(mono()).TextColor(p.muted).
+					Width(48).TextAlign(ui.End).SingleLine().Shrink(0)
+				ui.Row(c).Width(30).Justify(ui.End).AlignItems(ui.Center).Shrink(0).Children(func() {
+					if req.Status == 0 {
+						ui.Spinner(c).Size(11, 11)
+					} else {
+						statusText(c, p, req.Status)
 					}
 				})
-				if hasReq && (it.Kind == "request_captured" || it.Kind == "request_completed") {
-					ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-						mcol, mbg := methodColor(p, req.Method)
-						a.pill(c, methodLabel(req.Method), mcol, mbg, false)
-						ui.Text(c, hostOf(req.URL)).FontSize(12.5).FontWeight(600).TextColor(p.text).SingleLine().Shrink(0)
-						ui.Text(c, pathOf(req.URL)).FontSize(12).Font(mono()).TextColor(p.muted).SingleLine().Shrink(1).MinWidth(20)
-						ui.Spacer(c)
-						ui.Text(c, latencyLabel(req)).FontSize(11.5).Font(mono()).TextColor(p.muted).SingleLine().Shrink(0)
-						if req.Status == 0 {
-							ui.Spinner(c).Size(11, 11)
-						} else {
-							scol, sbg := statusColor(p, req.Status)
-							a.pill(c, fmt.Sprint(req.Status), scol, sbg, false)
-						}
-					})
-					latencyBar(c, p, req, maxMs)
-					return
-				}
-				ui.Text(c, it.Summary).FontSize(12.5).TextColor(p.text).FillWidth()
-			})
-		})
+				return
+			}
+			ui.Text(c, activityKind(it.Kind)).FontSize(12.5).FontWeight(600).TextColor(p.text).SingleLine().Shrink(0)
+			ui.Text(c, it.Summary).FontSize(12.5).TextColor(p.muted).SingleLine().Shrink(1).MinWidth(20)
+			ui.Spacer(c)
+			if it.RuleID != "" {
+				tag(c, p, it.RuleID)
+			}
+			if it.RequestID != "" {
+				ui.Text(c, it.RequestID).FontSize(11).Font(mono()).TextColor(p.faint).SingleLine().Shrink(0)
+			}
+		}
+		if it.RequestID == "" {
+			ui.Row(c).Grow(1).MinWidth(0).Padding(0, 10, 0, 8).Gap(10).AlignItems(ui.Center).Children(line)
+			return
+		}
+		b := ui.ButtonBase(c.Key("traj:"+it.ID)).Grow(1).MinWidth(0).Padding(0, 10, 0, 8).Gap(10).Radius(6).
+			AlignItems(ui.Center).Label("Show the request " + it.RequestID).Tooltip("Show in Requests")
+		switch {
+		case b.Pressed():
+			b.Background(p.text.Alpha(0.065))
+		case b.Hovered():
+			b.Background(p.hover)
+		}
+		b.Transition(hoverFade)
+		b.Children(line)
+		if b.Clicked() {
+			a.showRequest(it.RequestID)
+		}
 	})
 }
 
-// latencyBar is how long an exchange took, as a bar against the slowest
-// of the list, in the status' color.
+// stepTone is the color of a step's mark: the accent for a rule at work,
+// green for a check that passed, and for a request the color of how it
+// came back — the same four the status figures use.
+func stepTone(p *palette, kind string, req uiRequestRow, capture bool) ui.Color {
+	switch kind {
+	case "rule_applied", "rule_created":
+		return p.accent
+	case "verify":
+		return p.added
+	case "session_started", "session_stopped":
+		return p.text
+	}
+	if capture && req.Status != 0 {
+		return statusTone(p, req.Status)
+	}
+	return p.faint
+}
+
+// latencyBar is how long an exchange took, as a short bar against the
+// slowest of the list.
 func latencyBar(c *ui.Context, p *palette, r uiRequestRow, maxMs int64) {
-	col, _ := statusColor(p, r.Status)
-	ui.Box(c).FillWidth().Height(4).Radius(2).Background(p.faint.Alpha(0.12)).Children(func() {
+	const barW = 56
+	ui.Box(c).Width(barW).Height(3).Radius(1.5).Shrink(0).Background(p.text.Alpha(0.07)).Children(func() {
 		if r.DurationMs > 0 {
-			frac := float32(r.DurationMs) / float32(maxMs)
-			ui.Box(c).Absolute().Left(0).Top(0).Bottom(0).WidthPercent(max(frac*100, 3)).Radius(2).Background(col.Alpha(0.8))
+			w := max(float32(r.DurationMs)/float32(maxMs)*barW, 3)
+			ui.Box(c).Absolute().Left(0).Top(0).Bottom(0).Width(w).Radius(1.5).Background(barTone(p, r.Status))
 		}
 	})
 }
@@ -263,36 +292,26 @@ func trajTime(at time.Time) string {
 	return at.Local().Format("15:04:05")
 }
 
-// kindColor tints a trajectory step by what it is.
-func kindColor(p *palette, kind string) (ui.Color, ui.Color) {
-	switch kind {
-	case "session_started", "session_stopped":
-		return p.changed, p.changed.Alpha(0.11)
-	case "rule_applied", "rule_created":
-		return p.accent, p.accent.Alpha(0.14)
-	case "request_captured", "request_completed":
-		return p.teal(), p.teal().Alpha(0.12)
-	case "verify":
-		return p.added, p.added.Alpha(0.13)
-	case "find":
-		return p.warning(), p.warning().Alpha(0.13)
-	}
-	return p.muted, p.muted.Alpha(0.12)
-}
-
-// activityKind is the short label a trajectory step wears.
+// activityKind is the short name a trajectory step reads by.
 func activityKind(kind string) string {
 	switch kind {
-	case "session_started", "session_stopped":
-		return "session"
+	case "session_started":
+		return "Recording started"
+	case "session_stopped":
+		return "Recording stopped"
 	case "request_captured", "request_completed":
-		return "capture"
-	case "rule_applied", "rule_created":
-		return "rule"
+		return "Request"
+	case "rule_applied":
+		return "Rule"
+	case "rule_created":
+		return "Rule created"
 	case "verify":
-		return "verify"
+		return "Verify"
 	case "find":
-		return "find"
+		return "Find"
+	}
+	if rest, ok := strings.CutPrefix(kind, "scope_"); ok {
+		return "Scope " + rest
 	}
 	return kind
 }

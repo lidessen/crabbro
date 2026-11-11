@@ -76,36 +76,23 @@ func (a *app) titleBar(c *ui.Context, p *palette) {
 		AlignItems(ui.Center).Background(p.chrome).BorderWidth(0, 0, 1, 0).BorderColor(p.border).
 		DragWindow().Children(func() {
 		ui.Row(c).Gap(9).AlignItems(ui.Center).Children(func() {
-			brandMark(c, p, 22)
-			ui.Text(c, "Chiling").FontSize(13.5).FontWeight(700).LetterSpacing(0.2).TextColor(p.text).SingleLine()
-			ui.Text(c, pageTitle(a.page)).FontSize(12).TextColor(p.faint).SingleLine()
+			brandMark(c, p, 20)
+			ui.Text(c, "Chiling").FontSize(13).FontWeight(650).TextColor(p.text).SingleLine()
 		})
 		ui.Spacer(c)
 		a.recordControls(c, p)
 	})
 }
 
-// pageTitle is the name the title bar gives the page in view.
-func pageTitle(page string) string {
-	switch page {
-	case pageRules:
-		return "/ Rules"
-	case pageRequests:
-		return "/ Requests"
-	case pageDaemon:
-		return "/ Daemon"
-	}
-	return "/ Trace"
-}
-
-// recordControls is the recording pill and its start and stop.
+// recordControls is the recording at the title bar's right: while one is
+// open, its mark and how long it has run, and Stop; otherwise Record.
 func (a *app) recordControls(c *ui.Context, p *palette) {
 	st := a.snapshotState()
 	// Read the session from the one snapshot: asking the store twice lets it
 	// change in between, and a session gone by the second look is a nil.
 	if s := st.session; s != nil && s.Recording && s.Name != "scope" {
-		ui.Row(c.Key("rec-pill")).Gap(6).AlignItems(ui.Center).Height(24).Padding(0, 9).
-			Radius(12).Background(p.removed.Alpha(0.14)).Children(func() {
+		ui.Row(c.Key("rec-pill")).Gap(7).AlignItems(ui.Center).Height(24).Padding(0, 10).
+			Radius(12).Background(p.removed.Alpha(0.1)).Children(func() {
 			// The dot breathes while the daemon records: 0.7s down and
 			// back, a 1.4s round, as the daemon page's does.
 			dot := ui.Box(c.Key("rec-pill-dot")).Width(7).Height(7).Radius(4).Background(p.removed)
@@ -113,16 +100,31 @@ func (a *app) recordControls(c *ui.Context, p *palette) {
 				{Value: 1},
 				{At: 700 * time.Millisecond, Value: 0.35, Ease: ui.EaseInOut},
 			}, ui.KeyframeOptions{Repeat: ui.RepeatForever, Alternate: true}))
-			ui.Text(c, "recording").FontSize(11.5).FontWeight(600).TextColor(p.removed).SingleLine()
-			if id := s.ID; id != "" {
-				ui.Text(c, id).FontSize(11).Font(mono()).TextColor(p.removed.Alpha(0.75)).SingleLine()
+			ui.Text(c, "Recording").FontSize(12).FontWeight(600).TextColor(p.removed).SingleLine()
+			if run := c.Now().Sub(s.StartedAt); run >= 0 {
+				ui.Text(c, clockLabel(run)).FontSize(11.5).Font(mono()).TextColor(p.removed.Alpha(0.8)).SingleLine().
+					ContentTransition(ui.ContentTransition{Numeric: true})
+				// Draw again as the second flips, so the clock keeps time
+				// while nothing else moves.
+				c.After(time.Second - run%time.Second + 5*time.Millisecond)
 			}
 		})
-		a.ghostButton(c, "stop-record", "Stop", nil).Clicked(func() { a.actStopRecording() })
+		a.quietButton(c, "stop-record", "Stop", iconStop).Clicked(func() { a.actStopRecording() })
 		return
 	}
-	a.fillButton(c, "start-record", "Record", iconRecord).Disabled(st.conn != connConnected).
+	// Record is the window's first action, and red is what recording
+	// means: its mark takes that color, on a button otherwise quiet.
+	a.plainButton(c, "start-record", "Record", iconRecord, true, &p.removed).Disabled(st.conn != connConnected).
 		Clicked(func() { a.actStartRecording() })
+}
+
+// clockLabel is a running time as a clock reads it: 0:42, 12:07, 1:02:33.
+func clockLabel(d time.Duration) string {
+	s := int(d / time.Second)
+	if s >= 3600 {
+		return fmt.Sprintf("%d:%02d:%02d", s/3600, s/60%60, s%60)
+	}
+	return fmt.Sprintf("%d:%02d", s/60, s%60)
 }
 
 // ---------------------------------------------------------------------------
@@ -169,22 +171,46 @@ func (a *app) fillButton(c *ui.Context, key, label string, icon *ui.SVG) button 
 // ghostButton is a quiet button: no face until the pointer is on it,
 // then a wash.
 func (a *app) ghostButton(c *ui.Context, key, label string, icon *ui.SVG) button {
+	return a.plainButton(c, key, label, icon, false, nil)
+}
+
+// quietButton is the title bar's button: a face of the surface under a
+// hairline, for an action that should be found without shouting.
+func (a *app) quietButton(c *ui.Context, key, label string, icon *ui.SVG) button {
+	return a.plainButton(c, key, label, icon, true, nil)
+}
+
+// plainButton draws both. mark, when set, is the color its icon keeps
+// whatever the button's state.
+func (a *app) plainButton(c *ui.Context, key, label string, icon *ui.SVG, faced bool, mark *ui.Color) button {
 	p := a.pal
 	b := ui.ButtonBase(c.Key(key)).Height(26).Padding(0, 9).Gap(6).Radius(7).
 		AlignItems(ui.Center).Label(label).Tooltip(label)
 	col := p.muted
+	if faced {
+		b.Background(p.surface).Border(1, p.border)
+		col = p.text
+	}
 	switch {
 	case b.Pressed():
 		b.Background(p.surfacePressed)
 		col = p.text
 	case b.Hovered():
-		b.Background(p.hover)
+		if faced {
+			b.Background(p.surfaceHover)
+		} else {
+			b.Background(p.hover)
+		}
 		col = p.text
 	}
 	b.Transition(hoverFade)
 	b.Children(func() {
 		if icon != nil {
-			ui.Icon(c, icon).FontSize(13).TextColor(col)
+			iconCol := col.Alpha(0.8)
+			if mark != nil {
+				iconCol = *mark
+			}
+			ui.Icon(c, icon).FontSize(13).TextColor(iconCol)
 		}
 		if label != "" {
 			ui.Text(c, label).FontSize(12).FontWeight(500).TextColor(col).SingleLine()
@@ -193,23 +219,23 @@ func (a *app) ghostButton(c *ui.Context, key, label string, icon *ui.SVG) button
 	return button(b)
 }
 
-// sidebar is the pages of the window, as Mayoi's are: rows on the chrome,
-// the chosen one in a tint of the accent and under the rail at its left.
+// sidebar is the pages of the window: rows on the chrome, the chosen one
+// in a tint of the accent, its icon in the accent and under the rail at its
+// left. The chosen page is where the sidebar spends the accent, and nowhere
+// else.
 func (a *app) sidebar(c *ui.Context, p *palette) {
 	st := a.snapshotState()
 	ui.Column(c.Key("sidebar")).Width(sidebarW).Background(p.chrome).
-		Padding(12, 10).Gap(3).Children(func() {
-		ui.Text(c, "WORKSPACE").FontSize(10).FontWeight(650).LetterSpacing(0.8).TextColor(p.faint).
-			Padding(2, 9, 6).SingleLine()
+		Padding(10, 8).Gap(2).Children(func() {
 		item := func(key, label string, icon *ui.SVG, count int) {
 			on := a.page == key
-			row := ui.ButtonBase(c.Key("side:"+key)).FillWidth().Height(32).Padding(0, 10).Gap(10).
-				Radius(8).AlignItems(ui.Center).Label(label)
+			row := ui.ButtonBase(c.Key("side:"+key)).FillWidth().Height(30).Padding(0, 10).Gap(9).
+				Radius(7).AlignItems(ui.Center).Label(label)
 			switch {
 			case on:
 				row.Background(p.active)
 			case row.Pressed():
-				row.Background(p.surfacePressed)
+				row.Background(p.text.Alpha(0.065))
 			case row.Hovered():
 				row.Background(p.hover)
 			}
@@ -218,27 +244,26 @@ func (a *app) sidebar(c *ui.Context, p *palette) {
 			if on {
 				col = p.text
 			}
-			// The chosen row wears the accent as a rail at its left edge,
-			// as Mayoi's rail marks its square: it grows from the row's
-			// middle as the choice lands, and away as it leaves.
+			// The rail grows from the row's middle as the choice lands,
+			// and away as it leaves.
 			railH := float32(0)
 			if on {
-				railH = 16
+				railH = 14
 			}
 			railH = row.Animate("rail", railH, 160*time.Millisecond)
 			row.Children(func() {
-				ui.Box(c.Key("rail")).Absolute().Left(0).Top((32 - railH) / 2).
-					Width(3).Height(railH).Radius(1.5).Background(p.accent)
+				ui.Box(c.Key("rail")).Absolute().Left(0).Top((30 - railH) / 2).
+					Width(2.5).Height(railH).Radius(1.5).Background(p.accent)
 				iconCol := col
 				if on {
 					iconCol = p.accent
 				}
-				ui.Icon(c, icon).FontSize(15).TextColor(iconCol)
-				ui.Text(c, label).FontSize(13).FontWeight(550).TextColor(col).SingleLine().Grow(1)
+				ui.Icon(c, icon).FontSize(14.5).TextColor(iconCol)
+				ui.Text(c, label).FontSize(13).FontWeight(map[bool]int{true: 600, false: 500}[on]).
+					TextColor(col).SingleLine().Grow(1)
 				if count > 0 {
-					ui.Text(c, fmt.Sprint(count)).FontSize(10.5).FontWeight(600).Font(mono()).
-						TextColor(p.muted).Padding(1, 7).Radius(9).Background(p.faint.Alpha(0.14)).
-						SingleLine().Transition(pillMotion)
+					ui.Text(c, fmt.Sprint(count)).FontSize(11).Font(mono()).TextColor(p.faint).
+						SingleLine().ContentTransition(ui.ContentTransition{Numeric: true})
 				}
 			})
 			if row.Clicked() {
@@ -249,31 +274,6 @@ func (a *app) sidebar(c *ui.Context, p *palette) {
 		item(pageRequests, "Requests", iconList, len(st.requests))
 		item(pageRules, "Rules", iconSliders, len(st.rules))
 		item(pageDaemon, "Daemon", iconServer, 0)
-		ui.Spacer(c)
-		a.sidebarFooter(c, p, st)
-	})
-}
-
-// sidebarFooter is the daemon in brief at the sidebar's foot: a dot for
-// how it is, and the proxy address it listens on.
-func (a *app) sidebarFooter(c *ui.Context, p *palette, st store) {
-	dotCol, label := p.faint, "Connecting…"
-	switch st.conn {
-	case connConnected:
-		dotCol, label = p.added, "Proxy running"
-	case connDown:
-		dotCol, label = p.removed, "Daemon offline"
-	}
-	ui.Column(c.Key("side:foot")).FillWidth().Padding(9, 11).Gap(3).Radius(9).
-		Background(p.surface).Border(1, p.border).Children(func() {
-		ui.Row(c).Gap(7).AlignItems(ui.Center).Children(func() {
-			dot := ui.Box(c.Key("side-dot")).Width(7).Height(7).Radius(4)
-			dot.Background(dot.AnimateColor("conn", dotCol, ui.Animation{Duration: hoverFade.Duration}))
-			ui.Text(c, label).FontSize(12).FontWeight(600).TextColor(p.text).SingleLine()
-		})
-		if st.conn == connConnected && st.status.ProxyAddr != "" {
-			ui.Text(c, st.status.ProxyAddr).FontSize(11).Font(mono()).TextColor(p.muted).SingleLine()
-		}
 	})
 }
 
@@ -301,17 +301,15 @@ func (a *app) pageBody(c *ui.Context, p *palette) {
 // offlinePage stands where a page would be while the daemon is not there.
 func (a *app) offlinePage(c *ui.Context, p *palette, st store) {
 	ui.Column(c.Key("offline")).Grow(1).Center().Padding(24).Gap(10).Children(func() {
-		ui.Row(c).Size(52, 52).Center().Radius(16).Background(p.accent.Alpha(0.12)).Children(func() {
-			ui.Icon(c, iconServer).FontSize(24).TextColor(p.accent)
-		})
+		emptyMark(c, p, iconServer)
 		if st.conn == connConnecting {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Margin(4, 0, 0, 0).Children(func() {
 				ui.Spinner(c).Size(13, 13)
-				ui.Text(c, "Looking for the daemon…").FontSize(14).FontWeight(650).TextColor(p.text).SingleLine()
+				ui.Text(c, "Looking for the daemon…").FontSize(14).FontWeight(600).TextColor(p.text).SingleLine()
 			})
 			return
 		}
-		ui.Text(c, "The daemon isn't running").FontSize(14).FontWeight(650).TextColor(p.text).Margin(4, 0, 0, 0).SingleLine()
+		ui.Text(c, "The daemon isn't running").FontSize(14).FontWeight(600).TextColor(p.text).Margin(6, 0, 0, 0).SingleLine()
 		ui.Text(c, "Capture, rules and MITM live in chilingd. Start it and this window picks up where it left off.").
 			FontSize(12.5).TextColor(p.muted).TextAlign(ui.Center).LineHeight(1.5).MaxWidth(380)
 		a.fillButton(c, "offline-start", "Start chilingd", iconPlay).Clicked(func() { a.actStartDaemon() })
@@ -334,12 +332,15 @@ func (a *app) statusBar(c *ui.Context, p *palette) {
 			if st.connErr != "" {
 				label += " — " + st.connErr
 			}
-			ui.Box(c.Key("conn-dot")).Width(7).Height(7).Radius(4).Background(dotCol)
+			ui.Box(c.Key("conn-dot")).Width(6).Height(6).Radius(3).Background(dotCol)
 			ui.Text(c, label).FontSize(11.5).TextColor(p.muted).SingleLine().Shrink(1).MinWidth(40)
-		} else if st.session != nil && st.session.Recording {
-			ui.Text(c, "Recording · "+st.status.ProxyAddr).FontSize(11.5).Font(mono()).TextColor(p.muted).SingleLine()
 		} else {
-			ui.Text(c, "Listening on "+st.status.ProxyAddr).FontSize(11.5).Font(mono()).TextColor(p.faint).SingleLine()
+			// The one place the window says where the proxy listens.
+			ui.Row(c).Gap(7).AlignItems(ui.Center).Children(func() {
+				ui.Box(c.Key("conn-dot")).Width(6).Height(6).Radius(3).Background(p.added)
+				ui.Text(c, "Listening on").FontSize(11.5).TextColor(p.faint).SingleLine()
+				ui.Text(c, st.status.ProxyAddr).FontSize(11.5).Font(mono()).TextColor(p.muted).SingleLine()
+			})
 		}
 		if a.busy != "" {
 			ui.Row(c).Gap(5).AlignItems(ui.Center).Transition(busyFade).Children(func() {

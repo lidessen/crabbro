@@ -152,19 +152,3 @@ func sortedKeys(m map[string]any) []string {
 	sort.Strings(keys)
 	return keys
 }
-
-// stageTone maps a stage's uses to the pill tone a request method would
-// wear, so the stage list reads at a glance.
-func stageTone(uses string) string {
-	switch {
-	case strings.Contains(uses, "mock-response"):
-		return "POST"
-	case strings.Contains(uses, "block"), strings.Contains(uses, "abort"):
-		return "DELETE"
-	case strings.Contains(uses, "set-"):
-		return "PUT"
-	case strings.Contains(uses, "delay"), strings.Contains(uses, "throttle"):
-		return "PATCH"
-	}
-	return "GET"
-}

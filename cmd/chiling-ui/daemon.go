@@ -15,10 +15,8 @@ import (
 // shows, each a little after the one above it.
 func (a *app) daemonPage(c *ui.Context, p *palette) {
 	st := a.snapshotState()
-	ui.Scroll(c).Grow(1).Draw(func(pt *ui.Painter, r ui.Rect) {
-		pt.FillGradient(r, pageWash(p), 0)
-	}).Children(func() {
-		ui.Column(c).FillWidth().MaxWidth(960).Padding(18, 20, 28).Gap(20).Children(func() {
+	ui.Scroll(c).Grow(1).Children(func() {
+		ui.Column(c).FillWidth().MaxWidth(880).Padding(20, 20, 28).Gap(22).Children(func() {
 			switch {
 			case st.conn == connDown:
 				a.daemonSection(c, p, "Daemon", 0, func() {
@@ -39,17 +37,18 @@ func (a *app) daemonPage(c *ui.Context, p *palette) {
 					})
 				})
 			default:
-				ui.Row(c.Key("daemon:tiles")).FillWidth().Gap(12).Children(func() {
-					statTile(c, p, "req", "Requests", fmt.Sprint(st.status.RequestCount), p.text)
-					statTile(c, p, "rules", "Rules", fmt.Sprint(st.status.RuleCount), p.accent)
-					statTile(c, p, "up", "Uptime", uptimeLabel(st.status.UptimeSeconds), p.text)
-					statTile(c, p, "proxy", "Proxy", st.status.ProxyAddr, p.text)
-				})
-				a.daemonSection(c, p, "Status", 0, func() {
-					a.fact(c, p, "Version", st.status.Version)
-					if st.lastEvent > 0 {
-						a.factRoll(c, p, "Last event", fmt.Sprint(st.lastEvent))
-					}
+				// The headline numbers share one card, a hairline between
+				// them, rather than standing as four boxes.
+				ui.Row(c.Key("daemon:tiles")).FillWidth().Radius(8).Background(p.surface).Border(1, p.border).
+					AlignItems(ui.Stretch).Children(func() {
+					rule := func() { ui.Box(c).Width(1).Margin(12, 0).Background(p.border) }
+					stat(c, p, "req", "Requests", fmt.Sprint(st.status.RequestCount))
+					rule()
+					stat(c, p, "rules", "Rules", fmt.Sprint(st.status.RuleCount))
+					rule()
+					stat(c, p, "up", "Uptime", uptimeLabel(st.status.UptimeSeconds))
+					rule()
+					stat(c, p, "proxy", "Proxy", st.status.ProxyAddr)
 				})
 				a.daemonSection(c, p, "Recording", 40*time.Millisecond, func() {
 					if st.session != nil && st.session.Recording {
@@ -78,14 +77,14 @@ func (a *app) daemonPage(c *ui.Context, p *palette) {
 						if st.session.Name == "scope" {
 							ui.Text(c, "Implicit scope session — no recording window is open.").FontSize(12).TextColor(p.muted)
 						}
-						ui.Row(c).Gap(8).Margin(2, 0, 0, -9).Children(func() {
-							a.ghostButton(c, "daemon-stop-record", "Stop recording", nil).
+						ui.Row(c).Gap(8).Margin(4, 0, 0, 0).Children(func() {
+							a.quietButton(c, "daemon-stop-record", "Stop recording", iconStop).
 								Clicked(func() { a.actStopRecording() })
 						})
 					} else {
 						ui.Text(c, "Not recording.").FontSize(12).TextColor(p.muted)
-						ui.Row(c).Gap(8).Margin(2, 0, 0, 0).Children(func() {
-							a.fillButton(c, "daemon-start-record", "Start recording", iconRecord).
+						ui.Row(c).Gap(8).Margin(4, 0, 0, 0).Children(func() {
+							a.quietButton(c, "daemon-start-record", "Start recording", iconRecord).
 								Clicked(func() { a.actStartRecording() })
 						})
 					}
@@ -134,8 +133,8 @@ func (a *app) daemonPage(c *ui.Context, p *palette) {
 						if !st.scope.Restricting && len(st.scope.Pick)+len(st.scope.Omit)+len(st.scope.Bypass) == 0 {
 							return
 						}
-						ui.Row(c).Gap(8).Margin(2, 0, 0, -9).Children(func() {
-							a.ghostButton(c, "scope-reset", "Reset scope", iconUndo).
+						ui.Row(c).Gap(8).Margin(4, 0, 0, 0).Children(func() {
+							a.quietButton(c, "scope-reset", "Reset scope", iconUndo).
 								Clicked(func() { a.actScopeReset() })
 						})
 					})
@@ -149,7 +148,7 @@ func (a *app) daemonPage(c *ui.Context, p *palette) {
 // from the page's entrance-stagger days; the cards no longer wait on the
 // animation clock for their visibility.
 func (a *app) daemonSection(c *ui.Context, p *palette, title string, delay time.Duration, rows func()) {
-	ui.Column(c.Key("daemon:" + title)).FillWidth().Gap(6).Children(func() {
+	ui.Column(c.Key("daemon:" + title)).FillWidth().Gap(4).Children(func() {
 		cardTitle(c, p, title)
 		card(c, p, func() {
 			ui.Column(c).FillWidth().Gap(7).Children(rows)
@@ -175,9 +174,9 @@ func (a *app) factRoll(c *ui.Context, p *palette, label, value string) {
 func (a *app) factYesNo(c *ui.Context, p *palette, label string, yes bool) {
 	a.factRow(c, p, label, func() {
 		if yes {
-			a.pill(c, "yes", p.added, p.added.Alpha(0.13), false)
+			stateDot(c, p, p.added, "Yes")
 		} else {
-			a.pill(c, "no", p.faint, p.faint.Alpha(0.12), false)
+			stateDot(c, p, p.faint.Alpha(0.6), "No")
 		}
 	})
 }
@@ -195,10 +194,10 @@ func (a *app) factList(c *ui.Context, p *palette, label string, items []string) 
 				shown = items[:3]
 			}
 			for _, it := range shown {
-				a.pill(c, it, p.faint, p.faint.Alpha(0.12), false)
+				tag(c, p, it)
 			}
 			if more := len(items) - len(shown); more > 0 {
-				a.pill(c, fmt.Sprint("+", more), p.faint, p.faint.Alpha(0.12), false)
+				tag(c, p, fmt.Sprint("+", more))
 			}
 		})
 	})
