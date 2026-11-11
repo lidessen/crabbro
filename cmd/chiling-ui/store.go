@@ -55,8 +55,11 @@ type store struct {
 	session         *api.Session
 	traj            []api.Activity // newest first
 	mitm            api.MITMStatusResponse
-	history         api.HistoryStatus
-	lastEvent       int64
+	// mitmKnown is false while the daemon has no MITM to report on: one
+	// started without its flags answers 404 for the status.
+	mitmKnown bool
+	history   api.HistoryStatus
+	lastEvent int64
 }
 
 // app is the state of the Chiling window: the client of the daemon, the
@@ -290,7 +293,7 @@ func (a *app) snapshot(ctx context.Context, query string) error {
 	reqs, reqErr := a.c.SearchRequests(ctx, query, client.RequestQuery{Limit: requestListLimit, All: a.showHiddenNow()})
 	traceReqs, _ := a.traceRequests(ctx, query, reqs, reqErr)
 	rules, _ := a.c.ListRules(ctx)
-	mitm, _ := a.c.CAStatus(ctx)
+	mitm, mitmErr := a.c.CAStatus(ctx)
 	hist, _ := a.c.History(ctx)
 	traj, _ := a.c.Activity(ctx, "", "", trajFetch)
 
@@ -305,7 +308,7 @@ func (a *app) snapshot(ctx context.Context, query string) error {
 	a.st.scope = scope
 	a.st.hasScope = hasScope
 	a.st.session = sess
-	a.st.mitm = mitm
+	a.st.mitm, a.st.mitmKnown = mitm, mitmErr == nil
 	a.st.history = hist
 	a.st.traj = reverseActivity(traj.Items)
 	a.st.traceReqs = traceReqs
@@ -407,6 +410,7 @@ func (a *app) refreshNow(ctx context.Context) {
 		a.st.scope = scope
 		a.st.hasScope = hasScope
 	}
+	a.st.mitmKnown = mitmErr == nil
 	if mitmErr == nil {
 		a.st.mitm = mitm
 	}
@@ -618,6 +622,9 @@ func (a *app) actReplay(id string) {
 		res, err := a.c.Replay(a.ctx, api.VerifyRequest{RequestID: id})
 		a.post(func() {
 			a.setBusy("")
+			if replayingID == id {
+				replayingID = ""
+			}
 			switch {
 			case err != nil:
 				a.note("replay: %v", err)

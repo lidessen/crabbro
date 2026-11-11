@@ -3,6 +3,7 @@ package ring
 import (
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/lidessen/chiling/internal/shared"
 )
@@ -325,5 +326,26 @@ func TestFormatReqID(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("formatReqID(%d) = %q, want %q", tt.id, got, tt.want)
 		}
+	}
+}
+
+// A lookup that matches before the newest entry must not leave the buffer
+// locked: Add after it has to return.
+func TestGetByIDDoesNotBlockLaterAdds(t *testing.T) {
+	rb := NewRequestBuffer(8)
+	first := rb.Add("GET", "http", "a.test", "/", "", "http://a.test/", "")
+	rb.Add("GET", "http", "a.test", "/2", "", "http://a.test/2", "")
+	if got := rb.GetByID(first.ID); got == nil {
+		t.Fatalf("GetByID(%s) = nil", first.ID)
+	}
+	done := make(chan struct{})
+	go func() {
+		rb.Add("GET", "http", "a.test", "/3", "", "http://a.test/3", "")
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Add blocked after GetByID of an older request")
 	}
 }

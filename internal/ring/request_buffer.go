@@ -68,7 +68,7 @@ func (rb *RequestBuffer) Resolve(id shared.RequestID) *shared.Request {
 
 // GetByID returns the request with the given ID, or nil if not found.
 func (rb *RequestBuffer) GetByID(id shared.RequestID) *shared.Request {
-	for req := range rb.buf.Iterate() {
+	for _, req := range rb.buf.Values() {
 		if req.ID == id {
 			return req
 		}

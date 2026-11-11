@@ -101,7 +101,9 @@ func pageTitle(page string) string {
 // recordControls is the recording pill and its start and stop.
 func (a *app) recordControls(c *ui.Context, p *palette) {
 	st := a.snapshotState()
-	if a.recordingNow() {
+	// Read the session from the one snapshot: asking the store twice lets it
+	// change in between, and a session gone by the second look is a nil.
+	if s := st.session; s != nil && s.Recording && s.Name != "scope" {
 		ui.Row(c.Key("rec-pill")).Gap(6).AlignItems(ui.Center).Height(24).Padding(0, 9).
 			Radius(12).Background(p.removed.Alpha(0.14)).Children(func() {
 			// The dot breathes while the daemon records: 0.7s down and
@@ -112,7 +114,7 @@ func (a *app) recordControls(c *ui.Context, p *palette) {
 				{At: 700 * time.Millisecond, Value: 0.35, Ease: ui.EaseInOut},
 			}, ui.KeyframeOptions{Repeat: ui.RepeatForever, Alternate: true}))
 			ui.Text(c, "recording").FontSize(11.5).FontWeight(600).TextColor(p.removed).SingleLine()
-			if id := st.session.ID; id != "" {
+			if id := s.ID; id != "" {
 				ui.Text(c, id).FontSize(11).Font(mono()).TextColor(p.removed.Alpha(0.75)).SingleLine()
 			}
 		})
@@ -243,7 +245,7 @@ func (a *app) sidebar(c *ui.Context, p *palette) {
 				a.page = key
 			}
 		}
-		item(pageTrajectory, "Trace", iconClock, len(st.traj))
+		item(pageTrajectory, "Trace", iconClock, len(foldTrace(st.traj)))
 		item(pageRequests, "Requests", iconList, len(st.requests))
 		item(pageRules, "Rules", iconSliders, len(st.rules))
 		item(pageDaemon, "Daemon", iconServer, 0)

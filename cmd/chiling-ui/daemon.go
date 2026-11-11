@@ -98,10 +98,17 @@ func (a *app) daemonPage(c *ui.Context, p *palette) {
 					a.fact(c, p, "Store", st.history.Path)
 					a.factRoll(c, p, "Requests", fmt.Sprint(st.history.Requests))
 					if st.history.Retention != "" {
-						a.fact(c, p, "Retention", st.history.Retention)
+						a.fact(c, p, "Retention", retentionLabel(st.history.Retention))
 					}
 				})
 				a.daemonSection(c, p, "MITM", 120*time.Millisecond, func() {
+					if !st.mitmKnown {
+						ui.Text(c, "Not set up — this daemon was started without MITM, so HTTPS passes through unread.").
+							FontSize(12).TextColor(p.muted).FillWidth()
+						ui.Text(c, "chiling daemon stop && chiling daemon start --mitm").FontSize(12).Font(mono()).
+							TextColor(p.text).FillWidth()
+						return
+					}
 					a.factYesNo(c, p, "Enabled", st.mitm.Enabled)
 					a.factYesNo(c, p, "CA installed", st.mitm.CertInstalled)
 					if st.mitm.EmptyAllowDenies && len(st.mitm.AllowPatterns) == 0 {
@@ -122,6 +129,11 @@ func (a *app) daemonPage(c *ui.Context, p *palette) {
 						a.factList(c, p, "Bypass", st.scope.Bypass)
 						a.factList(c, p, "Durable allow", st.scope.ConfigAllow)
 						a.factList(c, p, "Durable deny", st.scope.ConfigDeny)
+						// Reset has something to undo only while the session
+						// narrows the view.
+						if !st.scope.Restricting && len(st.scope.Pick)+len(st.scope.Omit)+len(st.scope.Bypass) == 0 {
+							return
+						}
 						ui.Row(c).Gap(8).Margin(2, 0, 0, -9).Children(func() {
 							a.ghostButton(c, "scope-reset", "Reset scope", iconUndo).
 								Clicked(func() { a.actScopeReset() })
@@ -238,6 +250,19 @@ func elapsedLabel(from, now time.Time) string {
 		return "0s"
 	}
 	return now.Sub(from).Truncate(time.Second).String()
+}
+
+// retentionLabel reads a Go duration as days when it is whole days:
+// "168h0m0s" is "7 days". Anything else stays as the daemon wrote it.
+func retentionLabel(s string) string {
+	d, err := time.ParseDuration(s)
+	if err != nil || d < 24*time.Hour || d%(24*time.Hour) != 0 {
+		return s
+	}
+	if n := int(d / (24 * time.Hour)); n > 1 {
+		return fmt.Sprintf("%d days", n)
+	}
+	return "1 day"
 }
 
 func uptimeLabel(seconds int64) string {
