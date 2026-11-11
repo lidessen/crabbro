@@ -11,8 +11,9 @@ import (
 	"github.com/lidessen/chiling/pkg/api"
 )
 
-// The rules page: the rule list and, below it, the editor of the one
-// chosen — an overview to read it by and the YAML code to edit it in.
+// The rules page: the rules as a column of edicts, each under its seal,
+// and beside it the one chosen — an overview to read it by and the YAML
+// code to edit it in.
 
 // editorFade is how the script editor follows a theme change: its face and
 // hairline fade to the new palette rather than swap under the eye.
@@ -36,14 +37,22 @@ var (
 	ruleCodeSeen  string
 )
 
-// rulesPage is the rule list and, below it, the editor of the one chosen.
+// ruleListW is the width of the column of rules, as the page's splitter
+// keeps it.
+var ruleListW float32 = 340
+
+// rulesPage is the column of rules and, beside it, the one chosen.
 func (a *app) rulesPage(c *ui.Context, p *palette) {
 	st := a.snapshotState()
-	a.ruleState.Key = func(row int) any { return string(st.rules[row].ID) }
-	a.ruleState.Selected = &a.ruleSel
+	if len(st.rules) == 0 {
+		a.ruleShownID = ""
+		a.rulesEmpty(c, p)
+		return
+	}
+	a.ruleSel = min(max(a.ruleSel, 0), len(st.rules)-1)
 
-	// The editor shows the rule the table chose, its script loaded from
-	// the list when the choice changes.
+	// The editor shows the rule the list chose, its script loaded when
+	// the choice changes.
 	if id := a.chosenRuleID(st.rules); id != a.ruleShownID {
 		a.ruleShownID = id
 		a.scriptDraft = ""
@@ -54,26 +63,94 @@ func (a *app) rulesPage(c *ui.Context, p *palette) {
 	}
 	dirty := a.ruleShownID != "" && a.scriptDraft != "" && a.scriptDraft != a.scriptLoadedText(st.rules)
 
-	base := *c.Theme()
-	p.quiet(c)
-	ui.SplitVertical(c, &detailSplitH,
-		func() {
-			if len(st.rules) == 0 {
-				a.rulesEmpty(c, p)
-				return
-			}
-			cols := []ui.TableColumn{
-				{Title: "Name", ID: "name"},
-				{Title: "Priority", ID: "priority", Width: 76, Align: ui.End, Sortable: true},
-				{Title: "Enabled", ID: "enabled", Width: 84},
-			}
-			ui.Table(c, &a.ruleState, cols, len(st.rules), func(row, col int) {
-				a.ruleCell(c, p, st.rules[row], col)
-			}).Grow(1)
-		},
+	ui.Split(c, &ruleListW,
+		func() { a.ruleList(c, p, st) },
 		func() { a.ruleEditor(c, p, st, dirty) },
 	).Grow(1)
-	c.SetTheme(&base)
+}
+
+// ruleList is the rules as a column of edicts: each under its seal, solid
+// while it is in force and in outline while it is only written, with what
+// it matches and what it does in a line below its name.
+func (a *app) ruleList(c *ui.Context, p *palette, st store) {
+	inForce := 0
+	for _, r := range st.rules {
+		if r.Enabled {
+			inForce++
+		}
+	}
+	ui.Column(c).Fill().MinHeight(0).Children(func() {
+		ui.Column(c).FillWidth().Shrink(0).Padding(22, 20, 14, 28).Gap(5).Children(func() {
+			ui.Text(c, "Rules").FontSize(20).FontWeight(650).LetterSpacing(-0.2).TextColor(p.text).SingleLine()
+			sub := fmt.Sprintf("%d in force", inForce)
+			if off := len(st.rules) - inForce; off > 0 {
+				sub += fmt.Sprintf("  ·  %d set aside", off)
+			}
+			ui.Text(c, sub).FontSize(12).TextColor(p.muted).SingleLine()
+		})
+		hairline(c, p)
+		ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
+			ui.Column(c).FillWidth().Padding(8, 8, 16).Gap(1).Children(func() {
+				for i, r := range st.rules {
+					a.ruleRow(c, p, r, i)
+				}
+			})
+		})
+	})
+}
+
+// ruleRow is one rule of the column.
+func (a *app) ruleRow(c *ui.Context, p *palette, r api.Rule, i int) {
+	on := i == a.ruleSel
+	b := ui.ButtonBase(c.Key("rule:"+string(r.ID))).FillWidth().Height(58).Padding(0, 12, 0, 20).Gap(13).
+		Radius(8).AlignItems(ui.Center).Label(ruleLabel(r))
+	switch {
+	case on:
+		b.Background(p.active)
+	case b.Pressed():
+		b.Background(p.text.Alpha(0.06))
+	case b.Hovered():
+		b.Background(p.hover)
+	}
+	b.Transition(hoverFade)
+	b.Children(func() {
+		seal(c, p, 24, r.Enabled)
+		ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+				col := p.text
+				if !r.Enabled {
+					col = p.muted
+				}
+				ui.Text(c, ruleLabel(r)).FontSize(13).FontWeight(600).TextColor(col).SingleLine().Shrink(1).MinWidth(20)
+				if r.FailureMode == "fail-closed" {
+					tag(c, p, "fail-closed")
+				}
+			})
+			ui.Text(c, ruleSummary(r)).FontSize(11.5).Font(mono()).TextColor(p.faint).SingleLine()
+		})
+		ui.Text(c, fmt.Sprint(r.Priority)).FontSize(11).Font(mono()).TextColor(p.faint).SingleLine().Shrink(0).
+			Tooltip("Priority")
+	})
+	if b.Clicked() {
+		a.ruleSel = i
+	}
+}
+
+// ruleSummaries keeps each rule's one-line summary by the script it was
+// read from, so the column does not parse YAML every frame.
+var ruleSummaries = map[string]struct{ script, text string }{}
+
+// ruleSummary is a rule in one line: what it matches, and what it does.
+func ruleSummary(r api.Rule) string {
+	if s, ok := ruleSummaries[string(r.ID)]; ok && s.script == r.Script {
+		return s.text
+	}
+	text := string(r.ID)
+	if doc, err := parseRuleDoc(r.Script); err == nil {
+		text = doc.summary()
+	}
+	ruleSummaries[string(r.ID)] = struct{ script, text string }{r.Script, text}
+	return text
 }
 
 // rulesEmpty is what the list shows while there are no rules: a quiet
@@ -120,27 +197,6 @@ func (a *app) loadRuleScript(id string) {
 	}()
 }
 
-// ruleCell draws one cell of the rules table.
-func (a *app) ruleCell(c *ui.Context, p *palette, r api.Rule, col int) {
-	switch col {
-	case 0:
-		ui.Row(c).Grow(1).Gap(6).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, ruleLabel(r)).FontSize(12.5).FontWeight(550).TextColor(map[bool]ui.Color{true: p.text, false: p.muted}[r.Enabled]).SingleLine().Shrink(1).MinWidth(20)
-			if r.FailureMode == "fail-closed" {
-				tag(c, p, "fail-closed")
-			}
-		})
-	case 1:
-		ui.Text(c, fmt.Sprint(r.Priority)).FontSize(11.5).Font(mono()).TextColor(p.faint).TextAlign(ui.End).SingleLine()
-	case 2:
-		if r.Enabled {
-			stateDot(c, p, p.added, "On")
-		} else {
-			stateDot(c, p, p.faint.Alpha(0.6), "Off")
-		}
-	}
-}
-
 // ruleLabel is what the list names a rule: its name, else its id.
 func ruleLabel(r api.Rule) string {
 	if r.Name != "" {
@@ -149,18 +205,13 @@ func ruleLabel(r api.Rule) string {
 	return string(r.ID)
 }
 
-// ruleEditor is the rule the list chose: its toolbar — the name, the
-// meta, the overview and code views, and what to do — over the view itself.
-// The overview reads the rule; the YAML in the code view is what is edited.
+// ruleEditor is the rule the list chose: its name set as a heading with
+// what to do with it at its right, then the overview and the code as two
+// words to choose between, over the view itself. The overview reads the
+// rule; the YAML in the code view is what is edited.
 func (a *app) ruleEditor(c *ui.Context, p *palette, st store, dirty bool) {
 	if a.ruleShownID == "" {
-		if len(st.rules) == 0 {
-			ui.Column(c).Grow(1).BorderWidth(1, 0, 0, 0).BorderColor(p.border)
-			return
-		}
-		ui.Column(c).Grow(1).BorderWidth(1, 0, 0, 0).BorderColor(p.border).Children(func() {
-			emptyState(c, p, iconSliders, "Select a rule", "Choose a rule to read it, or edit its YAML.", "")
-		})
+		emptyState(c, p, iconSliders, "Select a rule", "Choose a rule to read it, or edit its YAML.", "")
 		return
 	}
 	rule := a.ruleShownID
@@ -172,25 +223,26 @@ func (a *app) ruleEditor(c *ui.Context, p *palette, st store, dirty bool) {
 		a.ruleEditMode = 1
 	}
 
-	ui.Column(c).Grow(1).MinHeight(0).BorderWidth(1, 0, 0, 0).BorderColor(p.border).Children(func() {
-		ui.Row(c).Height(38).Shrink(0).Padding(0, 14).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Row(c).Gap(7).AlignItems(ui.Center).Children(func() {
+	ui.Column(c).Fill().MinHeight(0).Children(func() {
+		ui.Row(c).FillWidth().Shrink(0).Padding(20, 16, 6, 24).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Column(c).Gap(4).Shrink(1).MinWidth(0).Children(func() {
+				name := rule
 				if r != nil && r.Name != "" {
-					ui.Text(c, r.Name).FontSize(12.5).FontWeight(600).TextColor(p.text).SingleLine().Shrink(1).MinWidth(20)
-					ui.Text(c, "·").FontSize(12).Font(mono()).TextColor(p.faint).SingleLine()
-					ui.Text(c, rule).FontSize(11.5).Font(mono()).FontWeight(550).TextColor(p.muted).SingleLine().Shrink(1).MinWidth(40)
-				} else {
-					ui.Text(c, rule).FontSize(12).Font(mono()).FontWeight(600).TextColor(p.text).SingleLine().Shrink(1).MinWidth(40)
+					name = r.Name
 				}
+				ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, name).FontSize(16).FontWeight(650).TextColor(p.text).SingleLine().Shrink(1).MinWidth(20)
+					if dirty {
+						stateDot(c, p, p.warning(), "Edited")
+					}
+				})
+				meta := rule
+				if m := ruleMeta(r); m != "" {
+					meta += "  ·  " + m
+				}
+				ui.Text(c, meta).FontSize(11.5).Font(mono()).TextColor(p.faint).SingleLine()
 			})
-			if dirty {
-				stateDot(c, p, p.warning(), "Edited")
-			}
 			ui.Spacer(c)
-			if meta := ruleMeta(r); meta != "" {
-				ui.Text(c, meta).FontSize(11).Font(mono()).TextColor(p.faint).SingleLine().Shrink(1).MinWidth(0)
-			}
-			a.viewSwitch(c, p)
 			a.ghostButton(c, "rule-toggle", toggleLabel(st.rules, rule), iconSwitch).
 				Clicked(func() { a.actToggleRule(rule, !enabledOf(st.rules, rule)) })
 			a.ghostButton(c, "rule-delete", "Delete", iconTrash).Disabled(ruleConfirming == rule).
@@ -200,36 +252,16 @@ func (a *app) ruleEditor(c *ui.Context, p *palette, st store, dirty bool) {
 			a.fillButton(c, "rule-save", "Save", iconSave).Disabled(!dirty).
 				Clicked(func() { a.actSaveRule(rule, a.scriptDraft) })
 		})
+		ui.Row(c).FillWidth().Shrink(0).Padding(0, 24).Children(func() {
+			a.words(c, "rule-view", &a.ruleEditMode, "Overview", "Code")
+		})
+		hairline(c, p)
 		if a.ruleEditMode == 0 {
 			a.ruleOverview(c, p, st, r)
 		} else {
 			a.ruleCode(c, p)
 		}
 	})
-}
-
-// viewSwitch is the overview and code pair of tabs.
-func (a *app) viewSwitch(c *ui.Context, p *palette) {
-	tab := func(key, label string, on bool, disabled bool, fn func()) {
-		b := ui.ButtonBase(c.Key(key)).Height(24).Padding(0, 10).Radius(6).
-			AlignItems(ui.Center).Label(label).Tooltip(label).Disabled(disabled)
-		col := p.muted
-		switch {
-		case on:
-			b.Background(p.active)
-			col = p.text
-		case b.Hovered():
-			b.Background(p.hover)
-			col = p.text
-		}
-		b.Transition(hoverFade)
-		b.Children(func() { ui.Text(c, label).FontSize(12).FontWeight(550).TextColor(col).SingleLine() })
-		if b.Clicked() {
-			fn()
-		}
-	}
-	tab("view-overview", "Overview", a.ruleEditMode == 0, ruleVM == nil, func() { a.ruleEditMode = 0 })
-	tab("view-code", "Code", a.ruleEditMode == 1, false, func() { a.ruleEditMode = 1 })
 }
 
 // syncRuleVM keeps the parsed document in step with the draft: it reparses
@@ -247,27 +279,31 @@ func (a *app) syncRuleVM() {
 	ruleVM, ruleVMErr = doc, ""
 }
 
-// ruleOverview is the rule read as cards: what it matches, its settings,
-// and the stages of each phase. It edits nothing; the code view does.
+// ruleOverview is the rule read in plain groups: when it applies, how it
+// is set, and what each phase does, stage by stage. It edits nothing; the
+// code view does.
 func (a *app) ruleOverview(c *ui.Context, p *palette, st store, r *api.Rule) {
 	doc := ruleVM
 	if doc == nil {
 		if a.scriptDraft == "" {
 			return // still loading
 		}
-		ui.Column(c).Grow(1).Padding(14).Children(func() {
-			card(c, p, func() {
-				ui.Text(c, "This rule can't be read as an overview.").FontSize(12.5).FontWeight(600).TextColor(p.text)
-				ui.Text(c, ruleVMErr).FontSize(11.5).Font(mono()).TextColor(p.removed).FillWidth()
-				ui.Text(c, "Its YAML is in the Code view.").FontSize(12).TextColor(p.muted)
-			})
+		ui.Column(c).Grow(1).Padding(18, 24).Gap(6).Children(func() {
+			ui.Text(c, "This rule can't be read as an overview.").FontSize(12.5).FontWeight(600).TextColor(p.text)
+			ui.Text(c, ruleVMErr).FontSize(11.5).Font(mono()).TextColor(p.removed).FillWidth()
+			ui.Text(c, "Its YAML is in the Code view.").FontSize(12).TextColor(p.muted)
 		})
 		return
 	}
-	ui.Scroll(c).Grow(1).Children(func() {
-		ui.Column(c).FillWidth().Padding(14, 16, 24).Gap(14).Children(func() {
-			card(c, p, func() {
-				cardTitle(c, p, "Match")
+	group := func(title string, rows func()) {
+		ui.Column(c.Key("group:" + title)).FillWidth().Gap(8).Children(func() {
+			caption(c, p, title)
+			ui.Column(c).FillWidth().Gap(7).Children(rows)
+		})
+	}
+	ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
+		ui.Column(c).FillWidth().MaxWidth(860).Padding(18, 24, 28).Gap(18).Children(func() {
+			group("Applies when", func() {
 				switch {
 				case doc.On.Hook != "":
 					a.fact(c, p, "Hook", doc.On.Hook)
@@ -290,14 +326,14 @@ func (a *app) ruleOverview(c *ui.Context, p *palette, st store, r *api.Rule) {
 					}
 				}
 			})
-			card(c, p, func() {
-				cardTitle(c, p, "Settings")
+			hairline(c, p)
+			group("Settings", func() {
 				if doc.Description != "" {
 					a.fact(c, p, "Description", doc.Description)
 				}
 				if r != nil {
 					a.fact(c, p, "Priority", fmt.Sprint(r.Priority))
-					a.factYesNo(c, p, "Enabled", r.Enabled)
+					a.factYesNo(c, p, "In force", r.Enabled)
 				}
 				mode := doc.FailureMode
 				if r != nil && r.FailureMode != "" {
@@ -318,10 +354,10 @@ func (a *app) ruleOverview(c *ui.Context, p *palette, st store, r *api.Rule) {
 				if ph == nil || len(ph.Pipeline) == 0 {
 					continue
 				}
-				ui.Column(c.Key("pipe:" + kind)).FillWidth().Gap(6).Children(func() {
-					cardTitle(c, p, strings.ToUpper(kind[:1])+kind[1:]+" pipeline")
+				hairline(c, p)
+				group("On the "+kind, func() {
 					for i := range ph.Pipeline {
-						a.stageCard(c, p, &ph.Pipeline[i], fmt.Sprintf("%s:%d", kind, i))
+						a.stageBlock(c, p, &ph.Pipeline[i], i, fmt.Sprintf("%s:%d", kind, i))
 					}
 				})
 			}
@@ -329,32 +365,34 @@ func (a *app) ruleOverview(c *ui.Context, p *palette, st store, r *api.Rule) {
 	})
 }
 
-// stageCard is one stage, read: what it uses, its id and condition, and
-// its parameters as they are written.
-func (a *app) stageCard(c *ui.Context, p *palette, s *vmStage, key string) {
-	card(c, p, func() {
-		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-			uses := s.stageUses()
-			ui.Text(c, uses).FontSize(12).FontWeight(600).Font(mono()).TextColor(p.text).SingleLine().Shrink(0)
-			if s.ID != "" && s.ID != s.Uses {
-				ui.Text(c, s.ID).FontSize(11.5).Font(mono()).TextColor(p.faint).SingleLine()
+// stageBlock is one stage, read: its place in the pipeline, what it uses,
+// its id and condition, and its parameters as they are written.
+func (a *app) stageBlock(c *ui.Context, p *palette, s *vmStage, n int, key string) {
+	ui.Row(c.Key("stage:" + key)).FillWidth().Gap(12).AlignItems(ui.Start).Children(func() {
+		ui.Text(c, fmt.Sprint(n+1)).FontSize(11).Font(mono()).TextColor(p.faint).Width(14).Padding(2, 0, 0).SingleLine().Shrink(0)
+		ui.Column(c).Grow(1).MinWidth(0).Gap(5).Children(func() {
+			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, s.stageUses()).FontSize(12.5).FontWeight(600).Font(mono()).TextColor(p.text).SingleLine().Shrink(0)
+				if s.ID != "" && s.ID != s.Uses {
+					ui.Text(c, s.ID).FontSize(11.5).Font(mono()).TextColor(p.faint).SingleLine()
+				}
+				if s.If != "" {
+					ui.Text(c, "if "+s.If).FontSize(11).Font(mono()).TextColor(p.muted).SingleLine().Shrink(1).MinWidth(20)
+				}
+				if adv := s.stageNote(); adv != "" {
+					tag(c, p, adv)
+				}
+			})
+			if s.Run != nil {
+				ui.Text(c, strings.TrimSpace(s.Run.Script)).FontSize(11.5).Font(mono()).TextColor(p.muted).FillWidth()
 			}
-			if s.If != "" {
-				ui.Text(c, "if "+s.If).FontSize(11).Font(mono()).TextColor(p.muted).SingleLine().Shrink(1).MinWidth(20)
-			}
-			if adv := s.stageNote(); adv != "" {
-				tag(c, p, adv)
+			for _, k := range sortedKeys(s.With) {
+				ui.Row(c.Key("with:" + key + ":" + k)).FillWidth().Gap(10).AlignItems(ui.Start).Children(func() {
+					ui.Text(c, k).FontSize(12).Font(mono()).TextColor(p.muted).SingleLine().Width(96).Shrink(0)
+					ui.Text(c, paramString(s.With[k])).FontSize(12).Font(mono()).TextColor(p.text).Shrink(1).MinWidth(40)
+				})
 			}
 		})
-		if s.Run != nil {
-			ui.Text(c, strings.TrimSpace(s.Run.Script)).FontSize(11.5).Font(mono()).TextColor(p.muted).FillWidth().Margin(4, 0, 0)
-		}
-		for _, k := range sortedKeys(s.With) {
-			ui.Row(c.Key("with:"+key+":"+k)).FillWidth().Gap(10).AlignItems(ui.Start).Padding(2.5, 0).Children(func() {
-				ui.Text(c, k).FontSize(12).Font(mono()).TextColor(p.muted).SingleLine().Width(120).Shrink(0)
-				ui.Text(c, paramString(s.With[k])).FontSize(12).Font(mono()).TextColor(p.text).Shrink(1).MinWidth(40)
-			})
-		}
 	})
 }
 
@@ -373,7 +411,7 @@ func (a *app) ruleCode(c *ui.Context, p *palette) {
 	}
 	ui.Column(c).Grow(1).MinHeight(0).Children(func() {
 		editor.View(c.Key("rule:yaml"), ruleCodeState).Grow(1).FillWidth().MinHeight(0).
-			Margin(0, 14, 14).Radius(8).Border(1, p.border).Transition(editorFade)
+			Margin(8, 8, 0).Transition(editorFade)
 	})
 }
 

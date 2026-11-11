@@ -22,9 +22,8 @@ import (
 )
 
 const (
-	titleBarH  = 38
+	titleBarH  = 42
 	statusBarH = 24
-	sidebarW   = 190
 )
 
 // expandPath turns a leading ~ into the home folder.
@@ -78,7 +77,7 @@ func main() {
 			MinHeight:            540,
 			TitleBarStyle:        mygo.TitleBarHidden,
 			TitleBarHeight:       titleBarH,
-			TrafficLightPosition: &mygo.Point{X: 14, Y: 13},
+			TrafficLightPosition: &mygo.Point{X: 14, Y: 15},
 			Content:              ui.View(a.view),
 		})
 		a.win = win

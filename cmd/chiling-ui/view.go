@@ -43,8 +43,9 @@ var pillMotion = ui.ElementTransition{Duration: 160 * time.Millisecond, Colors: 
 // neighbors about.
 var busyFade = ui.ElementTransition{Duration: 130 * time.Millisecond, Enter: &ui.Motion{}, Exit: &ui.Motion{}}
 
-// view builds the window: a chrome shell — the title bar, the sidebar and
-// the status bar — around the page the sidebar chose.
+// view builds the window: the title bar, which is also where the pages are
+// chosen, the page, and the status line. There is no sidebar: four pages
+// are four words, and the page keeps the window's whole width.
 func (a *app) view(c *ui.Context) {
 	a.setServices(c.Services())
 	a.drainQueue()
@@ -52,36 +53,62 @@ func (a *app) view(c *ui.Context) {
 	p := applyPal(c)
 	a.pal = p
 
-	ui.Column(c).Fill().Background(p.chrome).Children(func() {
+	ui.Column(c).Fill().Background(p.editor).Children(func() {
 		a.titleBar(c, p)
-		ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
-			a.sidebar(c, p)
-			ui.Column(c.Key("page")).Grow(1).MinWidth(0).Background(p.editor).
-				BorderWidth(0, 0, 0, 1).BorderColor(p.border).Children(func() {
-				ui.Column(c.Key("page:" + a.page)).Grow(1).Children(func() {
-					a.pageBody(c, p)
-				})
-			})
+		ui.Column(c.Key("page:" + a.page)).Grow(1).MinHeight(0).Children(func() {
+			a.pageBody(c, p)
 		})
 		a.statusBar(c, p)
 	})
 	a.toasts(c)
 }
 
-// titleBar is the chrome's top: the mark and name, and the recording
-// controls at its right.
+// titleBar is the window's top: the mark, the pages as words, and the
+// recording at its right.
 func (a *app) titleBar(c *ui.Context, p *palette) {
 	bar := c.TitleBar()
-	ui.Row(c).Height(max(bar.Height, titleBarH)).Padding(0, bar.Right+10, 0, bar.Left+12).
-		AlignItems(ui.Center).Background(p.chrome).BorderWidth(0, 0, 1, 0).BorderColor(p.border).
+	st := a.snapshotState()
+	ui.Row(c).Height(max(bar.Height, titleBarH)).Padding(0, bar.Right+12, 0, bar.Left+14).
+		AlignItems(ui.Stretch).Background(p.chrome).BorderWidth(0, 0, 1, 0).BorderColor(p.border).
 		DragWindow().Children(func() {
-		ui.Row(c).Gap(9).AlignItems(ui.Center).Children(func() {
-			brandMark(c, p, 20)
-			ui.Text(c, "Chiling").FontSize(13).FontWeight(650).TextColor(p.text).SingleLine()
+		ui.Row(c).AlignItems(ui.Center).Margin(0, 20, 0, 0).Children(func() { brandMark(c, p, 20) })
+		ui.Row(c.Key("nav")).Gap(22).AlignItems(ui.Stretch).Children(func() {
+			a.navWord(c, p, pageTrajectory, "Trace", len(foldTrace(st.traj)))
+			a.navWord(c, p, pageRequests, "Requests", len(st.requests))
+			a.navWord(c, p, pageRules, "Rules", len(st.rules))
+			a.navWord(c, p, pageDaemon, "Daemon", 0)
 		})
 		ui.Spacer(c)
-		a.recordControls(c, p)
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() { a.recordControls(c, p) })
 	})
+}
+
+// navWord is one page of the title bar: its name, the count of what it
+// holds set small beside it, and under the chosen one a vermilion stroke
+// that rests on the bar's own hairline.
+func (a *app) navWord(c *ui.Context, p *palette, key, label string, count int) {
+	on := a.page == key
+	b := ui.ButtonBase(c.Key("nav:" + key)).Gap(6).AlignItems(ui.Center).Label(label)
+	col := p.muted
+	if on || b.Hovered() {
+		col = p.text
+	}
+	under := float32(0)
+	if on {
+		under = 1
+	}
+	under = b.Animate("under", under, 180*time.Millisecond)
+	b.Children(func() {
+		ui.Text(c, label).FontSize(13).FontWeight(550).TextColor(col).SingleLine()
+		if count > 0 {
+			ui.Text(c, fmt.Sprint(count)).FontSize(10.5).Font(mono()).TextColor(p.faint).SingleLine().
+				ContentTransition(ui.ContentTransition{Numeric: true})
+		}
+		ui.Box(c).Absolute().Left(0).Right(0).Bottom(-1).Height(2).Background(p.accent.Alpha(under))
+	})
+	if b.Clicked() {
+		a.page = key
+	}
 }
 
 // recordControls is the recording at the title bar's right: while one is
@@ -217,64 +244,6 @@ func (a *app) plainButton(c *ui.Context, key, label string, icon *ui.SVG, faced 
 		}
 	})
 	return button(b)
-}
-
-// sidebar is the pages of the window: rows on the chrome, the chosen one
-// in a tint of the accent, its icon in the accent and under the rail at its
-// left. The chosen page is where the sidebar spends the accent, and nowhere
-// else.
-func (a *app) sidebar(c *ui.Context, p *palette) {
-	st := a.snapshotState()
-	ui.Column(c.Key("sidebar")).Width(sidebarW).Background(p.chrome).
-		Padding(10, 8).Gap(2).Children(func() {
-		item := func(key, label string, icon *ui.SVG, count int) {
-			on := a.page == key
-			row := ui.ButtonBase(c.Key("side:"+key)).FillWidth().Height(30).Padding(0, 10).Gap(9).
-				Radius(7).AlignItems(ui.Center).Label(label)
-			switch {
-			case on:
-				row.Background(p.active)
-			case row.Pressed():
-				row.Background(p.text.Alpha(0.065))
-			case row.Hovered():
-				row.Background(p.hover)
-			}
-			row.Transition(hoverFade)
-			col := p.muted
-			if on {
-				col = p.text
-			}
-			// The rail grows from the row's middle as the choice lands,
-			// and away as it leaves.
-			railH := float32(0)
-			if on {
-				railH = 14
-			}
-			railH = row.Animate("rail", railH, 160*time.Millisecond)
-			row.Children(func() {
-				ui.Box(c.Key("rail")).Absolute().Left(0).Top((30 - railH) / 2).
-					Width(2.5).Height(railH).Radius(1.5).Background(p.accent)
-				iconCol := col
-				if on {
-					iconCol = p.accent
-				}
-				ui.Icon(c, icon).FontSize(14.5).TextColor(iconCol)
-				ui.Text(c, label).FontSize(13).FontWeight(map[bool]int{true: 600, false: 500}[on]).
-					TextColor(col).SingleLine().Grow(1)
-				if count > 0 {
-					ui.Text(c, fmt.Sprint(count)).FontSize(11).Font(mono()).TextColor(p.faint).
-						SingleLine().ContentTransition(ui.ContentTransition{Numeric: true})
-				}
-			})
-			if row.Clicked() {
-				a.page = key
-			}
-		}
-		item(pageTrajectory, "Trace", iconClock, len(foldTrace(st.traj)))
-		item(pageRequests, "Requests", iconList, len(st.requests))
-		item(pageRules, "Rules", iconSliders, len(st.rules))
-		item(pageDaemon, "Daemon", iconServer, 0)
-	})
 }
 
 // pageBody is the page the sidebar chose.

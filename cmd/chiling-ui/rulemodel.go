@@ -80,6 +80,38 @@ func parseRuleDoc(script string) (*vmDoc, error) {
 	return &doc, nil
 }
 
+// summary is the rule in one line: what it matches, an arrow, what it
+// does — "POST api.test/v1/login → mock-response".
+func (d *vmDoc) summary() string {
+	match := "hook " + d.On.Hook
+	if d.On.Hook == "" {
+		match = "never"
+		if m := d.On.Request; m != nil {
+			path := m.Path
+			if m.PathPrefix != "" {
+				path = m.PathPrefix + "*"
+			}
+			match = strings.TrimSpace(m.Method + " " + m.Host + path)
+			if match == "" {
+				match = "every request"
+			}
+		}
+	}
+	var does []string
+	for _, ph := range []*vmPhase{d.Request, d.Response, d.Frame} {
+		if ph == nil {
+			continue
+		}
+		for i := range ph.Pipeline {
+			does = append(does, strings.TrimPrefix(ph.Pipeline[i].stageUses(), "chiling."))
+		}
+	}
+	if len(does) == 0 {
+		return match
+	}
+	return match + " → " + strings.Join(does, ", ")
+}
+
 // stageUses is what names a stage in the visual list: its uses, or "run".
 func (s *vmStage) stageUses() string {
 	if s.Run != nil {
