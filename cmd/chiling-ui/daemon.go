@@ -16,7 +16,7 @@ import (
 func (a *app) daemonPage(c *ui.Context, p *palette) {
 	st := a.snapshotState()
 	ui.Scroll(c).Grow(1).Children(func() {
-		ui.Column(c).FillWidth().MaxWidth(880).Padding(20, 20, 28).Gap(22).Children(func() {
+		ui.Column(c).FillWidth().MaxWidth(820).Padding(24, 28, 32).Gap(18).Children(func() {
 			switch {
 			case st.conn == connDown:
 				a.daemonSection(c, p, "Daemon", 0, func() {
@@ -37,17 +37,12 @@ func (a *app) daemonPage(c *ui.Context, p *palette) {
 					})
 				})
 			default:
-				// The headline numbers share one card, a hairline between
-				// them, rather than standing as four boxes.
-				ui.Row(c.Key("daemon:tiles")).FillWidth().Radius(8).Background(p.surface).Border(1, p.border).
-					AlignItems(ui.Stretch).Children(func() {
-					rule := func() { ui.Box(c).Width(1).Margin(12, 0).Background(p.border) }
+				// The headline numbers stand in a row on the page itself,
+				// set large, with nothing drawn round them.
+				ui.Row(c.Key("daemon:tiles")).FillWidth().Gap(8).Padding(4, 0, 6).AlignItems(ui.Stretch).Children(func() {
 					stat(c, p, "req", "Requests", fmt.Sprint(st.status.RequestCount))
-					rule()
 					stat(c, p, "rules", "Rules", fmt.Sprint(st.status.RuleCount))
-					rule()
 					stat(c, p, "up", "Uptime", uptimeLabel(st.status.UptimeSeconds))
-					rule()
 					stat(c, p, "proxy", "Proxy", st.status.ProxyAddr)
 				})
 				a.daemonSection(c, p, "Recording", 40*time.Millisecond, func() {
@@ -144,14 +139,15 @@ func (a *app) daemonPage(c *ui.Context, p *palette) {
 	})
 }
 
-// daemonSection draws one titled card of the daemon page. delay is kept
-// from the page's entrance-stagger days; the cards no longer wait on the
-// animation clock for their visibility.
+// daemonSection is one group of the daemon page: a hairline, its name in
+// the margin's quiet hand, and its facts. delay is kept from the page's
+// entrance-stagger days.
 func (a *app) daemonSection(c *ui.Context, p *palette, title string, delay time.Duration, rows func()) {
-	ui.Column(c.Key("daemon:" + title)).FillWidth().Gap(4).Children(func() {
-		cardTitle(c, p, title)
-		card(c, p, func() {
-			ui.Column(c).FillWidth().Gap(7).Children(rows)
+	ui.Column(c.Key("daemon:" + title)).FillWidth().Gap(12).Children(func() {
+		hairline(c, p)
+		ui.Row(c).FillWidth().Gap(0).AlignItems(ui.Start).Children(func() {
+			caption(c, p, title).Width(150).Shrink(0).Padding(4, 0, 0)
+			ui.Column(c).Grow(1).MinWidth(0).Gap(7).Children(rows)
 		})
 	})
 }

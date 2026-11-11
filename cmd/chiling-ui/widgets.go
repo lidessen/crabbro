@@ -15,11 +15,77 @@ import (
 // Shared widgets and small formatters the pages draw with.
 
 // emptyMark is the mark an empty page is known by: its icon in the accent,
-// on a soft square of the same. It is the one ornament the page has, so it
-// is drawn with care: an even radius, the icon optically centered.
+// on a soft square of the same.
 func emptyMark(c *ui.Context, p *palette, icon *ui.SVG) {
 	ui.Row(c).Size(44, 44).Center().Radius(12).Background(p.accent.Alpha(0.1)).Children(func() {
 		ui.Icon(c, icon).FontSize(20).TextColor(p.accent)
+	})
+}
+
+// seal is the mark of a rule: a small vermilion chop, as an edict is
+// stamped — Chiling is 敕令, the edict itself. A chop is known by its
+// frame, so the frame is all that is drawn, at every size: a square of the
+// accent with a fine inner border cut out of it. Solid, it is a rule in
+// force — on a request, one that touched it; in outline, a rule that is
+// written but not applied.
+func seal(c *ui.Context, p *palette, size float32, solid bool) {
+	b := ui.Row(c).Size(size, size).Center().Radius(size * 0.2).Shrink(0)
+	inset := size * 0.17
+	inner := ui.Box
+	if solid {
+		b.Background(p.accent)
+		b.Children(func() {
+			inner(c).Absolute().Left(inset).Top(inset).Right(inset).Bottom(inset).
+				Radius(size*0.08).Border(max(1.1, size*0.07), p.editor.Alpha(0.92))
+		})
+		return
+	}
+	b.Border(max(1.25, size*0.07), p.accent.Alpha(0.8))
+	b.Children(func() {
+		inner(c).Absolute().Left(inset * 1.7).Top(inset * 1.7).Right(inset * 1.7).Bottom(inset * 1.7).
+			Radius(size * 0.06).Background(p.accent.Alpha(0.8))
+	})
+}
+
+// caption heads a group of facts: small, quiet, and set a little apart
+// from what it names. Groups are told apart by space and a hairline, not
+// by boxes.
+func caption(c *ui.Context, p *palette, title string) ui.Element {
+	return ui.Text(c, title).FontSize(11.5).FontWeight(600).TextColor(p.faint).SingleLine()
+}
+
+// hairline is the rule between two groups.
+func hairline(c *ui.Context, p *palette) ui.Element {
+	return ui.Box(c).FillWidth().Height(1).Shrink(0).Background(p.border)
+}
+
+// words is a row of choices set as words, the chosen one in ink over a
+// short vermilion stroke that slides in under it. It stands where tabs and
+// segmented controls would: the window has one way to choose among views.
+func (a *app) words(c *ui.Context, key string, sel *int, labels ...string) ui.Element {
+	p := a.pal
+	return ui.Row(c.Key(key)).Gap(20).Height(30).AlignItems(ui.Stretch).Shrink(0).Children(func() {
+		for i, label := range labels {
+			on := *sel == i
+			b := ui.ButtonBase(c.Key(fmt.Sprint(key, ":", i))).AlignItems(ui.Center).Label(label)
+			col := p.muted
+			if on || b.Hovered() {
+				col = p.text
+			}
+			under := float32(0)
+			if on {
+				under = 1
+			}
+			under = b.Animate("under", under, 160*time.Millisecond)
+			b.Children(func() {
+				ui.Text(c, label).FontSize(12.5).FontWeight(550).TextColor(col).SingleLine()
+				ui.Box(c).Absolute().Left(0).Right(0).Bottom(2).Height(2).Radius(1).
+					Background(p.accent.Alpha(under))
+			})
+			if b.Clicked() {
+				*sel = i
+			}
+		}
 	})
 }
 
@@ -59,18 +125,6 @@ func methodText(c *ui.Context, p *palette, method string) ui.Element {
 		TextColor(col).SingleLine().Shrink(0)
 }
 
-// card is a surface of the page: a rounded face under a hairline, which
-// groups what belongs together.
-func card(c *ui.Context, p *palette, fn func()) {
-	ui.Column(c).FillWidth().Padding(12, 14).Gap(2).Radius(8).
-		Background(p.surface).Border(1, p.border).Children(fn)
-}
-
-// cardTitle is what a card is of: a small quiet label, in sentence case.
-func cardTitle(c *ui.Context, p *palette, title string) {
-	ui.Text(c, title).FontSize(12).FontWeight(600).TextColor(p.muted).SingleLine().Padding(0, 0, 4)
-}
-
 // emptyState is what a page shows while it has nothing: a tinted mark, a
 // title, a line of help and, optionally, the command that starts things
 // off in a small code chip.
@@ -94,13 +148,13 @@ func emptyStateWith(c *ui.Context, p *palette, icon *ui.SVG, title, help, cmd st
 	})
 }
 
-// stat is one headline number of the daemon's overview: a small label over
-// a larger value, which rolls as it changes. The tiles share one card.
+// stat is one headline number of the daemon's overview: a large value over
+// a small label, on the page itself. The value rolls as it changes.
 func stat(c *ui.Context, p *palette, key, label, value string) {
-	ui.Column(c.Key("stat:"+key)).Grow(1).Basis(0).MinWidth(0).Padding(12, 16).Gap(4).Children(func() {
-		ui.Text(c, label).FontSize(12).TextColor(p.muted).SingleLine()
-		ui.Text(c, value).FontSize(18).FontWeight(600).TextColor(p.text).SingleLine().
+	ui.Column(c.Key("stat:" + key)).Grow(1).Basis(0).MinWidth(0).Gap(3).Children(func() {
+		ui.Text(c, value).FontSize(22).FontWeight(650).LetterSpacing(-0.3).TextColor(p.text).SingleLine().
 			ContentTransition(ui.ContentTransition{Numeric: true})
+		ui.Text(c, label).FontSize(12).TextColor(p.muted).SingleLine()
 	})
 }
 

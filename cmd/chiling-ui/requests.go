@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/editor"
 	"golang.org/x/net/html"
@@ -85,15 +84,19 @@ func (a *app) requestsPage(c *ui.Context, p *palette) {
 				if len(rows) == 0 {
 					a.requestsEmpty(c, p)
 				} else {
+					// The columns read as a line of the trace does: when,
+					// what, where, then how long and what came back.
 					cols := []ui.TableColumn{
-						{Title: "Status", ID: "status", Width: 74, Sortable: true},
-						{Title: "Method", ID: "method", Width: 100, Sortable: true},
-						{Title: "Host", ID: "host", Width: 200, Sortable: true},
+						{Title: "Time", ID: "at", Width: 92},
+						{Title: "Method", ID: "method", Width: 84, Sortable: true},
+						{Title: "Host", ID: "host", Width: 190, Sortable: true},
 						{Title: "Path", ID: "path"},
-						{Title: "Latency", ID: "time", Width: 150, Align: ui.End, Sortable: true},
+						{Title: "Latency", ID: "time", Width: 140, Align: ui.End, Sortable: true},
+						{Title: "Status", ID: "status", Width: 72, Align: ui.End, Sortable: true},
 					}
+					sealed := sealedRequests(st.traj)
 					ui.Table(c, &a.reqState, cols, len(rows), func(row, col int) {
-						a.requestCell(c, p, rows[row], col, row == a.reqSel)
+						a.requestCell(c, p, rows[row], col, sealed[string(rows[row].ID)])
 					}).Grow(1).MinHeight(0).ContextMenu(func(m *ui.Menu) {
 						if id := a.chosenRequestID(rows); id != "" && m.Item("Replay "+id).Chosen() {
 							a.actReplay(id)
@@ -216,22 +219,32 @@ func (a *app) sortRequests(in []api.RequestSummary) []uiRequestRow {
 	return rows
 }
 
+// sealedRequests is the requests a rule touched, as the trace has them.
+func sealedRequests(traj []api.Activity) map[string]bool {
+	out := map[string]bool{}
+	for _, it := range traj {
+		if it.Kind == "rule_applied" && it.RequestID != "" {
+			out[it.RequestID] = true
+		}
+	}
+	return out
+}
+
 // requestCell draws one cell of the requests table.
-func (a *app) requestCell(c *ui.Context, p *palette, r uiRequestRow, col int, chosen bool) {
+func (a *app) requestCell(c *ui.Context, p *palette, r uiRequestRow, col int, sealed bool) {
 	switch col {
 	case 0:
-		if r.Status == 0 {
-			ui.Spinner(c).Size(10, 10)
-			return
-		}
-		statusText(c, p, r.Status)
+		ui.Text(c, clockOf(r.StartedAt)).FontSize(11).Font(mono()).TextColor(p.faint).SingleLine()
 	case 1:
 		methodText(c, p, r.Method)
 	case 2:
-		ui.Text(c, hostOf(r.URL)).FontSize(12.5).TextColor(p.text).SingleLine()
+		ui.Text(c, hostOf(r.URL)).FontSize(12).Font(mono()).TextColor(p.muted).SingleLine()
 	case 3:
-		ui.Row(c).Grow(1).Gap(6).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, pathOf(r.URL)).FontSize(12).Font(mono()).TextColor(p.text).SingleLine().Shrink(1).MinWidth(20)
+		ui.Row(c).Grow(1).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, pathOf(r.URL)).FontSize(12).Font(mono()).FontWeight(500).TextColor(p.text).SingleLine().Shrink(1).MinWidth(20)
+			if sealed {
+				seal(c, p, 13, true)
+			}
 			for i, name := range r.Tags {
 				if i > 2 {
 					break
@@ -248,33 +261,93 @@ func (a *app) requestCell(c *ui.Context, p *palette, r uiRequestRow, col int, ch
 			ui.Text(c, latencyLabel(r)).FontSize(11.5).Font(mono()).
 				TextColor(p.muted).Width(48).TextAlign(ui.End).SingleLine()
 		})
+	case 5:
+		if r.Status == 0 {
+			ui.Spinner(c).Size(10, 10)
+			return
+		}
+		statusText(c, p, r.Status)
 	}
+}
+
+// clockOf is an exchange's start as the clock said it, "" when the daemon
+// gave none that reads.
+func clockOf(startedAt string) string {
+	t, err := time.Parse(time.RFC3339Nano, startedAt)
+	if err != nil {
+		return ""
+	}
+	return t.Local().Format("15:04:05")
 }
 
 // ---------------------------------------------------------------------------
 // request detail
 
-// requestDetail is the exchange the table chose: what it sent, what came
-// back, and which rules touched it.
+// detailTabs are the views of an exchange.
+var detailTabs = []string{"Headers", "Body", "Rules"}
+
+// bodyRaw shows the bodies as captured rather than formatted: one switch
+// for both sides.
+var bodyRaw bool
+
+// requestDetail is the exchange the table chose. Its heading is the
+// request line itself, set large, with what came back at its right; under
+// it, what was sent and what came back stand side by side, as the two
+// halves of one exchange.
 func (a *app) requestDetail(c *ui.Context, p *palette, st store, rows []uiRequestRow) {
 	id := a.chosenRequestID(rows)
 	if id == "" {
 		if len(rows) == 0 {
 			return
 		}
-		emptyState(c, p, iconReplay, "Select a request",
-			"Choose a row to see what it sent, what came back, and which rules touched it.", "")
+		emptyState(c, p, iconList, "Select a request",
+			"Choose a line to read what it sent, what came back, and which rules sealed it.", "")
 		return
 	}
+	var row uiRequestRow
+	for _, r := range rows {
+		if string(r.ID) == id {
+			row = r
+		}
+	}
 	d, errText := st.detail, st.detailErr
-	// The header and the tabs float on glass over the content, which
-	// scrolls under them and fades into the scroll edge.
-	ui.Box(c).Grow(1).MinHeight(0).BorderWidth(1, 0, 0, 0).BorderColor(p.border).Children(func() {
-		ui.Scroll(c).Fill().Padding(80, 14, 16).ScrollbarInsets(80, 0, 0).Children(func() {
+	ui.Column(c).Grow(1).MinHeight(0).BorderWidth(1, 0, 0, 0).BorderColor(p.border).Children(func() {
+		ui.Row(c).FillWidth().Shrink(0).Padding(14, 16, 4, 24).Gap(16).AlignItems(ui.Center).Children(func() {
+			ui.Column(c).Gap(3).Shrink(1).MinWidth(0).Children(func() {
+				ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, methodLabel(row.Method)).FontSize(14).FontWeight(650).Font(mono()).TextColor(p.text).SingleLine().Shrink(0)
+					ui.Text(c, pathOf(row.URL)).FontSize(14).FontWeight(500).Font(mono()).TextColor(p.text).SingleLine().Shrink(1).MinWidth(40)
+				})
+				ui.Text(c, hostOf(row.URL)+"  ·  "+id).FontSize(11.5).Font(mono()).TextColor(p.faint).SingleLine()
+			})
+			ui.Spacer(c)
+			if row.Status != 0 {
+				ui.Text(c, latencyLabel(row)).FontSize(12).Font(mono()).TextColor(p.muted).SingleLine().Shrink(0)
+				// The status animates as it changes, as when the
+				// exchange completes or a replay lands.
+				ui.Text(c, fmt.Sprint(row.Status)).FontSize(20).FontWeight(650).Font(mono()).
+					TextColor(statusTone(p, row.Status)).SingleLine().Shrink(0).
+					ContentTransition(ui.ContentTransition{Numeric: true})
+			}
+			a.replayButton(c, p, id)
+		})
+		ui.Row(c).FillWidth().Shrink(0).Padding(0, 16, 0, 24).AlignItems(ui.Center).Children(func() {
+			a.words(c, "detail-tabs", &a.detailTab, detailTabs...)
+			ui.Spacer(c)
+			if a.detailTab == 1 {
+				label := "Formatted"
+				if bodyRaw {
+					label = "Raw"
+				}
+				a.ghostButton(c, "body-raw", label, iconSwitch).Clicked(func() { bodyRaw = !bodyRaw })
+			}
+		})
+		hairline(c, p)
+		ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
 			// Keyed by the request and the tab, so the content fades in
 			// again as either changes.
 			tabFade(ui.Column(c.Key(fmt.Sprintf("detail:content:%s:%d", id, a.detailTab))).
-				FillWidth().Padding(0, 0, 8).Gap(12)).Children(func() {
+				FillWidth().Padding(16, 24, 24)).Children(func() {
 				switch {
 				case errText != "":
 					ui.Text(c, errText).FontSize(12).TextColor(p.removed)
@@ -285,29 +358,22 @@ func (a *app) requestDetail(c *ui.Context, p *palette, st store, rows []uiReques
 				}
 			})
 		})
-		ui.Box(c).Absolute().Top(0).Left(0).Right(0).Height(80).PassThrough().
-			Material(glass.ScrollEdge{})
-		ui.Row(c).Absolute().Top(8).Left(12).Right(12).Height(34).Padding(0, 6, 0, 12).
-			Gap(10).AlignItems(ui.Center).Radius(10).Material(glass.Glass{}).Children(func() {
-			// The status animates as it changes, as when the exchange
-			// completes or a replay lands.
-			if d != nil && d.Request.Status != 0 {
-				statusText(c, p, d.Request.Status).ContentTransition(ui.ContentTransition{})
-			}
-			if d != nil && d.Request.Method != "" {
-				methodText(c, p, d.Request.Method)
-			}
-			if head := detailHead(d); head != "" {
-				ui.Text(c, head).FontSize(12).Font(mono()).TextColor(p.text).SingleLine().Shrink(1).MinWidth(40)
-			}
-			ui.Text(c, id).FontSize(11).Font(mono()).TextColor(p.faint).SingleLine()
-			ui.Spacer(c)
-			a.replayButton(c, p, id)
+	})
+}
+
+// sides lays the two halves of an exchange side by side under their
+// names, a hairline between them.
+func sides(c *ui.Context, p *palette, request, response func()) {
+	side := func(title string, body func()) {
+		ui.Column(c).Grow(1).Basis(0).MinWidth(0).Gap(8).Children(func() {
+			caption(c, p, title)
+			body()
 		})
-		ui.Row(c).Absolute().Top(46).Left(16).Right(16).Height(30).
-			AlignItems(ui.Center).Gap(8).PassThrough().Children(func() {
-			ui.Tabs(c, &a.detailTab, "Headers", "Bodies", "Rule trace")
-		})
+	}
+	ui.Row(c).FillWidth().AlignItems(ui.Stretch).Children(func() {
+		side("Request", request)
+		ui.Box(c).Width(1).Shrink(0).Margin(0, 24).Background(p.border)
+		side("Response", response)
 	})
 }
 
@@ -370,74 +436,67 @@ func (a *app) replayBusy(c *ui.Context, id string) bool {
 	return true
 }
 
-// detailSkeleton is what the detail shows while its exchange loads: two
-// cards of quiet bars where the sections will be.
+// detailSkeleton is what the detail shows while its exchange loads: quiet
+// bars where the two sides will be.
 func (a *app) detailSkeleton(c *ui.Context, p *palette) {
-	// bar draws one; w of 0 or less takes the card's width.
-	bar := func(w float32) {
-		b := ui.Box(c).Height(10).Radius(5).Background(p.text.Alpha(0.05))
-		if w <= 0 {
-			b.FillWidth()
-		} else {
-			b.Width(w)
+	bars := func() {
+		for _, w := range []float32{220, 160, 250, 120} {
+			ui.Box(c).Width(w).Height(9).Radius(4.5).Margin(4, 0).Background(p.text.Alpha(0.05))
 		}
 	}
-	section := func(title float32, lines ...float32) {
-		card(c, p, func() {
-			ui.Column(c).FillWidth().Gap(8).Children(func() {
-				bar(title)
-				for _, w := range lines {
-					bar(w)
-				}
-			})
-		})
-	}
-	section(88, 0, 176)
-	section(64, 0, 120)
+	sides(c, p, bars, bars)
 }
 
 // detailBody is what the detail's tabs show of one exchange.
 func (a *app) detailBody(c *ui.Context, p *palette, d *api.RequestDetailResponse) {
 	switch a.detailTab {
 	case 1:
-		a.bodySection(c, p, "request", "Request body", d.Body, d.Request.RequestHeaders, d.Request.RequestHeaderList)
-		a.bodySection(c, p, "response", "Response body", d.ResponseBody, d.Request.ResponseHeaders, d.Request.ResponseHeaderList)
+		sides(c, p,
+			func() {
+				a.bodyPane(c, p, "request", "Request body", d.Body, d.Request.RequestHeaders, d.Request.RequestHeaderList)
+			},
+			func() {
+				a.bodyPane(c, p, "response", "Response body", d.ResponseBody, d.Request.ResponseHeaders, d.Request.ResponseHeaderList)
+			})
 	case 2:
 		a.ruleTraceSection(c, p, d.Request.RuleTrace)
 	default:
-		a.headersSection(c, p, "Request headers", d.Request.RequestHeaderList, d.Request.RequestHeaders)
-		a.headersSection(c, p, "Response headers", d.Request.ResponseHeaderList, d.Request.ResponseHeaders)
+		sides(c, p,
+			func() { a.headerRows(c, p, d.Request.RequestHeaderList, d.Request.RequestHeaders) },
+			func() { a.headerRows(c, p, d.Request.ResponseHeaderList, d.Request.ResponseHeaders) })
 	}
 }
 
-// headersSection is one group of headers, list first, map as the fallback.
-func (a *app) headersSection(c *ui.Context, p *palette, title string, list []api.HeaderField, m api.Headers) {
-	card(c, p, func() {
-		cardTitle(c, p, title)
-		if len(list) == 0 && len(m) == 0 {
-			ui.Text(c, "None").FontSize(12).TextColor(p.faint)
-			return
+// headerRows is one side's headers, list first, map as the fallback. The
+// names keep one column, so the values line up to be read down; the name
+// recedes and the value is what is read.
+func (a *app) headerRows(c *ui.Context, p *palette, list []api.HeaderField, m api.Headers) {
+	if len(list) == 0 && len(m) == 0 {
+		ui.Text(c, "None").FontSize(12).TextColor(p.faint)
+		return
+	}
+	ui.Column(c).FillWidth().Children(func() {
+		draw := func(name, value string) {
+			ui.Row(c).FillWidth().Gap(12).AlignItems(ui.Start).Padding(3, 0).Children(func() {
+				ui.Text(c, name).FontSize(12).Font(mono()).TextColor(p.muted).SingleLine().Width(150).Shrink(0)
+				ui.Text(c, value).FontSize(12).Font(mono()).TextColor(p.text).Shrink(1).MinWidth(40)
+			})
 		}
-		ui.Column(c).FillWidth().Gap(1).Children(func() {
-			draw := func(name, value string) {
-				// The names keep one column, so the values line up to be
-				// read down; the name recedes, the value is what is read.
-				ui.Row(c).FillWidth().Gap(12).AlignItems(ui.Start).Padding(2.5, 0).Children(func() {
-					ui.Text(c, name).FontSize(12).Font(mono()).TextColor(p.muted).SingleLine().Width(190).Shrink(0)
-					ui.Text(c, value).FontSize(12).Font(mono()).TextColor(p.text).Shrink(1).MinWidth(40)
-				})
+		for _, h := range list {
+			for _, v := range h.Values {
+				draw(h.Name, v)
 			}
-			for _, h := range list {
-				for _, v := range h.Values {
-					draw(h.Name, v)
-				}
+		}
+		if len(list) == 0 {
+			names := make([]string, 0, len(m))
+			for name := range m {
+				names = append(names, name)
 			}
-			if len(list) == 0 {
-				for name, value := range m {
-					draw(name, value)
-				}
+			sort.Strings(names)
+			for _, name := range names {
+				draw(name, m[name])
 			}
-		})
+		}
 	})
 }
 
@@ -448,55 +507,54 @@ type bodyView struct {
 	contentType string
 	formatted   string
 	filename    string
-	mode        int
 	state       *editor.State
 }
 
 var bodyViews = map[string]*bodyView{}
 
-func (a *app) bodySection(c *ui.Context, p *palette, key, title string, body *string, headers api.Headers, list []api.HeaderField) {
-	card(c, p, func() {
-		v := bodyViews[key]
-		if v == nil {
-			v = &bodyView{}
-			bodyViews[key] = v
+// bodyPane is one side's body in a read-only editor, formatted unless the
+// raw switch is on. Its buffer is kept across frames.
+func (a *app) bodyPane(c *ui.Context, p *palette, key, title string, body *string, headers api.Headers, list []api.HeaderField) {
+	if body == nil || *body == "" {
+		ui.Text(c, "No body").FontSize(12).TextColor(p.faint)
+		return
+	}
+	v := bodyViews[key]
+	if v == nil {
+		v = &bodyView{}
+		bodyViews[key] = v
+	}
+	source := *body
+	contentType := ""
+	for k, value := range headers {
+		if strings.EqualFold(k, "content-type") {
+			contentType = value
+			break
 		}
-		source := bodyOrNone(body)
-		contentType := ""
-		for k, value := range headers {
-			if strings.EqualFold(k, "content-type") {
-				contentType = value
-				break
-			}
+	}
+	for _, h := range list {
+		if strings.EqualFold(h.Name, "content-type") && len(h.Values) > 0 {
+			contentType = h.Values[0]
+			break
 		}
-		for _, h := range list {
-			if strings.EqualFold(h.Name, "content-type") && len(h.Values) > 0 {
-				contentType = h.Values[0]
-				break
-			}
-		}
-		if v.state == nil || v.input != source || v.contentType != contentType {
-			v.formatted, v.filename = readableBody(source, contentType)
-			v.input, v.contentType = source, contentType
-		}
-		display, filename := v.formatted, v.filename
-		ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(8).Children(func() {
-			cardTitle(c, p, title)
-			ui.Spacer(c)
-			ui.Segmented(c, &v.mode, "Readable", "Raw")
-		})
-		if v.mode == 1 {
-			display = source
-		}
-		cacheKey := fmt.Sprintf("%d:%s:%s", v.mode, filename, display)
-		if v.state == nil || v.source != cacheKey {
-			buf := editor.NewBuffer(display)
-			buf.SetLanguage(editor.LanguageFor(filename))
-			v.state = &editor.State{Buffer: buf, ReadOnly: true, SoftWrap: true, NoScrollPastEnd: true, Label: title}
-			v.source = cacheKey
-		}
-		editor.View(c.Key("body:"+key), v.state).FillWidth().Height(200).MinWidth(0).Margin(8, 0, 0)
-	})
+	}
+	if v.state == nil || v.input != source || v.contentType != contentType {
+		v.formatted, v.filename = readableBody(source, contentType)
+		v.input, v.contentType = source, contentType
+	}
+	display, filename := v.formatted, v.filename
+	if bodyRaw {
+		display = source
+	}
+	cacheKey := fmt.Sprintf("%t:%s:%s", bodyRaw, filename, display)
+	if v.state == nil || v.source != cacheKey {
+		buf := editor.NewBuffer(display)
+		buf.SetLanguage(editor.LanguageFor(filename))
+		v.state = &editor.State{Buffer: buf, ReadOnly: true, SoftWrap: true, NoScrollPastEnd: true, Label: title}
+		v.source = cacheKey
+	}
+	editor.View(c.Key("body:"+key), v.state).FillWidth().Height(240).MinWidth(0).
+		Radius(6).Border(1, p.border)
 }
 
 // readableBody formats JSON and HTML without loading or executing content.
@@ -534,98 +592,92 @@ func readableBody(source, contentType string) (string, string) {
 }
 
 // ruleTraceSection is which rules ran on the exchange and what they did:
-// one card per rule, its stages below as a pipeline down a rail.
+// each rule under its seal — solid if it matched, in outline if it was
+// only asked — with its stages below as a pipeline down a rail.
 func (a *app) ruleTraceSection(c *ui.Context, p *palette, traces []api.RuleTrace) {
 	if len(traces) == 0 {
-		emptyState(c, p, iconSliders, "No rule ran", "No rule matched this exchange, so it passed through untouched.", "")
+		ui.Text(c, "No rule ran on this exchange. It passed through untouched.").FontSize(12.5).TextColor(p.muted)
 		return
 	}
-	for _, tr := range traces {
-		card(c, p, func() {
-			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, string(tr.RuleID)).FontSize(12.5).FontWeight(600).TextColor(p.text).SingleLine()
-				if tr.Phase != "" {
-					tag(c, p, tr.Phase)
-				}
-				ui.Spacer(c)
-				if tr.DurationMs > 0 {
-					ui.Text(c, durationLabel(tr.DurationMs)).FontSize(11).Font(mono()).TextColor(p.faint).SingleLine()
-				}
-				if tr.Matched {
-					stateDot(c, p, p.added, "Matched")
-				} else {
-					stateDot(c, p, p.faint.Alpha(0.6), "No match")
-				}
-			})
-			if tr.Error != "" {
-				ui.Text(c, tr.Error).FontSize(12).Font(mono()).TextColor(p.removed).FillWidth().Margin(6, 0, 0)
+	rules := a.snapshotState().rules
+	for i, tr := range traces {
+		if i > 0 {
+			hairline(c, p).Margin(12, 0)
+		}
+		ui.Row(c.Key(fmt.Sprintf("rt:%s:%s", tr.RuleID, tr.Phase))).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
+			seal(c, p, 16, tr.Matched)
+			col := p.text
+			if !tr.Matched {
+				col = p.muted
 			}
-			steps := 0
-			for _, stg := range tr.Stages {
-				if stg.ID != "" || stg.Uses != "" {
-					steps++
-				}
+			ui.Text(c, ruleNameOf(rules, string(tr.RuleID))).FontSize(13).FontWeight(600).TextColor(col).SingleLine()
+			if tr.Phase != "" {
+				ui.Text(c, "on the "+tr.Phase).FontSize(12).TextColor(p.faint).SingleLine()
 			}
-			if steps == 0 && len(tr.Actions) == 0 {
-				return
+			ui.Spacer(c)
+			if tr.DurationMs > 0 {
+				ui.Text(c, durationLabel(tr.DurationMs)).FontSize(11).Font(mono()).TextColor(p.faint).SingleLine()
 			}
-			ui.Box(c).FillWidth().Height(1).Background(p.border).Margin(10, 0, 6)
-			// The pipeline: a rail down the left, a dot per stage in the
-			// color of how it went, then what the rule did at the end.
-			node := func(key string, col ui.Color, body func()) {
-				ui.Row(c.Key(key)).FillWidth().Gap(10).AlignItems(ui.Stretch).Children(func() {
-					ui.Box(c).Width(12).Shrink(0).Children(func() {
-						ui.Box(c).Absolute().Left(5.5).Top(0).Bottom(0).Width(1).Background(p.border)
-						ui.Box(c).Absolute().Left(0.5).Top(6).Size(11, 11).Radius(5.5).
-							Background(col).Border(2.5, p.surface)
-					})
-					ui.Column(c).Grow(1).MinWidth(0).Gap(2).Padding(4, 0, 6).Children(body)
-				})
-			}
-			for i, stg := range tr.Stages {
-				if stg.ID == "" && stg.Uses == "" {
-					continue
-				}
-				col := p.added
-				switch {
-				case stg.Error != "":
-					col = p.removed
-				case stg.Skipped:
-					col = p.faint.Alpha(0.6)
-				}
-				node(fmt.Sprintf("stage:%s:%d", tr.RuleID, i), col, func() {
-					ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-						name := stg.ID
-						if name == "" {
-							name = stg.Uses
-						}
-						ui.Text(c, name).FontSize(12.5).FontWeight(600).TextColor(p.text).SingleLine().Shrink(1).MinWidth(20)
-						if stg.Uses != "" && stg.ID != "" {
-							ui.Text(c, stg.Uses).FontSize(11.5).Font(mono()).TextColor(p.faint).SingleLine()
-						}
-						if stg.Skipped {
-							tag(c, p, "skipped")
-						}
-					})
-					switch {
-					case stg.Error != "":
-						ui.Text(c, stg.Error).FontSize(12).Font(mono()).TextColor(p.removed).FillWidth()
-					case stg.Skipped && stg.SkipReason != "":
-						ui.Text(c, skipLabel(stg.SkipReason)).FontSize(12).TextColor(p.faint).FillWidth()
-					case stg.Effect != "":
-						ui.Text(c, stg.Effect).FontSize(12).TextColor(p.muted).FillWidth()
-					}
-				})
-			}
-			for i, act := range tr.Actions {
-				node(fmt.Sprintf("act:%s:%d", tr.RuleID, i), p.accent, func() {
-					ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-						ui.Text(c, string(act.Type)).FontSize(12).FontWeight(600).Font(mono()).TextColor(p.text).SingleLine().Shrink(0)
-						ui.Text(c, actionParams(act)).FontSize(11.5).Font(mono()).TextColor(p.muted).SingleLine().Shrink(1).MinWidth(20)
-					})
-				})
+			if !tr.Matched {
+				ui.Text(c, "did not match").FontSize(12).TextColor(p.faint).SingleLine()
 			}
 		})
+		if tr.Error != "" {
+			ui.Text(c, tr.Error).FontSize(12).Font(mono()).TextColor(p.removed).FillWidth().Margin(6, 0, 0, 26)
+		}
+		// The pipeline: a rail down from the seal, a mark per stage in the
+		// color of how it went, then what the rule did at the end.
+		node := func(key string, col ui.Color, body func()) {
+			ui.Row(c.Key(key)).FillWidth().Gap(10).AlignItems(ui.Stretch).Children(func() {
+				ui.Box(c).Width(16).Shrink(0).Children(func() {
+					ui.Box(c).Absolute().Left(7.5).Top(0).Bottom(0).Width(1).Background(p.text.Alpha(0.14))
+					ui.Box(c).Absolute().Left(2).Top(6).Size(12, 12).Background(p.editor)
+					ui.Box(c).Absolute().Left(4.5).Top(8.5).Size(7, 7).Radius(3.5).Background(col)
+				})
+				ui.Column(c).Grow(1).MinWidth(0).Gap(2).Padding(4, 0, 6).Children(body)
+			})
+		}
+		for i, stg := range tr.Stages {
+			if stg.ID == "" && stg.Uses == "" {
+				continue
+			}
+			col := p.added
+			switch {
+			case stg.Error != "":
+				col = p.removed
+			case stg.Skipped:
+				col = p.faint.Alpha(0.6)
+			}
+			node(fmt.Sprintf("stage:%s:%s:%d", tr.RuleID, tr.Phase, i), col, func() {
+				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+					name := stg.ID
+					if name == "" {
+						name = stg.Uses
+					}
+					ui.Text(c, name).FontSize(12.5).Font(mono()).FontWeight(600).TextColor(p.text).SingleLine().Shrink(1).MinWidth(20)
+					if stg.Uses != "" && stg.ID != "" {
+						ui.Text(c, stg.Uses).FontSize(11.5).Font(mono()).TextColor(p.faint).SingleLine()
+					}
+					if stg.Skipped {
+						tag(c, p, "skipped")
+					}
+				})
+				switch {
+				case stg.Error != "":
+					ui.Text(c, stg.Error).FontSize(12).Font(mono()).TextColor(p.removed).FillWidth()
+				case stg.Skipped && stg.SkipReason != "":
+					ui.Text(c, skipLabel(stg.SkipReason)).FontSize(12).TextColor(p.faint).FillWidth()
+				}
+			})
+		}
+		for i, act := range tr.Actions {
+			node(fmt.Sprintf("act:%s:%s:%d", tr.RuleID, tr.Phase, i), p.accent, func() {
+				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, string(act.Type)).FontSize(12).FontWeight(600).Font(mono()).TextColor(p.text).SingleLine().Shrink(0)
+					ui.Text(c, actionParams(act)).FontSize(11.5).Font(mono()).TextColor(p.muted).SingleLine().Shrink(1).MinWidth(20)
+				})
+			})
+		}
 	}
 }
 
