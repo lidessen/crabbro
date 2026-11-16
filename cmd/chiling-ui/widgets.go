@@ -22,28 +22,16 @@ func emptyMark(c *ui.Context, p *palette, icon *ui.SVG) {
 	})
 }
 
-// seal is the mark of a rule: a small vermilion chop, as an edict is
-// stamped — Chiling is 敕令, the edict itself. A chop is known by its
-// frame, so the frame is all that is drawn, at every size: a square of the
-// accent with a fine inner border cut out of it. Solid, it is a rule in
-// force — on a request, one that touched it; in outline, a rule that is
-// written but not applied.
-func seal(c *ui.Context, p *palette, size float32, solid bool) {
-	b := ui.Row(c).Size(size, size).Center().Radius(size * 0.2).Shrink(0)
-	inset := size * 0.17
-	inner := ui.Box
-	if solid {
-		b.Background(p.accent)
-		b.Children(func() {
-			inner(c).Absolute().Left(inset).Top(inset).Right(inset).Bottom(inset).
-				Radius(size*0.08).Border(max(1.1, size*0.07), p.editor.Alpha(0.92))
-		})
-		return
+// ruleMark is the mark of a rule: a small bolt in the accent. Filled, it
+// is a rule that is enabled — on a request, one that applied to it; in
+// outline and faint, a rule that is written but did not apply.
+func ruleMark(c *ui.Context, p *palette, size float32, on bool) {
+	icon, col := iconRule, p.faint
+	if on {
+		icon, col = iconRuleOn, p.accent
 	}
-	b.Border(max(1.25, size*0.07), p.accent.Alpha(0.8))
-	b.Children(func() {
-		inner(c).Absolute().Left(inset * 1.7).Top(inset * 1.7).Right(inset * 1.7).Bottom(inset * 1.7).
-			Radius(size * 0.06).Background(p.accent.Alpha(0.8))
+	ui.Row(c).Size(size, size).Center().Shrink(0).Children(func() {
+		ui.Icon(c, icon).FontSize(size).TextColor(col)
 	})
 }
 
@@ -59,8 +47,8 @@ func hairline(c *ui.Context, p *palette) ui.Element {
 	return ui.Box(c).FillWidth().Height(1).Shrink(0).Background(p.border)
 }
 
-// words is a row of choices set as words, the chosen one in ink over a
-// short vermilion stroke that slides in under it. It stands where tabs and
+// words is a row of choices set as words, the chosen one in the text's color over a
+// short accent stroke that slides in under it. It stands where tabs and
 // segmented controls would: the window has one way to choose among views.
 func (a *app) words(c *ui.Context, key string, sel *int, labels ...string) ui.Element {
 	p := a.pal

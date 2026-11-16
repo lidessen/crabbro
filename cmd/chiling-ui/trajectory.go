@@ -11,9 +11,9 @@ import (
 	"github.com/lidessen/chiling/pkg/api"
 )
 
-// The trace page: the session read as a register. Each line is one thing
+// The trace page: the session read as a timeline. Each line is one thing
 // that happened, entered at its time; a request a rule touched bears that
-// rule's seal.
+// rule's mark.
 
 // trajGroupGap is the pause between adjacent steps that opens a new group.
 const trajGroupGap = 2 * time.Minute
@@ -25,7 +25,7 @@ const trajFetch = 100
 // reads, 1 oldest first, as a story does.
 var trajOldest int
 
-// The measures of a line of the register.
+// The measures of a line of the timeline.
 const (
 	traceRowH  = 36
 	traceTimeW = 78
@@ -36,9 +36,9 @@ const (
 type traceView struct {
 	byID  map[string]uiRequestRow
 	maxMs int64
-	// seals are the rules that touched each request, by its id, as the
-	// names their seals are labelled with.
-	seals map[string][]string
+	// hits are the rules that touched each request, by its id, as the
+	// names their marks are labelled with.
+	hits map[string][]string
 }
 
 // trajectoryPage is the trace: under a heading that sums the session up,
@@ -46,7 +46,7 @@ type traceView struct {
 func (a *app) trajectoryPage(c *ui.Context, p *palette) {
 	st := a.snapshotState()
 	if len(st.traj) == 0 {
-		emptyStateWith(c, p, iconClock, "Nothing on the register yet",
+		emptyStateWith(c, p, iconClock, "No activity yet",
 			"Start a recording and send traffic through the proxy. Requests, the rules that touched them and each verification are entered here in order.",
 			"chiling record start", func() {
 				a.plainButton(c, "trace-record", "Start recording", iconRecord, true, &p.removed).
@@ -57,13 +57,13 @@ func (a *app) trajectoryPage(c *ui.Context, p *palette) {
 	fetched := len(st.traj)
 	all := foldTrace(st.traj)
 
-	v := traceView{byID: make(map[string]uiRequestRow, len(st.traceReqs)), maxMs: 1, seals: map[string][]string{}}
+	v := traceView{byID: make(map[string]uiRequestRow, len(st.traceReqs)), maxMs: 1, hits: map[string][]string{}}
 	for _, r := range st.traceReqs {
 		v.byID[string(r.ID)] = r
 		v.maxMs = max(v.maxMs, r.DurationMs)
 	}
 	// A rule that ran on a request is not a line of its own: it is the
-	// seal on that request's line. Only a rule hit with no request to sit
+	// mark on that request's line. Only a rule hit with no request to sit
 	// on keeps a line.
 	shown := map[string]bool{}
 	for _, it := range all {
@@ -75,8 +75,8 @@ func (a *app) trajectoryPage(c *ui.Context, p *palette) {
 	for _, it := range all {
 		if it.Kind == "rule_applied" && shown[it.RequestID] {
 			name := ruleNameOf(st.rules, it.RuleID)
-			if !contains(v.seals[it.RequestID], name) {
-				v.seals[it.RequestID] = append(v.seals[it.RequestID], name)
+			if !contains(v.hits[it.RequestID], name) {
+				v.hits[it.RequestID] = append(v.hits[it.RequestID], name)
 			}
 			continue
 		}
@@ -126,7 +126,7 @@ func contains(list []string, s string) bool {
 	return false
 }
 
-// ruleNameOf is what a rule's seal is labelled: its name, else its id.
+// ruleNameOf is what a rule's mark is labelled: its name, else its id.
 func ruleNameOf(rules []api.Rule, id string) string {
 	if r := ruleOf(rules, id); r != nil {
 		return ruleLabel(*r)
@@ -202,7 +202,7 @@ func (a *app) traceHeader(c *ui.Context, p *palette, st store, all []api.Activit
 				}
 				part(requests, "request", "requests", p.muted)
 				part(failed, "failed", "failed", p.removed)
-				part(hits, "sealed by a rule", "sealed by rules", p.accent)
+				part(hits, "hit a rule", "hit rules", p.accent)
 				part(verifies, "verified", "verified", p.muted)
 			})
 		})
@@ -219,9 +219,9 @@ func (a *app) traceHeader(c *ui.Context, p *palette, st store, all []api.Activit
 
 // traceStrip is the session at a glance: its steps across time, left to
 // right. A request is a stroke, taller the longer it took and in color
-// only if it failed; a rule's hit is a seal-red block over it; a pause in
+// only if it failed; a rule's hit is an accent block over it; a pause in
 // the work is the gap it left. Nothing in it is decoration: it is the same
-// register, read by its rhythm.
+// timeline, read by its rhythm.
 func (a *app) traceStrip(c *ui.Context, p *palette, all []api.Activity, v traceView) {
 	if len(all) < 2 {
 		return
@@ -274,7 +274,7 @@ func (a *app) traceGap(c *ui.Context, p *palette, id string, gap time.Duration) 
 	})
 }
 
-// traceLine is one line of the register: its time in the margin, its mark
+// traceLine is one line of the timeline: its time in the margin, its mark
 // on the rail, and what it was.
 func (a *app) traceLine(c *ui.Context, p *palette, it api.Activity, v traceView, first, last bool) {
 	req, hasReq := v.byID[it.RequestID]
@@ -324,7 +324,7 @@ func (a *app) traceLine(c *ui.Context, p *palette, it api.Activity, v traceView,
 }
 
 // traceMark is a line's mark on the rail. A request is a ring in the color
-// of how it came back; a rule is its seal; the rest are small ink marks.
+// of how it came back; a rule is its bolt; the rest are small dark marks.
 // Each sits on a patch of the ground, so the rail stops short of it.
 func (a *app) traceMark(c *ui.Context, p *palette, it api.Activity, req uiRequestRow, capture bool, mid float32) {
 	at := func(size float32) ui.Element {
@@ -339,9 +339,9 @@ func (a *app) traceMark(c *ui.Context, p *palette, it api.Activity, req uiReques
 		}
 		at(9).Radius(4.5).Border(1.75, tone)
 	case it.Kind == "rule_applied":
-		at(13).Children(func() { seal(c, p, 13, true) })
+		at(13).Children(func() { ruleMark(c, p, 13, true) })
 	case it.Kind == "rule_created":
-		at(13).Children(func() { seal(c, p, 13, false) })
+		at(13).Children(func() { ruleMark(c, p, 13, false) })
 	case it.Kind == "verify":
 		at(8).Radius(4).Background(p.added)
 	case it.Kind == "session_started", it.Kind == "session_stopped":
@@ -352,7 +352,7 @@ func (a *app) traceMark(c *ui.Context, p *palette, it api.Activity, req uiReques
 }
 
 // traceRequest is a request's line: the verb, the URL with its host held
-// back and its path in ink, the seals of the rules that touched it, and
+// back and its path in the text's color, the marks of the rules that touched it, and
 // how long it took and what came back.
 func (a *app) traceRequest(c *ui.Context, p *palette, req uiRequestRow, v traceView) {
 	methodText(c, p, req.Method).Width(50)
@@ -360,9 +360,9 @@ func (a *app) traceRequest(c *ui.Context, p *palette, req uiRequestRow, v traceV
 		ui.Text(c, hostOf(req.URL)).FontSize(12).Font(mono()).TextColor(p.faint).SingleLine().Shrink(2).MinWidth(0)
 		ui.Text(c, pathOf(req.URL)).FontSize(12).Font(mono()).FontWeight(500).TextColor(p.text).SingleLine().Shrink(1).MinWidth(30)
 	})
-	for _, name := range v.seals[string(req.ID)] {
+	for _, name := range v.hits[string(req.ID)] {
 		ui.Row(c).Gap(6).AlignItems(ui.Center).Shrink(0).Margin(0, 0, 0, 4).Children(func() {
-			seal(c, p, 14, true)
+			ruleMark(c, p, 14, true)
 			ui.Text(c, name).FontSize(12).TextColor(p.muted).SingleLine()
 		})
 	}
@@ -379,13 +379,13 @@ func (a *app) traceRequest(c *ui.Context, p *palette, req uiRequestRow, v traceV
 	})
 }
 
-// traceEvent is a line that is not a request: what it was, in ink, and the
+// traceEvent is a line that is not a request: what it was, in the text's color, and the
 // daemon's own words for it after.
 func (a *app) traceEvent(c *ui.Context, p *palette, it api.Activity) {
 	ui.Text(c, activityKind(it.Kind)).FontSize(12.5).FontWeight(600).TextColor(p.text).SingleLine().Shrink(0)
 	ui.Text(c, eventSummary(it)).FontSize(12.5).TextColor(p.muted).SingleLine().Shrink(1).MinWidth(20)
 	if it.Kind == "session_started" || it.Kind == "session_stopped" {
-		// A recording's start and stop rule the register off, as a
+		// A recording's start and stop rule the timeline off, as a
 		// chapter does.
 		ui.Box(c).Grow(1).Height(1).Background(p.border)
 		return

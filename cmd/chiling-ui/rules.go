@@ -11,7 +11,7 @@ import (
 	"github.com/lidessen/chiling/pkg/api"
 )
 
-// The rules page: the rules as a column of edicts, each under its seal,
+// The rules page: the rules as a column, each under its mark,
 // and beside it the one chosen — an overview to read it by and the YAML
 // code to edit it in.
 
@@ -69,8 +69,8 @@ func (a *app) rulesPage(c *ui.Context, p *palette) {
 	).Grow(1)
 }
 
-// ruleList is the rules as a column of edicts: each under its seal, solid
-// while it is in force and in outline while it is only written, with what
+// ruleList is the rules as a column: each under its mark, filled
+// while it is enabled and in outline while it is disabled, with what
 // it matches and what it does in a line below its name.
 func (a *app) ruleList(c *ui.Context, p *palette, st store) {
 	inForce := 0
@@ -82,7 +82,7 @@ func (a *app) ruleList(c *ui.Context, p *palette, st store) {
 	ui.Column(c).Fill().MinHeight(0).Children(func() {
 		ui.Column(c).FillWidth().Shrink(0).Padding(22, 20, 14, 28).Gap(5).Children(func() {
 			ui.Text(c, "Rules").FontSize(20).FontWeight(650).LetterSpacing(-0.2).TextColor(p.text).SingleLine()
-			sub := fmt.Sprintf("%d in force", inForce)
+			sub := fmt.Sprintf("%d enabled", inForce)
 			if off := len(st.rules) - inForce; off > 0 {
 				sub += fmt.Sprintf("  ·  %d set aside", off)
 			}
@@ -114,7 +114,7 @@ func (a *app) ruleRow(c *ui.Context, p *palette, r api.Rule, i int) {
 	}
 	b.Transition(hoverFade)
 	b.Children(func() {
-		seal(c, p, 24, r.Enabled)
+		ruleMark(c, p, 18, r.Enabled)
 		ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				col := p.text
@@ -333,7 +333,7 @@ func (a *app) ruleOverview(c *ui.Context, p *palette, st store, r *api.Rule) {
 				}
 				if r != nil {
 					a.fact(c, p, "Priority", fmt.Sprint(r.Priority))
-					a.factYesNo(c, p, "In force", r.Enabled)
+					a.factYesNo(c, p, "Enabled", r.Enabled)
 				}
 				mode := doc.FailureMode
 				if r != nil && r.FailureMode != "" {
