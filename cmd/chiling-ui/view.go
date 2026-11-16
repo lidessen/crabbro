@@ -84,7 +84,7 @@ func (a *app) titleBar(c *ui.Context, p *palette) {
 }
 
 // navWord is one page of the title bar: its name, the count of what it
-// holds set small beside it, and under the chosen one a vermilion stroke
+// holds set small beside it, and under the chosen one an accent stroke
 // that rests on the bar's own hairline.
 func (a *app) navWord(c *ui.Context, p *palette, key, label string, count int) {
 	on := a.page == key

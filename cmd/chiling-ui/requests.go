@@ -94,9 +94,9 @@ func (a *app) requestsPage(c *ui.Context, p *palette) {
 						{Title: "Latency", ID: "time", Width: 140, Align: ui.End, Sortable: true},
 						{Title: "Status", ID: "status", Width: 72, Align: ui.End, Sortable: true},
 					}
-					sealed := sealedRequests(st.traj)
+					ruled := ruledRequests(st.traj)
 					ui.Table(c, &a.reqState, cols, len(rows), func(row, col int) {
-						a.requestCell(c, p, rows[row], col, sealed[string(rows[row].ID)])
+						a.requestCell(c, p, rows[row], col, ruled[string(rows[row].ID)])
 					}).Grow(1).MinHeight(0).ContextMenu(func(m *ui.Menu) {
 						if id := a.chosenRequestID(rows); id != "" && m.Item("Replay "+id).Chosen() {
 							a.actReplay(id)
@@ -219,8 +219,8 @@ func (a *app) sortRequests(in []api.RequestSummary) []uiRequestRow {
 	return rows
 }
 
-// sealedRequests is the requests a rule touched, as the trace has them.
-func sealedRequests(traj []api.Activity) map[string]bool {
+// ruledRequests is the requests a rule touched, as the trace has them.
+func ruledRequests(traj []api.Activity) map[string]bool {
 	out := map[string]bool{}
 	for _, it := range traj {
 		if it.Kind == "rule_applied" && it.RequestID != "" {
@@ -231,7 +231,7 @@ func sealedRequests(traj []api.Activity) map[string]bool {
 }
 
 // requestCell draws one cell of the requests table.
-func (a *app) requestCell(c *ui.Context, p *palette, r uiRequestRow, col int, sealed bool) {
+func (a *app) requestCell(c *ui.Context, p *palette, r uiRequestRow, col int, ruled bool) {
 	switch col {
 	case 0:
 		ui.Text(c, clockOf(r.StartedAt)).FontSize(11).Font(mono()).TextColor(p.faint).SingleLine()
@@ -242,8 +242,8 @@ func (a *app) requestCell(c *ui.Context, p *palette, r uiRequestRow, col int, se
 	case 3:
 		ui.Row(c).Grow(1).Gap(8).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, pathOf(r.URL)).FontSize(12).Font(mono()).FontWeight(500).TextColor(p.text).SingleLine().Shrink(1).MinWidth(20)
-			if sealed {
-				seal(c, p, 13, true)
+			if ruled {
+				ruleMark(c, p, 13, true)
 			}
 			for i, name := range r.Tags {
 				if i > 2 {
@@ -301,7 +301,7 @@ func (a *app) requestDetail(c *ui.Context, p *palette, st store, rows []uiReques
 			return
 		}
 		emptyState(c, p, iconList, "Select a request",
-			"Choose a line to read what it sent, what came back, and which rules sealed it.", "")
+			"Choose a line to read what it sent, what came back, and which rules applied to it.", "")
 		return
 	}
 	var row uiRequestRow
@@ -592,7 +592,7 @@ func readableBody(source, contentType string) (string, string) {
 }
 
 // ruleTraceSection is which rules ran on the exchange and what they did:
-// each rule under its seal — solid if it matched, in outline if it was
+// each rule under its mark — filled if it matched, in outline if it was
 // only asked — with its stages below as a pipeline down a rail.
 func (a *app) ruleTraceSection(c *ui.Context, p *palette, traces []api.RuleTrace) {
 	if len(traces) == 0 {
@@ -605,7 +605,7 @@ func (a *app) ruleTraceSection(c *ui.Context, p *palette, traces []api.RuleTrace
 			hairline(c, p).Margin(12, 0)
 		}
 		ui.Row(c.Key(fmt.Sprintf("rt:%s:%s", tr.RuleID, tr.Phase))).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-			seal(c, p, 16, tr.Matched)
+			ruleMark(c, p, 16, tr.Matched)
 			col := p.text
 			if !tr.Matched {
 				col = p.muted
@@ -625,7 +625,7 @@ func (a *app) ruleTraceSection(c *ui.Context, p *palette, traces []api.RuleTrace
 		if tr.Error != "" {
 			ui.Text(c, tr.Error).FontSize(12).Font(mono()).TextColor(p.removed).FillWidth().Margin(6, 0, 0, 26)
 		}
-		// The pipeline: a rail down from the seal, a mark per stage in the
+		// The pipeline: a rail down from the mark, a mark per stage in the
 		// color of how it went, then what the rule did at the end.
 		node := func(key string, col ui.Color, body func()) {
 			ui.Row(c.Key(key)).FillWidth().Gap(10).AlignItems(ui.Stretch).Children(func() {

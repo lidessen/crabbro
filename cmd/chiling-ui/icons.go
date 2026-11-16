@@ -24,5 +24,9 @@ var (
 	iconUp      = lucide(`<path d="m5 12 7-7 7 7"/><path d="M12 19V5"/>`)
 	iconDown    = lucide(`<path d="M12 5v14"/><path d="m19 12-7 7-7-7"/>`)
 	iconX       = lucide(`<path d="M18 6 6 18"/><path d="m6 6 12 12"/>`)
-	iconPlus    = lucide(`<path d="M5 12h14"/><path d="M12 5v14"/>`)
+	// iconRule is the mark of a rule: a bolt, in outline, and iconRuleOn the
+	// same bolt filled.
+	iconRule   = lucide(`<path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/>`)
+	iconRuleOn = lucide(`<path fill="currentColor" d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/>`)
+	iconPlus   = lucide(`<path d="M5 12h14"/><path d="M12 5v14"/>`)
 )
