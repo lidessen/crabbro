@@ -182,7 +182,7 @@ func (a *app) traceHeader(c *ui.Context, p *palette, st store, all []api.Activit
 			if st.session != nil && st.session.Name != "" && st.session.Name != "scope" {
 				title = st.session.Name
 			}
-			ui.Text(c, title).FontSize(20).FontWeight(650).LetterSpacing(-0.2).TextColor(p.text).SingleLine()
+			ui.Text(c, title).FontSize(20).FontWeight(600).LetterSpacing(-0.2).TextColor(p.text).SingleLine()
 			ui.Row(c).Gap(7).AlignItems(ui.Center).Children(func() {
 				first := true
 				part := func(n int, one, many string, col ui.Color) {
@@ -265,7 +265,7 @@ func (a *app) traceStrip(c *ui.Context, p *palette, all []api.Activity, v traceV
 // pause was, in the margin where the times are.
 func (a *app) traceGap(c *ui.Context, p *palette, id string, gap time.Duration) {
 	ui.Row(c.Key("trajgap:" + id)).FillWidth().Height(26).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, gap.Truncate(time.Second).String()).FontSize(10.5).Font(mono()).TextColor(p.faint).
+		ui.Text(c, gap.Truncate(time.Second).String()).FontSize(11).Font(mono()).TextColor(p.faint).
 			Width(traceTimeW).TextAlign(ui.End).SingleLine().Shrink(0)
 		ui.Box(c).Width(traceRailW).Shrink(0).FillHeight().Children(func() {
 			ui.Box(c).Absolute().Left(traceRailW/2 - 0.5).Top(0).Bottom(0).Width(1).Background(p.text.Alpha(0.14))
@@ -363,12 +363,12 @@ func (a *app) traceRequest(c *ui.Context, p *palette, req uiRequestRow, v traceV
 	for _, name := range v.hits[string(req.ID)] {
 		ui.Row(c).Gap(6).AlignItems(ui.Center).Shrink(0).Margin(0, 0, 0, 4).Children(func() {
 			ruleMark(c, p, 14, true)
-			ui.Text(c, name).FontSize(12).TextColor(p.muted).SingleLine()
+			ui.Text(c, name).FontSize(13).TextColor(p.muted).SingleLine()
 		})
 	}
 	ui.Spacer(c)
 	latencyBar(c, p, req, v.maxMs)
-	ui.Text(c, latencyLabel(req)).FontSize(11.5).Font(mono()).TextColor(p.muted).
+	ui.Text(c, latencyLabel(req)).FontSize(12).Font(mono()).TextColor(p.muted).
 		Width(50).TextAlign(ui.End).SingleLine().Shrink(0)
 	ui.Row(c).Width(32).Justify(ui.End).AlignItems(ui.Center).Shrink(0).Children(func() {
 		if req.Status == 0 {
@@ -382,8 +382,8 @@ func (a *app) traceRequest(c *ui.Context, p *palette, req uiRequestRow, v traceV
 // traceEvent is a line that is not a request: what it was, in the text's color, and the
 // daemon's own words for it after.
 func (a *app) traceEvent(c *ui.Context, p *palette, it api.Activity) {
-	ui.Text(c, activityKind(it.Kind)).FontSize(12.5).FontWeight(600).TextColor(p.text).SingleLine().Shrink(0)
-	ui.Text(c, eventSummary(it)).FontSize(12.5).TextColor(p.muted).SingleLine().Shrink(1).MinWidth(20)
+	ui.Text(c, activityKind(it.Kind)).FontSize(13).FontWeight(600).TextColor(p.text).SingleLine().Shrink(0)
+	ui.Text(c, eventSummary(it)).FontSize(13).TextColor(p.muted).SingleLine().Shrink(1).MinWidth(20)
 	if it.Kind == "session_started" || it.Kind == "session_stopped" {
 		// A recording's start and stop rule the timeline off, as a
 		// chapter does.

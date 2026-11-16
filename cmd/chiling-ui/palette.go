@@ -197,6 +197,9 @@ func applyPal(c *ui.Context) *palette {
 func (p *palette) quiet(c *ui.Context) {
 	t := *c.Theme()
 	t.Accent, t.AccentText, t.SurfaceHover = p.active, p.text, p.hover
+	// The header reads in the captions' color, so the column names label
+	// the data without outweighing it.
+	t.TextMuted = p.faint
 	c.SetTheme(&t)
 }
 

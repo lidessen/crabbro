@@ -99,9 +99,9 @@ func (a *app) navWord(c *ui.Context, p *palette, key, label string, count int) {
 	}
 	under = b.Animate("under", under, 180*time.Millisecond)
 	b.Children(func() {
-		ui.Text(c, label).FontSize(13).FontWeight(550).TextColor(col).SingleLine()
+		ui.Text(c, label).FontSize(13).FontWeight(500).TextColor(col).SingleLine()
 		if count > 0 {
-			ui.Text(c, fmt.Sprint(count)).FontSize(10.5).Font(mono()).TextColor(p.faint).SingleLine().
+			ui.Text(c, fmt.Sprint(count)).FontSize(11).Font(mono()).TextColor(p.faint).SingleLine().
 				ContentTransition(ui.ContentTransition{Numeric: true})
 		}
 		ui.Box(c).Absolute().Left(0).Right(0).Bottom(-1).Height(2).Background(p.accent.Alpha(under))
@@ -129,7 +129,7 @@ func (a *app) recordControls(c *ui.Context, p *palette) {
 			}, ui.KeyframeOptions{Repeat: ui.RepeatForever, Alternate: true}))
 			ui.Text(c, "Recording").FontSize(12).FontWeight(600).TextColor(p.removed).SingleLine()
 			if run := c.Now().Sub(s.StartedAt); run >= 0 {
-				ui.Text(c, clockLabel(run)).FontSize(11.5).Font(mono()).TextColor(p.removed.Alpha(0.8)).SingleLine().
+				ui.Text(c, clockLabel(run)).FontSize(11).Font(mono()).TextColor(p.removed.Alpha(0.8)).SingleLine().
 					ContentTransition(ui.ContentTransition{Numeric: true})
 				// Draw again as the second flips, so the clock keeps time
 				// while nothing else moves.
@@ -274,13 +274,13 @@ func (a *app) offlinePage(c *ui.Context, p *palette, st store) {
 		if st.conn == connConnecting {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Margin(4, 0, 0, 0).Children(func() {
 				ui.Spinner(c).Size(13, 13)
-				ui.Text(c, "Looking for the daemon…").FontSize(14).FontWeight(600).TextColor(p.text).SingleLine()
+				ui.Text(c, "Looking for the daemon…").FontSize(15).FontWeight(600).TextColor(p.text).SingleLine()
 			})
 			return
 		}
-		ui.Text(c, "The daemon isn't running").FontSize(14).FontWeight(600).TextColor(p.text).Margin(6, 0, 0, 0).SingleLine()
+		ui.Text(c, "The daemon isn't running").FontSize(15).FontWeight(600).TextColor(p.text).Margin(6, 0, 0, 0).SingleLine()
 		ui.Text(c, "Capture, rules and MITM live in chilingd. Start it and this window picks up where it left off.").
-			FontSize(12.5).TextColor(p.muted).TextAlign(ui.Center).LineHeight(1.5).MaxWidth(380)
+			FontSize(13).TextColor(p.muted).TextAlign(ui.Center).LineHeight(1.5).MaxWidth(380)
 		a.fillButton(c, "offline-start", "Start chilingd", iconPlay).Clicked(func() { a.actStartDaemon() })
 		if st.connErr != "" {
 			ui.Text(c, st.connErr).FontSize(11).Font(mono()).TextColor(p.faint).TextAlign(ui.Center).MaxWidth(520)
@@ -302,28 +302,28 @@ func (a *app) statusBar(c *ui.Context, p *palette) {
 				label += " — " + st.connErr
 			}
 			ui.Box(c.Key("conn-dot")).Width(6).Height(6).Radius(3).Background(dotCol)
-			ui.Text(c, label).FontSize(11.5).TextColor(p.muted).SingleLine().Shrink(1).MinWidth(40)
+			ui.Text(c, label).FontSize(12).TextColor(p.muted).SingleLine().Shrink(1).MinWidth(40)
 		} else {
 			// The one place the window says where the proxy listens.
 			ui.Row(c).Gap(7).AlignItems(ui.Center).Children(func() {
 				ui.Box(c.Key("conn-dot")).Width(6).Height(6).Radius(3).Background(p.added)
-				ui.Text(c, "Listening on").FontSize(11.5).TextColor(p.faint).SingleLine()
-				ui.Text(c, st.status.ProxyAddr).FontSize(11.5).Font(mono()).TextColor(p.muted).SingleLine()
+				ui.Text(c, "Listening on").FontSize(12).TextColor(p.faint).SingleLine()
+				ui.Text(c, st.status.ProxyAddr).FontSize(11).Font(mono()).TextColor(p.muted).SingleLine()
 			})
 		}
 		if a.busy != "" {
 			ui.Row(c).Gap(5).AlignItems(ui.Center).Transition(busyFade).Children(func() {
 				ui.Spinner(c).Size(11, 11)
-				ui.Text(c, a.busy).FontSize(11.5).TextColor(p.muted).SingleLine()
+				ui.Text(c, a.busy).FontSize(12).TextColor(p.muted).SingleLine()
 			})
 		}
 		ui.Spacer(c)
 		if st.listHiddenCount > 0 {
-			ui.Text(c, fmt.Sprintf("%d hidden", st.listHiddenCount)).FontSize(11.5).TextColor(p.faint).SingleLine()
+			ui.Text(c, fmt.Sprintf("%d hidden", st.listHiddenCount)).FontSize(12).TextColor(p.faint).SingleLine()
 		}
 		if st.conn == connConnected {
 			if v := st.status.Version; v != "" {
-				ui.Text(c, "v"+v).FontSize(11.5).TextColor(p.faint).SingleLine()
+				ui.Text(c, "v"+v).FontSize(12).TextColor(p.faint).SingleLine()
 			}
 		}
 	})
