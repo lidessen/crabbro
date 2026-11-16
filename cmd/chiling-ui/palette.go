@@ -204,6 +204,24 @@ func (p *palette) quiet(c *ui.Context) {
 	c.SetTheme(&t)
 }
 
+// shade is the shadow under a raised panel: barely there on the light
+// appearance, deeper on the dark, where a shadow has less to show against.
+func (p *palette) shade() ui.Color {
+	if p.dark {
+		return ui.RGBA(0, 0, 0, 0.35)
+	}
+	return ui.RGBA(70, 40, 20, 0.07)
+}
+
+// wash is how strongly a color tints the ground behind text of the same
+// color, as a status pill's does.
+func (p *palette) wash() float32 {
+	if p.dark {
+		return 0.16
+	}
+	return 0.1
+}
+
 // warning is the color of what waits: amber on either appearance.
 func (p *palette) warning() ui.Color {
 	if p.dark {
