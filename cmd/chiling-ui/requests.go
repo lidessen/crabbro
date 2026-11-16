@@ -97,7 +97,7 @@ func (a *app) requestsPage(c *ui.Context, p *palette) {
 					ruled := ruledRequests(st.traj)
 					ui.Table(c, &a.reqState, cols, len(rows), func(row, col int) {
 						a.requestCell(c, p, rows[row], col, ruled[string(rows[row].ID)])
-					}).Grow(1).MinHeight(0).ContextMenu(func(m *ui.Menu) {
+					}).FontSize(12).Grow(1).MinHeight(0).ContextMenu(func(m *ui.Menu) {
 						if id := a.chosenRequestID(rows); id != "" && m.Item("Replay "+id).Chosen() {
 							a.actReplay(id)
 						}
@@ -140,7 +140,7 @@ func (a *app) requestsToolbar(c *ui.Context, p *palette) {
 		Gap(10).AlignItems(ui.Center).Children(func() {
 		ui.SearchField(c, &a.search).Grow(1).Shrink(1).MinWidth(40).MaxWidth(300)
 		wasHidden := a.showHidden
-		ui.Checkbox(c, &a.showHidden, "Show hidden").FontSize(12.5)
+		ui.Checkbox(c, &a.showHidden, "Show hidden").FontSize(13)
 		if a.showHidden != wasHidden {
 			// Refetch now: waiting for the next tick leaves the table
 			// unchanged for seconds after the click.
@@ -258,7 +258,7 @@ func (a *app) requestCell(c *ui.Context, p *palette, r uiRequestRow, col int, ru
 	case 4:
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Justify(ui.End).Children(func() {
 			latencyBar(c, p, r, reqMaxMs)
-			ui.Text(c, latencyLabel(r)).FontSize(11.5).Font(mono()).
+			ui.Text(c, latencyLabel(r)).FontSize(12).Font(mono()).
 				TextColor(p.muted).Width(48).TextAlign(ui.End).SingleLine()
 		})
 	case 5:
@@ -315,17 +315,17 @@ func (a *app) requestDetail(c *ui.Context, p *palette, st store, rows []uiReques
 		ui.Row(c).FillWidth().Shrink(0).Padding(14, 16, 4, 24).Gap(16).AlignItems(ui.Center).Children(func() {
 			ui.Column(c).Gap(3).Shrink(1).MinWidth(0).Children(func() {
 				ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, methodLabel(row.Method)).FontSize(14).FontWeight(650).Font(mono()).TextColor(p.text).SingleLine().Shrink(0)
-					ui.Text(c, pathOf(row.URL)).FontSize(14).FontWeight(500).Font(mono()).TextColor(p.text).SingleLine().Shrink(1).MinWidth(40)
+					ui.Text(c, methodLabel(row.Method)).FontSize(15).FontWeight(600).Font(mono()).TextColor(p.text).SingleLine().Shrink(0)
+					ui.Text(c, pathOf(row.URL)).FontSize(15).FontWeight(500).Font(mono()).TextColor(p.text).SingleLine().Shrink(1).MinWidth(40)
 				})
-				ui.Text(c, hostOf(row.URL)+"  ·  "+id).FontSize(11.5).Font(mono()).TextColor(p.faint).SingleLine()
+				ui.Text(c, hostOf(row.URL)+"  ·  "+id).FontSize(11).Font(mono()).TextColor(p.faint).SingleLine()
 			})
 			ui.Spacer(c)
 			if row.Status != 0 {
 				ui.Text(c, latencyLabel(row)).FontSize(12).Font(mono()).TextColor(p.muted).SingleLine().Shrink(0)
 				// The status animates as it changes, as when the
 				// exchange completes or a replay lands.
-				ui.Text(c, fmt.Sprint(row.Status)).FontSize(20).FontWeight(650).Font(mono()).
+				ui.Text(c, fmt.Sprint(row.Status)).FontSize(20).FontWeight(600).Font(mono()).
 					TextColor(statusTone(p, row.Status)).SingleLine().Shrink(0).
 					ContentTransition(ui.ContentTransition{Numeric: true})
 			}
@@ -350,7 +350,7 @@ func (a *app) requestDetail(c *ui.Context, p *palette, st store, rows []uiReques
 				FillWidth().Padding(16, 24, 24)).Children(func() {
 				switch {
 				case errText != "":
-					ui.Text(c, errText).FontSize(12).TextColor(p.removed)
+					ui.Text(c, errText).FontSize(13).TextColor(p.removed)
 				case d == nil:
 					a.detailSkeleton(c, p)
 				default:
@@ -472,7 +472,7 @@ func (a *app) detailBody(c *ui.Context, p *palette, d *api.RequestDetailResponse
 // recedes and the value is what is read.
 func (a *app) headerRows(c *ui.Context, p *palette, list []api.HeaderField, m api.Headers) {
 	if len(list) == 0 && len(m) == 0 {
-		ui.Text(c, "None").FontSize(12).TextColor(p.faint)
+		ui.Text(c, "None").FontSize(13).TextColor(p.faint)
 		return
 	}
 	ui.Column(c).FillWidth().Children(func() {
@@ -516,7 +516,7 @@ var bodyViews = map[string]*bodyView{}
 // raw switch is on. Its buffer is kept across frames.
 func (a *app) bodyPane(c *ui.Context, p *palette, key, title string, body *string, headers api.Headers, list []api.HeaderField) {
 	if body == nil || *body == "" {
-		ui.Text(c, "No body").FontSize(12).TextColor(p.faint)
+		ui.Text(c, "No body").FontSize(13).TextColor(p.faint)
 		return
 	}
 	v := bodyViews[key]
@@ -596,7 +596,7 @@ func readableBody(source, contentType string) (string, string) {
 // only asked — with its stages below as a pipeline down a rail.
 func (a *app) ruleTraceSection(c *ui.Context, p *palette, traces []api.RuleTrace) {
 	if len(traces) == 0 {
-		ui.Text(c, "No rule ran on this exchange. It passed through untouched.").FontSize(12.5).TextColor(p.muted)
+		ui.Text(c, "No rule ran on this exchange. It passed through untouched.").FontSize(13).TextColor(p.muted)
 		return
 	}
 	rules := a.snapshotState().rules
@@ -654,9 +654,9 @@ func (a *app) ruleTraceSection(c *ui.Context, p *palette, traces []api.RuleTrace
 					if name == "" {
 						name = stg.Uses
 					}
-					ui.Text(c, name).FontSize(12.5).Font(mono()).FontWeight(600).TextColor(p.text).SingleLine().Shrink(1).MinWidth(20)
+					ui.Text(c, name).FontSize(12).Font(mono()).FontWeight(600).TextColor(p.text).SingleLine().Shrink(1).MinWidth(20)
 					if stg.Uses != "" && stg.ID != "" {
-						ui.Text(c, stg.Uses).FontSize(11.5).Font(mono()).TextColor(p.faint).SingleLine()
+						ui.Text(c, stg.Uses).FontSize(12).Font(mono()).TextColor(p.faint).SingleLine()
 					}
 					if stg.Skipped {
 						tag(c, p, "skipped")
@@ -666,7 +666,7 @@ func (a *app) ruleTraceSection(c *ui.Context, p *palette, traces []api.RuleTrace
 				case stg.Error != "":
 					ui.Text(c, stg.Error).FontSize(12).Font(mono()).TextColor(p.removed).FillWidth()
 				case stg.Skipped && stg.SkipReason != "":
-					ui.Text(c, skipLabel(stg.SkipReason)).FontSize(12).TextColor(p.faint).FillWidth()
+					ui.Text(c, skipLabel(stg.SkipReason)).FontSize(13).TextColor(p.faint).FillWidth()
 				}
 			})
 		}
@@ -674,7 +674,7 @@ func (a *app) ruleTraceSection(c *ui.Context, p *palette, traces []api.RuleTrace
 			node(fmt.Sprintf("act:%s:%s:%d", tr.RuleID, tr.Phase, i), p.accent, func() {
 				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 					ui.Text(c, string(act.Type)).FontSize(12).FontWeight(600).Font(mono()).TextColor(p.text).SingleLine().Shrink(0)
-					ui.Text(c, actionParams(act)).FontSize(11.5).Font(mono()).TextColor(p.muted).SingleLine().Shrink(1).MinWidth(20)
+					ui.Text(c, actionParams(act)).FontSize(12).Font(mono()).TextColor(p.muted).SingleLine().Shrink(1).MinWidth(20)
 				})
 			})
 		}

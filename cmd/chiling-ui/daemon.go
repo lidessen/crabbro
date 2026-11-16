@@ -21,19 +21,19 @@ func (a *app) daemonPage(c *ui.Context, p *palette) {
 			case st.conn == connDown:
 				a.daemonSection(c, p, "Daemon", 0, func() {
 					ui.Column(c).FillWidth().Gap(8).Children(func() {
-						ui.Text(c, st.connErr).FontSize(12).TextColor(p.removed).FillWidth()
+						ui.Text(c, st.connErr).FontSize(13).TextColor(p.removed).FillWidth()
 						ui.Row(c).Gap(8).Margin(2, 0, 0, 0).Children(func() {
 							a.fillButton(c, "daemon-start", "Start chilingd", iconPlay).
 								Clicked(func() { a.actStartDaemon() })
 						})
-						ui.Text(c, "Or run chiling daemon start to choose the proxy address and MITM.").FontSize(12).TextColor(p.muted).FillWidth()
+						ui.Text(c, "Or run chiling daemon start to choose the proxy address and MITM.").FontSize(13).TextColor(p.muted).FillWidth()
 					})
 				})
 			case st.conn == connConnecting:
 				a.daemonSection(c, p, "Daemon", 0, func() {
 					ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 						ui.Spinner(c).Size(12, 12)
-						ui.Text(c, "looking for chilingd…").FontSize(12).TextColor(p.muted)
+						ui.Text(c, "looking for chilingd…").FontSize(13).TextColor(p.muted)
 					})
 				})
 			default:
@@ -70,14 +70,14 @@ func (a *app) daemonPage(c *ui.Context, p *palette) {
 						})
 						a.factRoll(c, p, "Captures", fmt.Sprint(len(st.session.RequestIDs)))
 						if st.session.Name == "scope" {
-							ui.Text(c, "Implicit scope session — no recording window is open.").FontSize(12).TextColor(p.muted)
+							ui.Text(c, "Implicit scope session — no recording window is open.").FontSize(13).TextColor(p.muted)
 						}
 						ui.Row(c).Gap(8).Margin(4, 0, 0, 0).Children(func() {
 							a.quietButton(c, "daemon-stop-record", "Stop recording", iconStop).
 								Clicked(func() { a.actStopRecording() })
 						})
 					} else {
-						ui.Text(c, "Not recording.").FontSize(12).TextColor(p.muted)
+						ui.Text(c, "Not recording.").FontSize(13).TextColor(p.muted)
 						ui.Row(c).Gap(8).Margin(4, 0, 0, 0).Children(func() {
 							a.quietButton(c, "daemon-start-record", "Start recording", iconRecord).
 								Clicked(func() { a.actStartRecording() })
@@ -86,7 +86,7 @@ func (a *app) daemonPage(c *ui.Context, p *palette) {
 				})
 				a.daemonSection(c, p, "History", 80*time.Millisecond, func() {
 					if !st.history.Enabled {
-						ui.Text(c, "Off — exchanges live in the ring buffer only.").FontSize(12).TextColor(p.muted)
+						ui.Text(c, "Off — exchanges live in the ring buffer only.").FontSize(13).TextColor(p.muted)
 						return
 					}
 					a.fact(c, p, "Store", st.history.Path)
@@ -98,7 +98,7 @@ func (a *app) daemonPage(c *ui.Context, p *palette) {
 				a.daemonSection(c, p, "MITM", 120*time.Millisecond, func() {
 					if !st.mitmKnown {
 						ui.Text(c, "Not set up — this daemon was started without MITM, so HTTPS passes through unread.").
-							FontSize(12).TextColor(p.muted).FillWidth()
+							FontSize(13).TextColor(p.muted).FillWidth()
 						ui.Text(c, "chiling daemon stop && chiling daemon start --mitm").FontSize(12).Font(mono()).
 							TextColor(p.text).FillWidth()
 						return
@@ -106,7 +106,7 @@ func (a *app) daemonPage(c *ui.Context, p *palette) {
 					a.factYesNo(c, p, "Enabled", st.mitm.Enabled)
 					a.factYesNo(c, p, "CA installed", st.mitm.CertInstalled)
 					if st.mitm.EmptyAllowDenies && len(st.mitm.AllowPatterns) == 0 {
-						ui.Text(c, "The allowlist is empty, so nothing is intercepted.").FontSize(12).TextColor(p.muted)
+						ui.Text(c, "The allowlist is empty, so nothing is intercepted.").FontSize(13).TextColor(p.muted)
 					}
 					a.factList(c, p, "Allow", st.mitm.AllowPatterns)
 					a.factList(c, p, "Deny", st.mitm.DenyPatterns)
@@ -116,7 +116,7 @@ func (a *app) daemonPage(c *ui.Context, p *palette) {
 						if st.scope.Restricting {
 							a.fact(c, p, "Session", st.scope.SessionID)
 						} else {
-							ui.Text(c, "Not restricting — every exchange is in.").FontSize(12).TextColor(p.muted)
+							ui.Text(c, "Not restricting — every exchange is in.").FontSize(13).TextColor(p.muted)
 						}
 						a.factList(c, p, "Pick", st.scope.Pick)
 						a.factList(c, p, "Omit", st.scope.Omit)
@@ -146,7 +146,7 @@ func (a *app) daemonSection(c *ui.Context, p *palette, title string, delay time.
 	ui.Column(c.Key("daemon:" + title)).FillWidth().Gap(12).Children(func() {
 		hairline(c, p)
 		ui.Row(c).FillWidth().Gap(0).AlignItems(ui.Start).Children(func() {
-			caption(c, p, title).Width(150).Shrink(0).Padding(4, 0, 0)
+			caption(c, p, title).Width(150).Shrink(0).Padding(1, 0, 0)
 			ui.Column(c).Grow(1).MinWidth(0).Gap(7).Children(rows)
 		})
 	})
@@ -212,7 +212,7 @@ func (a *app) factRow(c *ui.Context, p *palette, label string, value func()) {
 	}
 	row.Transition(hoverFade)
 	row.Children(func() {
-		ui.Text(c, label).FontSize(12).TextColor(p.muted).SingleLine().Width(120).Shrink(0)
+		ui.Text(c, label).FontSize(13).TextColor(p.muted).SingleLine().Width(120).Shrink(0)
 		value()
 	})
 }

@@ -39,7 +39,7 @@ func ruleMark(c *ui.Context, p *palette, size float32, on bool) {
 // from what it names. Groups are told apart by space and a hairline, not
 // by boxes.
 func caption(c *ui.Context, p *palette, title string) ui.Element {
-	return ui.Text(c, title).FontSize(11.5).FontWeight(600).TextColor(p.faint).SingleLine()
+	return ui.Text(c, title).FontSize(12).FontWeight(600).TextColor(p.faint).SingleLine()
 }
 
 // hairline is the rule between two groups.
@@ -66,7 +66,7 @@ func (a *app) words(c *ui.Context, key string, sel *int, labels ...string) ui.El
 			}
 			under = b.Animate("under", under, 160*time.Millisecond)
 			b.Children(func() {
-				ui.Text(c, label).FontSize(12.5).FontWeight(550).TextColor(col).SingleLine()
+				ui.Text(c, label).FontSize(13).FontWeight(500).TextColor(col).SingleLine()
 				ui.Box(c).Absolute().Left(0).Right(0).Bottom(2).Height(2).Radius(1).
 					Background(p.accent.Alpha(under))
 			})
@@ -89,7 +89,7 @@ func tag(c *ui.Context, p *palette, label string) ui.Element {
 func stateDot(c *ui.Context, p *palette, col ui.Color, label string) {
 	ui.Row(c).Gap(6).AlignItems(ui.Center).Shrink(0).Children(func() {
 		ui.Box(c).Size(6, 6).Radius(3).Background(col)
-		ui.Text(c, label).FontSize(12).TextColor(p.muted).SingleLine()
+		ui.Text(c, label).FontSize(13).TextColor(p.muted).SingleLine()
 	})
 }
 
@@ -109,7 +109,7 @@ func methodText(c *ui.Context, p *palette, method string) ui.Element {
 	if method == "GET" || method == "CONNECT" || method == "" {
 		col = p.muted
 	}
-	return ui.Text(c, methodLabel(method)).FontSize(11.5).FontWeight(600).Font(mono()).
+	return ui.Text(c, methodLabel(method)).FontSize(12).FontWeight(600).Font(mono()).
 		TextColor(col).SingleLine().Shrink(0)
 }
 
@@ -124,8 +124,8 @@ func emptyState(c *ui.Context, p *palette, icon *ui.SVG, title, help, cmd string
 func emptyStateWith(c *ui.Context, p *palette, icon *ui.SVG, title, help, cmd string, act func()) {
 	ui.Column(c).Grow(1).Center().Padding(24).Gap(10).Children(func() {
 		emptyMark(c, p, icon)
-		ui.Text(c, title).FontSize(14).FontWeight(600).TextColor(p.text).Margin(6, 0, 0, 0).SingleLine()
-		ui.Text(c, help).FontSize(12.5).TextColor(p.muted).TextAlign(ui.Center).LineHeight(1.5).MaxWidth(340)
+		ui.Text(c, title).FontSize(15).FontWeight(600).TextColor(p.text).Margin(6, 0, 0, 0).SingleLine()
+		ui.Text(c, help).FontSize(13).TextColor(p.muted).TextAlign(ui.Center).LineHeight(1.5).MaxWidth(340)
 		if cmd != "" {
 			ui.Text(c, cmd).FontSize(12).Font(mono()).TextColor(p.muted).Padding(5, 10).Radius(6).
 				Background(p.text.Alpha(0.045)).Margin(2, 0, 0).SingleLine()
@@ -140,7 +140,7 @@ func emptyStateWith(c *ui.Context, p *palette, icon *ui.SVG, title, help, cmd st
 // a small label, on the page itself. The value rolls as it changes.
 func stat(c *ui.Context, p *palette, key, label, value string) {
 	ui.Column(c.Key("stat:" + key)).Grow(1).Basis(0).MinWidth(0).Gap(3).Children(func() {
-		ui.Text(c, value).FontSize(22).FontWeight(650).LetterSpacing(-0.3).TextColor(p.text).SingleLine().
+		ui.Text(c, value).FontSize(22).FontWeight(600).LetterSpacing(-0.3).FontFeatures("tnum").TextColor(p.text).SingleLine().
 			ContentTransition(ui.ContentTransition{Numeric: true})
 		ui.Text(c, label).FontSize(12).TextColor(p.muted).SingleLine()
 	})

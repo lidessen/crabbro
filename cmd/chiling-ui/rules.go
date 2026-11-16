@@ -81,7 +81,7 @@ func (a *app) ruleList(c *ui.Context, p *palette, st store) {
 	}
 	ui.Column(c).Fill().MinHeight(0).Children(func() {
 		ui.Column(c).FillWidth().Shrink(0).Padding(22, 20, 14, 28).Gap(5).Children(func() {
-			ui.Text(c, "Rules").FontSize(20).FontWeight(650).LetterSpacing(-0.2).TextColor(p.text).SingleLine()
+			ui.Text(c, "Rules").FontSize(20).FontWeight(600).LetterSpacing(-0.2).TextColor(p.text).SingleLine()
 			sub := fmt.Sprintf("%d enabled", inForce)
 			if off := len(st.rules) - inForce; off > 0 {
 				sub += fmt.Sprintf("  ·  %d set aside", off)
@@ -126,7 +126,7 @@ func (a *app) ruleRow(c *ui.Context, p *palette, r api.Rule, i int) {
 					tag(c, p, "fail-closed")
 				}
 			})
-			ui.Text(c, ruleSummary(r)).FontSize(11.5).Font(mono()).TextColor(p.faint).SingleLine()
+			ui.Text(c, ruleSummary(r)).FontSize(11).Font(mono()).TextColor(p.faint).SingleLine()
 		})
 		ui.Text(c, fmt.Sprint(r.Priority)).FontSize(11).Font(mono()).TextColor(p.faint).SingleLine().Shrink(0).
 			Tooltip("Priority")
@@ -231,7 +231,7 @@ func (a *app) ruleEditor(c *ui.Context, p *palette, st store, dirty bool) {
 					name = r.Name
 				}
 				ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, name).FontSize(16).FontWeight(650).TextColor(p.text).SingleLine().Shrink(1).MinWidth(20)
+					ui.Text(c, name).FontSize(16).FontWeight(600).TextColor(p.text).SingleLine().Shrink(1).MinWidth(20)
 					if dirty {
 						stateDot(c, p, p.warning(), "Edited")
 					}
@@ -240,7 +240,7 @@ func (a *app) ruleEditor(c *ui.Context, p *palette, st store, dirty bool) {
 				if m := ruleMeta(r); m != "" {
 					meta += "  ·  " + m
 				}
-				ui.Text(c, meta).FontSize(11.5).Font(mono()).TextColor(p.faint).SingleLine()
+				ui.Text(c, meta).FontSize(11).Font(mono()).TextColor(p.faint).SingleLine()
 			})
 			ui.Spacer(c)
 			a.ghostButton(c, "rule-toggle", toggleLabel(st.rules, rule), iconSwitch).
@@ -289,9 +289,9 @@ func (a *app) ruleOverview(c *ui.Context, p *palette, st store, r *api.Rule) {
 			return // still loading
 		}
 		ui.Column(c).Grow(1).Padding(18, 24).Gap(6).Children(func() {
-			ui.Text(c, "This rule can't be read as an overview.").FontSize(12.5).FontWeight(600).TextColor(p.text)
-			ui.Text(c, ruleVMErr).FontSize(11.5).Font(mono()).TextColor(p.removed).FillWidth()
-			ui.Text(c, "Its YAML is in the Code view.").FontSize(12).TextColor(p.muted)
+			ui.Text(c, "This rule can't be read as an overview.").FontSize(13).FontWeight(600).TextColor(p.text)
+			ui.Text(c, ruleVMErr).FontSize(11).Font(mono()).TextColor(p.removed).FillWidth()
+			ui.Text(c, "Its YAML is in the Code view.").FontSize(13).TextColor(p.muted)
 		})
 		return
 	}
@@ -308,7 +308,7 @@ func (a *app) ruleOverview(c *ui.Context, p *palette, st store, r *api.Rule) {
 				case doc.On.Hook != "":
 					a.fact(c, p, "Hook", doc.On.Hook)
 				case doc.On.Request == nil:
-					ui.Text(c, "No request match — this rule never runs.").FontSize(12).TextColor(p.muted)
+					ui.Text(c, "No request match — this rule never runs.").FontSize(13).TextColor(p.muted)
 				default:
 					m := doc.On.Request
 					any := func(s string) string {
@@ -372,9 +372,9 @@ func (a *app) stageBlock(c *ui.Context, p *palette, s *vmStage, n int, key strin
 		ui.Text(c, fmt.Sprint(n+1)).FontSize(11).Font(mono()).TextColor(p.faint).Width(14).Padding(2, 0, 0).SingleLine().Shrink(0)
 		ui.Column(c).Grow(1).MinWidth(0).Gap(5).Children(func() {
 			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, s.stageUses()).FontSize(12.5).FontWeight(600).Font(mono()).TextColor(p.text).SingleLine().Shrink(0)
+				ui.Text(c, s.stageUses()).FontSize(12).FontWeight(600).Font(mono()).TextColor(p.text).SingleLine().Shrink(0)
 				if s.ID != "" && s.ID != s.Uses {
-					ui.Text(c, s.ID).FontSize(11.5).Font(mono()).TextColor(p.faint).SingleLine()
+					ui.Text(c, s.ID).FontSize(12).Font(mono()).TextColor(p.faint).SingleLine()
 				}
 				if s.If != "" {
 					ui.Text(c, "if "+s.If).FontSize(11).Font(mono()).TextColor(p.muted).SingleLine().Shrink(1).MinWidth(20)
@@ -384,7 +384,7 @@ func (a *app) stageBlock(c *ui.Context, p *palette, s *vmStage, n int, key strin
 				}
 			})
 			if s.Run != nil {
-				ui.Text(c, strings.TrimSpace(s.Run.Script)).FontSize(11.5).Font(mono()).TextColor(p.muted).FillWidth()
+				ui.Text(c, strings.TrimSpace(s.Run.Script)).FontSize(11).Font(mono()).TextColor(p.muted).FillWidth()
 			}
 			for _, k := range sortedKeys(s.With) {
 				ui.Row(c.Key("with:" + key + ":" + k)).FillWidth().Gap(10).AlignItems(ui.Start).Children(func() {
