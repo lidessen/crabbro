@@ -183,6 +183,7 @@ func applyPal(c *ui.Context) *palette {
 	t.Radius = 6
 	t.Spacing = 3.5
 	t.FontSize = 13
+	t.Font = fontSans
 	t.ScrollbarWidth = 8
 	t.Surface, t.SurfaceHover, t.SurfacePressed = p.surface, p.surfaceHover, p.surfacePressed
 	t.Scrollbar = p.scrollbar

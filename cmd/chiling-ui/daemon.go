@@ -16,7 +16,9 @@ import (
 func (a *app) daemonPage(c *ui.Context, p *palette) {
 	st := a.snapshotState()
 	ui.Scroll(c).Grow(1).Children(func() {
-		ui.Column(c).FillWidth().MaxWidth(820).Padding(24, 28, 32).Gap(18).Children(func() {
+		// The page is a column of a readable measure, centered in the
+		// window rather than left against its edge.
+		ui.Column(c).FillWidth().MaxWidth(820).AlignSelf(ui.Center).Padding(24, 28, 32).Gap(18).Children(func() {
 			switch {
 			case st.conn == connDown:
 				a.daemonSection(c, p, "Daemon", 0, func() {

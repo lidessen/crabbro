@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"runtime"
 	"time"
 
 	"github.com/egoist/mygo/ui"
@@ -16,14 +15,8 @@ const (
 	pageDaemon     = "daemon"
 )
 
-// mono is the family code, paths and ids draw in: Menlo on macOS, and
-// elsewhere the system's own monospace.
-func mono() string {
-	if runtime.GOOS == "darwin" {
-		return "Menlo"
-	}
-	return "monospace"
-}
+// mono is the family code, paths and ids draw in.
+func mono() string { return fontMono }
 
 // fadePage brings a page in as the sidebar chooses it, as Mayoi's are: it
 // fades in, without moving. Give the element a key that carries the page,

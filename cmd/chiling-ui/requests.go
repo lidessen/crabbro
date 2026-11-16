@@ -550,7 +550,7 @@ func (a *app) bodyPane(c *ui.Context, p *palette, key, title string, body *strin
 	if v.state == nil || v.source != cacheKey {
 		buf := editor.NewBuffer(display)
 		buf.SetLanguage(editor.LanguageFor(filename))
-		v.state = &editor.State{Buffer: buf, ReadOnly: true, SoftWrap: true, NoScrollPastEnd: true, Label: title}
+		v.state = &editor.State{Buffer: buf, Font: codeFont(), LineHeight: 1.6, ReadOnly: true, SoftWrap: true, NoScrollPastEnd: true, Label: title}
 		v.source = cacheKey
 	}
 	editor.View(c.Key("body:"+key), v.state).FillWidth().Height(240).MinWidth(0).

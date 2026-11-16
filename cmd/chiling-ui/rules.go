@@ -79,12 +79,14 @@ func (a *app) ruleList(c *ui.Context, p *palette, st store) {
 			inForce++
 		}
 	}
-	ui.Column(c).Fill().MinHeight(0).Children(func() {
+	// The column stands on the chrome's tone, so the rule chosen, on the
+	// page's own, reads as the thing being worked on.
+	ui.Column(c).Fill().MinHeight(0).Background(p.chrome).Children(func() {
 		ui.Column(c).FillWidth().Shrink(0).Padding(22, 20, 14, 28).Gap(5).Children(func() {
 			ui.Text(c, "Rules").FontSize(20).FontWeight(600).LetterSpacing(-0.2).TextColor(p.text).SingleLine()
 			sub := fmt.Sprintf("%d enabled", inForce)
 			if off := len(st.rules) - inForce; off > 0 {
-				sub += fmt.Sprintf("  ·  %d set aside", off)
+				sub += fmt.Sprintf("  ·  %d disabled", off)
 			}
 			ui.Text(c, sub).FontSize(12).TextColor(p.muted).SingleLine()
 		})
@@ -401,7 +403,7 @@ func (a *app) ruleCode(c *ui.Context, p *palette) {
 	if ruleCodeState == nil {
 		buf := editor.NewBuffer(a.scriptDraft)
 		buf.SetLanguage(editor.LanguageFor("rule.yaml"))
-		ruleCodeState = &editor.State{Buffer: buf, SoftWrap: true, NoScrollPastEnd: true, Label: "Rule YAML"}
+		ruleCodeState = &editor.State{Buffer: buf, Font: codeFont(), LineHeight: 1.6, SoftWrap: true, NoScrollPastEnd: true, Label: "Rule YAML"}
 		ruleCodeSeen = a.scriptDraft
 	} else if a.scriptDraft != ruleCodeSeen {
 		ruleCodeState.Buffer.Reset(a.scriptDraft)
