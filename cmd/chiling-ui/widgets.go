@@ -154,21 +154,6 @@ func emptyStateWith(c *ui.Context, p *palette, icon *ui.SVG, title, help, cmd st
 	})
 }
 
-// stat is one headline number of the daemon's overview: a large value over
-// a small label, on a sheet of its own. The value rolls as it changes.
-func stat(c *ui.Context, p *palette, key, label, value string) {
-	// The proxy's address is the long one: its sheet takes more of the row.
-	grow := float32(1)
-	if key == "proxy" {
-		grow = 1.7
-	}
-	panel(c.Key("stat:"+key), p).Grow(grow).Basis(0).MinWidth(0).Padding(13, 16, 14).Gap(3).Children(func() {
-		ui.Text(c, value).FontSize(22).FontWeight(600).LetterSpacing(-0.3).FontFeatures("tnum").TextColor(p.text).SingleLine().
-			ContentTransition(ui.ContentTransition{Numeric: true})
-		ui.Text(c, label).FontSize(12).TextColor(p.muted).SingleLine()
-	})
-}
-
 // riseIn brings an element in as it is built: it fades and rises a little,
 // Mayoi's welcome-page entrance, delayed by delay.
 func riseIn(e ui.Element, delay time.Duration) ui.Element {
