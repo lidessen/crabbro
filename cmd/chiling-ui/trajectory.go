@@ -88,26 +88,29 @@ func (a *app) trajectoryPage(c *ui.Context, p *palette) {
 		}
 	}
 
-	ui.Column(c).Grow(1).MinHeight(0).Children(func() {
+	// The page is the chrome's ground; the timeline is a sheet on it.
+	ui.Column(c).Grow(1).MinHeight(0).Background(p.chrome).Children(func() {
 		a.traceHeader(c, p, st, all, v)
 		ui.Scroll(c).Grow(1).Children(func() {
-			ui.Column(c).FillWidth().Padding(4, 28, 28, 8).Children(func() {
-				for i, it := range steps {
-					if i > 0 {
-						gap := steps[i-1].At.Sub(it.At)
-						if trajOldest == 1 {
-							gap = -gap
+			ui.Column(c).FillWidth().Padding(0, 16, 16).Children(func() {
+				panel(c, p).FillWidth().Padding(8, 14, 10, 0).Children(func() {
+					for i, it := range steps {
+						if i > 0 {
+							gap := steps[i-1].At.Sub(it.At)
+							if trajOldest == 1 {
+								gap = -gap
+							}
+							if gap > trajGroupGap {
+								a.traceGap(c, p, it.ID, gap)
+							}
 						}
-						if gap > trajGroupGap {
-							a.traceGap(c, p, it.ID, gap)
-						}
+						a.traceLine(c, p, it, v, i == 0, i == len(steps)-1)
 					}
-					a.traceLine(c, p, it, v, i == 0, i == len(steps)-1)
-				}
-				if fetched >= trajFetch {
-					ui.Text(c, fmt.Sprintf("The latest %d steps.", trajFetch)).FontSize(11).
-						TextColor(p.faint).Padding(12, 0, 0, traceTimeW+traceRailW).SingleLine()
-				}
+					if fetched >= trajFetch {
+						ui.Text(c, fmt.Sprintf("The latest %d steps.", trajFetch)).FontSize(11).
+							TextColor(p.faint).Padding(12, 0, 0, traceTimeW+traceRailW).SingleLine()
+					}
+				})
 			})
 		})
 	})
@@ -176,7 +179,7 @@ func (a *app) traceHeader(c *ui.Context, p *palette, st store, all []api.Activit
 			verifies++
 		}
 	}
-	ui.Row(c.Key("trace:head")).FillWidth().Shrink(0).Padding(22, 28, 16).Gap(24).AlignItems(ui.End).Children(func() {
+	ui.Row(c.Key("trace:head")).FillWidth().Shrink(0).Padding(22, 20, 16, 28).Gap(16).AlignItems(ui.End).Children(func() {
 		ui.Column(c).Gap(5).Shrink(1).MinWidth(0).Children(func() {
 			title := "Trace"
 			if st.session != nil && st.session.Name != "" && st.session.Name != "scope" {
@@ -214,7 +217,6 @@ func (a *app) traceHeader(c *ui.Context, p *palette, st store, all []api.Activit
 		}
 		a.ghostButton(c, "trace-order", label, icon).Clicked(func() { trajOldest = 1 - trajOldest })
 	})
-	hairline(c, p)
 }
 
 // traceStrip is the session at a glance: its steps across time, left to
@@ -226,39 +228,42 @@ func (a *app) traceStrip(c *ui.Context, p *palette, all []api.Activity, v traceV
 	if len(all) < 2 {
 		return
 	}
-	ui.Box(c.Key("trace:strip")).Width(280).Height(30).Shrink(1).MinWidth(60).Margin(0, 0, 3, 0).
-		Draw(func(pt *ui.Painter, r ui.Rect) {
-			base := r.Y + r.H - 1
-			pt.Fill(ui.Rect{X: r.X, Y: base, W: r.W, H: 1}, p.text.Alpha(0.16), 0)
-			// all is newest first.
-			t0, t1 := all[len(all)-1].At, all[0].At
-			span := t1.Sub(t0)
-			for i := len(all) - 1; i >= 0; i-- {
-				it := all[i]
-				f := float32(len(all)-1-i) / float32(len(all)-1)
-				if span > 0 {
-					f = float32(it.At.Sub(t0)) / float32(span)
-				}
-				x := r.X + f*(r.W-3)
-				switch {
-				case isCapture(it):
-					req := v.byID[it.RequestID]
-					h := float32(5)
-					if req.DurationMs > 0 {
-						h += (r.H - 13) * float32(math.Sqrt(float64(req.DurationMs)/float64(v.maxMs)))
+	// It sits in a shallow well, the one inset thing on the page.
+	ui.Row(c).Shrink(1).MinWidth(80).Padding(7, 12, 6).Radius(8).Background(p.text.Alpha(0.04)).Children(func() {
+		ui.Box(c.Key("trace:strip")).Width(280).Height(30).Shrink(1).MinWidth(60).
+			Draw(func(pt *ui.Painter, r ui.Rect) {
+				base := r.Y + r.H - 1
+				pt.Fill(ui.Rect{X: r.X, Y: base, W: r.W, H: 1}, p.text.Alpha(0.16), 0)
+				// all is newest first.
+				t0, t1 := all[len(all)-1].At, all[0].At
+				span := t1.Sub(t0)
+				for i := len(all) - 1; i >= 0; i-- {
+					it := all[i]
+					f := float32(len(all)-1-i) / float32(len(all)-1)
+					if span > 0 {
+						f = float32(it.At.Sub(t0)) / float32(span)
 					}
-					col := p.text.Alpha(0.42)
-					if req.Status >= 400 {
-						col = statusTone(p, req.Status)
+					x := r.X + f*(r.W-3)
+					switch {
+					case isCapture(it):
+						req := v.byID[it.RequestID]
+						h := float32(5)
+						if req.DurationMs > 0 {
+							h += (r.H - 13) * float32(math.Sqrt(float64(req.DurationMs)/float64(v.maxMs)))
+						}
+						col := p.text.Alpha(0.42)
+						if req.Status >= 400 {
+							col = statusTone(p, req.Status)
+						}
+						pt.Fill(ui.Rect{X: x, Y: base - h, W: 2, H: h}, col, 1)
+					case it.Kind == "rule_applied":
+						pt.Fill(ui.Rect{X: x - 1.5, Y: r.Y, W: 5, H: 5}, p.accent, 1.2)
+					case it.Kind == "verify":
+						pt.Fill(ui.Rect{X: x - 1.5, Y: r.Y, W: 5, H: 5}, p.added, 2.5)
 					}
-					pt.Fill(ui.Rect{X: x, Y: base - h, W: 2, H: h}, col, 1)
-				case it.Kind == "rule_applied":
-					pt.Fill(ui.Rect{X: x - 1.5, Y: r.Y, W: 5, H: 5}, p.accent, 1.2)
-				case it.Kind == "verify":
-					pt.Fill(ui.Rect{X: x - 1.5, Y: r.Y, W: 5, H: 5}, p.added, 2.5)
 				}
-			}
-		})
+			})
+	})
 }
 
 // traceGap is the note between two chapters of the trace: how long the
@@ -355,22 +360,19 @@ func (a *app) traceMark(c *ui.Context, p *palette, it api.Activity, req uiReques
 // back and its path in the text's color, the marks of the rules that touched it, and
 // how long it took and what came back.
 func (a *app) traceRequest(c *ui.Context, p *palette, req uiRequestRow, v traceView) {
-	methodText(c, p, req.Method).Width(50)
+	methodText(c, p, req.Method).Width(56)
 	ui.Row(c).Shrink(1).MinWidth(40).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, hostOf(req.URL)).FontSize(12).Font(mono()).TextColor(p.faint).SingleLine().Shrink(2).MinWidth(0)
 		ui.Text(c, pathOf(req.URL)).FontSize(12).Font(mono()).FontWeight(500).TextColor(p.text).SingleLine().Shrink(1).MinWidth(30)
 	})
 	for _, name := range v.hits[string(req.ID)] {
-		ui.Row(c).Gap(6).AlignItems(ui.Center).Shrink(0).Margin(0, 0, 0, 4).Children(func() {
-			ruleMark(c, p, 14, true)
-			ui.Text(c, name).FontSize(13).TextColor(p.muted).SingleLine()
-		})
+		ruleChip(c, p, name)
 	}
 	ui.Spacer(c)
 	latencyBar(c, p, req, v.maxMs)
 	ui.Text(c, latencyLabel(req)).FontSize(12).Font(mono()).TextColor(p.muted).
 		Width(50).TextAlign(ui.End).SingleLine().Shrink(0)
-	ui.Row(c).Width(32).Justify(ui.End).AlignItems(ui.Center).Shrink(0).Children(func() {
+	ui.Row(c).Width(40).Justify(ui.End).AlignItems(ui.Center).Shrink(0).Children(func() {
 		if req.Status == 0 {
 			ui.Spinner(c).Size(11, 11)
 		} else {

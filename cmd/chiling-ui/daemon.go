@@ -15,10 +15,10 @@ import (
 // shows, each a little after the one above it.
 func (a *app) daemonPage(c *ui.Context, p *palette) {
 	st := a.snapshotState()
-	ui.Scroll(c).Grow(1).Children(func() {
+	ui.Scroll(c).Grow(1).Background(p.chrome).Children(func() {
 		// The page is a column of a readable measure, centered in the
 		// window rather than left against its edge.
-		ui.Column(c).FillWidth().MaxWidth(820).AlignSelf(ui.Center).Padding(24, 28, 32).Gap(18).Children(func() {
+		ui.Column(c).FillWidth().MaxWidth(820).AlignSelf(ui.Center).Padding(20, 28, 32).Gap(12).Children(func() {
 			switch {
 			case st.conn == connDown:
 				a.daemonSection(c, p, "Daemon", 0, func() {
@@ -39,9 +39,9 @@ func (a *app) daemonPage(c *ui.Context, p *palette) {
 					})
 				})
 			default:
-				// The headline numbers stand in a row on the page itself,
-				// set large, with nothing drawn round them.
-				ui.Row(c.Key("daemon:tiles")).FillWidth().Gap(8).Padding(4, 0, 6).AlignItems(ui.Stretch).Children(func() {
+				// The headline numbers stand in a row, each on its own
+				// sheet.
+				ui.Row(c.Key("daemon:tiles")).FillWidth().Gap(12).AlignItems(ui.Stretch).Children(func() {
 					stat(c, p, "req", "Requests", fmt.Sprint(st.status.RequestCount))
 					stat(c, p, "rules", "Rules", fmt.Sprint(st.status.RuleCount))
 					stat(c, p, "up", "Uptime", uptimeLabel(st.status.UptimeSeconds))
@@ -141,12 +141,11 @@ func (a *app) daemonPage(c *ui.Context, p *palette) {
 	})
 }
 
-// daemonSection is one group of the daemon page: a hairline, its name in
+// daemonSection is one group of the daemon page: a sheet, its name in
 // the margin's quiet hand, and its facts. delay is kept from the page's
 // entrance-stagger days.
 func (a *app) daemonSection(c *ui.Context, p *palette, title string, delay time.Duration, rows func()) {
-	ui.Column(c.Key("daemon:" + title)).FillWidth().Gap(12).Children(func() {
-		hairline(c, p)
+	panel(c.Key("daemon:"+title), p).FillWidth().Padding(16, 18).Children(func() {
 		ui.Row(c).FillWidth().Gap(0).AlignItems(ui.Start).Children(func() {
 			caption(c, p, title).Width(150).Shrink(0).Padding(1, 0, 0)
 			ui.Column(c).Grow(1).MinWidth(0).Gap(7).Children(rows)

@@ -93,24 +93,42 @@ func stateDot(c *ui.Context, p *palette, col ui.Color, label string) {
 	})
 }
 
-// statusText is a response status as a number in mono, in the color of
-// how it went. The color is in the figure itself — no badge behind it — so
-// a column of statuses reads as a column of text, and a failure still
-// stands out of it.
-func statusText(c *ui.Context, p *palette, status int) ui.Element {
-	return ui.Text(c, fmt.Sprint(status)).FontSize(12).FontWeight(600).Font(mono()).
-		TextColor(statusTone(p, status)).SingleLine().Shrink(0)
+// panel is a raised sheet on a page's ground: the page's own color, a
+// hairline round it and a soft shadow under it. It is what gives a page a
+// surface to read on rather than a bare ground.
+func panel(c *ui.Context, p *palette) ui.Element {
+	return ui.Column(c).Background(p.editor).Border(1, p.border).Radius(10).
+		Shadow(0, 1, 2, 0, p.shade()).Clip()
 }
 
-// methodText is a request's verb in mono: GET, the common case, recedes;
-// a verb that changes something reads a step stronger.
+// statusText is a response status as a number in mono, in the color of
+// how it went, on a wash of the same: a small pill, so a column of
+// statuses has a shape to scan and a failure stands out of it.
+func statusText(c *ui.Context, p *palette, status int) ui.Element {
+	tone := statusTone(p, status)
+	return ui.Text(c, fmt.Sprint(status)).FontSize(11).FontWeight(600).Font(mono()).
+		TextColor(tone).Padding(2, 6).Radius(5).Background(tone.Alpha(p.wash())).SingleLine().Shrink(0)
+}
+
+// methodText is a request's verb as a small mono chip: GET, the common
+// case, recedes; a verb that changes something reads a step stronger.
 func methodText(c *ui.Context, p *palette, method string) ui.Element {
-	col := p.text
+	col, bg := p.text, p.text.Alpha(0.075)
 	if method == "GET" || method == "CONNECT" || method == "" {
-		col = p.muted
+		col, bg = p.muted, p.text.Alpha(0.045)
 	}
-	return ui.Text(c, methodLabel(method)).FontSize(12).FontWeight(600).Font(mono()).
-		TextColor(col).SingleLine().Shrink(0)
+	return ui.Text(c, methodLabel(method)).FontSize(11).FontWeight(600).Font(mono()).
+		TextColor(col).Padding(2, 6).Radius(5).Background(bg).TextAlign(ui.Center).SingleLine().Shrink(0)
+}
+
+// ruleChip names a rule that applied to a request: its bolt and its name
+// on a wash of the accent.
+func ruleChip(c *ui.Context, p *palette, name string) {
+	ui.Row(c).Gap(5).AlignItems(ui.Center).Shrink(0).Padding(2, 9, 2, 6).Radius(10).
+		Background(p.accent.Alpha(p.wash() * 0.8)).Children(func() {
+		ruleMark(c, p, 12, true)
+		ui.Text(c, name).FontSize(12).FontWeight(500).TextColor(p.accent).SingleLine()
+	})
 }
 
 // emptyState is what a page shows while it has nothing: a tinted mark, a
@@ -137,9 +155,14 @@ func emptyStateWith(c *ui.Context, p *palette, icon *ui.SVG, title, help, cmd st
 }
 
 // stat is one headline number of the daemon's overview: a large value over
-// a small label, on the page itself. The value rolls as it changes.
+// a small label, on a sheet of its own. The value rolls as it changes.
 func stat(c *ui.Context, p *palette, key, label, value string) {
-	ui.Column(c.Key("stat:" + key)).Grow(1).Basis(0).MinWidth(0).Gap(3).Children(func() {
+	// The proxy's address is the long one: its sheet takes more of the row.
+	grow := float32(1)
+	if key == "proxy" {
+		grow = 1.7
+	}
+	panel(c.Key("stat:"+key), p).Grow(grow).Basis(0).MinWidth(0).Padding(13, 16, 14).Gap(3).Children(func() {
 		ui.Text(c, value).FontSize(22).FontWeight(600).LetterSpacing(-0.3).FontFeatures("tnum").TextColor(p.text).SingleLine().
 			ContentTransition(ui.ContentTransition{Numeric: true})
 		ui.Text(c, label).FontSize(12).TextColor(p.muted).SingleLine()
