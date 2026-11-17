@@ -113,7 +113,7 @@ type app struct {
 	pal          *palette // the frame's look, set as each frame begins
 }
 
-var hoverFade = ui.ElementTransition{Colors: true, Duration: 110 * time.Millisecond}
+var hoverFade = ui.ElementTransition{Colors: true, Duration: 150 * time.Millisecond}
 
 func newApp(c *client.Client, ctx context.Context) *app {
 	a := &app{c: c, ctx: ctx, page: pageTrajectory}

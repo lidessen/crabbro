@@ -139,7 +139,7 @@ func (a *app) chosenRequestID(rows []uiRequestRow) string {
 
 // requestsToolbar occupies its own row above the table header.
 func (a *app) requestsToolbar(c *ui.Context, p *palette) {
-	ui.Row(c).FillWidth().Height(48).Shrink(0).Padding(0, 12).
+	ui.Row(c).FillWidth().Height(54).Shrink(0).Padding(0, 12).
 		Gap(10).AlignItems(ui.Center).Children(func() {
 		ui.SearchField(c, &a.search).Grow(1).Shrink(1).MinWidth(40).MaxWidth(300)
 		wasHidden := a.showHidden
@@ -403,7 +403,7 @@ func tabFade(e ui.Element) ui.Element {
 // until the timeout below gives the wait up.
 func (a *app) replayButton(c *ui.Context, p *palette, id string) {
 	busy := a.replayBusy(c, id)
-	b := ui.ButtonBase(c.Key("replay")).Size(28, 24).Radius(6).Justify(ui.Center).AlignItems(ui.Center).
+	b := ui.ButtonBase(c.Key("replay")).Size(buttonH, buttonH).Radius(9).Justify(ui.Center).AlignItems(ui.Center).
 		Label("Replay this request through the proxy").Tooltip("Replay this request through the proxy").
 		Disabled(busy)
 	if !busy {
@@ -574,7 +574,7 @@ func (a *app) bodyPane(c *ui.Context, p *palette, key, title string, body *strin
 	// The body lies on a sheet of its own, as the panels do, as high as
 	// its lines up to a limit; past that it scrolls.
 	h := min(max(float32(v.lines)*20+16, 56), 320)
-	ui.Box(c.Key("bodysheet:"+key)).FillWidth().Height(h).MinWidth(0).Radius(8).Border(1, p.border).
+	ui.Box(c.Key("bodysheet:"+key)).FillWidth().Height(h).MinWidth(0).Radius(10).Border(1, p.border).
 		Background(p.surface).Shadow(0, 1, 2, 0, p.shade()).Clip().Children(func() {
 		editor.View(c.Key("body:"+key), v.state).Fill().MinWidth(0)
 	})
