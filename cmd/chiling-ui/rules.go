@@ -129,12 +129,16 @@ func (a *app) ruleRow(c *ui.Context, p *palette, r api.Rule, i int) {
 				if r.FailureMode == "fail-closed" {
 					tag(c, p, "fail-closed")
 				}
+				// The priority rides the name's line, so the summary below
+				// keeps the row's whole width for what the rule does.
+				ui.Spacer(c)
+				ui.Text(c, fmt.Sprint(r.Priority)).FontSize(11).Font(mono()).TextColor(p.faint).SingleLine().Shrink(0).
+					Tooltip("Priority")
 			})
-			ui.RichText(c, dataSpans(ruleSummary(r), p.text.Mix(p.faint, 0.8), p.faint.Alpha(0.55))...).
-				Font(mono()).FontSize(11).SingleLine()
+			summary := ruleSummary(r)
+			ui.RichText(c, dataSpans(summary, p.text.Mix(p.faint, 0.8), p.faint.Alpha(0.55))...).
+				Font(mono()).FontSize(11).SingleLine().Tooltip(summary)
 		})
-		ui.Text(c, fmt.Sprint(r.Priority)).FontSize(11).Font(mono()).TextColor(p.faint).SingleLine().Shrink(0).
-			Tooltip("Priority")
 	})
 	if b.Clicked() {
 		a.ruleSel = i
@@ -241,19 +245,35 @@ func (a *app) ruleEditor(c *ui.Context, p *palette, st store, dirty bool) {
 						stateDot(c, p, p.warning(), "Edited")
 					}
 				})
-				meta := rule
-				if m := ruleMeta(r); m != "" {
-					meta += "  ·  " + m
-				}
-				ui.Text(c, meta).FontSize(11).Font(mono()).TextColor(p.faint).SingleLine()
+				// The id and the small facts after it, each its own word
+				// with one point between: set as one mono string the
+				// points take a whole cell each and the line reads gapped.
+				ui.Row(c).Gap(7).AlignItems(ui.Center).Children(func() {
+					for i, part := range append([]string{rule}, ruleMeta(r)...) {
+						if i > 0 {
+							ui.Text(c, "·").FontSize(11).TextColor(p.faint.Alpha(0.7)).SingleLine().Shrink(0)
+						}
+						t := ui.Text(c, part).FontSize(11).Font(mono()).TextColor(p.faint).SingleLine()
+						if i == 0 {
+							t.Shrink(1).MinWidth(20).Selectable()
+						} else {
+							t.Shrink(0)
+						}
+					}
+				})
 			})
 			ui.Spacer(c)
 			a.ghostButton(c, "rule-toggle", toggleLabel(st.rules, rule), iconSwitch).
 				Clicked(func() { a.actToggleRule(rule, !enabledOf(st.rules, rule)) })
 			a.ghostButton(c, "rule-delete", "Delete", iconTrash).Disabled(ruleConfirming == rule).
 				Clicked(func() { a.confirmDeleteRule(rule) })
-			a.ghostButton(c, "rule-revert", "Revert", iconUndo).Disabled(!dirty).
-				Clicked(func() { a.scriptDraft = a.scriptLoadedText(st.rules) })
+			// Revert is there only while there is an edit to take back: a
+			// button that waits greyed out for most of its life is a word
+			// the heading does not need, and the room is the name's.
+			if dirty {
+				a.ghostButton(c, "rule-revert", "Revert", iconUndo).
+					Clicked(func() { a.scriptDraft = a.scriptLoadedText(st.rules) })
+			}
 			a.fillButton(c, "rule-save", "Save", iconSave, !dirty).
 				Clicked(func() { a.actSaveRule(rule, a.scriptDraft) })
 		})
@@ -432,11 +452,11 @@ func ruleOf(rules []api.Rule, id string) *api.Rule {
 }
 
 // ruleMeta is the small facts the editor's toolbar keeps by the buttons:
-// how the rule fails, which version it is, when it last changed, as one
-// quiet mono line, as the marks of a tab read.
-func ruleMeta(r *api.Rule) string {
+// how the rule fails, which version it is, when it last changed, each a
+// word of one quiet mono line.
+func ruleMeta(r *api.Rule) []string {
 	if r == nil {
-		return ""
+		return nil
 	}
 	var parts []string
 	if r.FailureMode == "fail-closed" {
@@ -448,7 +468,7 @@ func ruleMeta(r *api.Rule) string {
 	if !r.UpdatedAt.IsZero() {
 		parts = append(parts, updatedStamp(r.UpdatedAt))
 	}
-	return strings.Join(parts, " · ")
+	return parts
 }
 
 // updatedStamp is a change's time as a stamp: the clock when it was today,

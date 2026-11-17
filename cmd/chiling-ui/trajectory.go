@@ -398,7 +398,7 @@ func (a *app) traceEvent(c *ui.Context, p *palette, it api.Activity) {
 		tag(c, p, it.RuleID)
 	}
 	if it.RequestID != "" {
-		ui.Text(c, it.RequestID).FontSize(11).Font(mono()).TextColor(p.faint).SingleLine().Shrink(0)
+		tag(c, p, it.RequestID)
 	}
 }
 

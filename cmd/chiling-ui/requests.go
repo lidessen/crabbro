@@ -19,9 +19,11 @@ import (
 // The requests page: the live table of captured exchanges and the detail
 // of the one chosen.
 
-// detailSplitH is the height the request detail takes below the table, as
-// the page's splitter keeps it.
-var detailSplitH float32 = 270
+// tableSplit is the share of the page, in percent, the table takes above
+// the request detail, as the page's splitter keeps it. A share rather than
+// a height: the table is the page's subject, and a taller window should
+// show more lines of it, not only more of the one chosen.
+var tableSplit float32 = 46
 
 // requestListLimit is how many exchanges the table asks the daemon for; at
 // that count the toolbar says the list is the latest of more.
@@ -77,35 +79,45 @@ func (a *app) requestsPage(c *ui.Context, p *palette) {
 	// not the accent itself, which would swallow the pills' colors.
 	base := *c.Theme()
 	p.quiet(c)
-	ui.SplitVertical(c, &detailSplitH,
+	// With nothing captured there is no detail to split the page with: the
+	// empty state takes the whole of it, rather than half over a blank pane.
+	if len(rows) == 0 {
+		ui.Column(c).Grow(1).MinHeight(0).Children(func() {
+			a.requestsToolbar(c, p)
+			a.requestsEmpty(c, p, st)
+		})
+		c.SetTheme(&base)
+		if a.reqShownID != "" {
+			a.reqShownID = ""
+			a.selectRequest("")
+		}
+		return
+	}
+	ui.SplitVerticalPercent(c, &tableSplit,
 		func() {
 			ui.Column(c).Fill().MinHeight(0).Children(func() {
 				a.requestsToolbar(c, p)
-				if len(rows) == 0 {
-					a.requestsEmpty(c, p)
-				} else {
-					// The columns read as a line of the trace does: when,
-					// what, where, then how long and what came back.
-					cols := []ui.TableColumn{
-						{Title: "Time", ID: "at", Width: 92},
-						{Title: "Method", ID: "method", Width: 84, Sortable: true},
-						{Title: "Host", ID: "host", Width: 190, Sortable: true},
-						{Title: "Path", ID: "path"},
-						{Title: "Latency", ID: "time", Width: 140, Align: ui.End, Sortable: true},
-						{Title: "Status", ID: "status", Width: 72, Align: ui.End, Sortable: true},
-					}
-					ruled := ruledRequests(st.traj)
-					ui.Table(c, &a.reqState, cols, len(rows), func(row, col int) {
-						// A time the line above already said is held back,
-						// so the column reads by where the second turns.
-						same := row > 0 && clockOf(rows[row-1].StartedAt) == clockOf(rows[row].StartedAt)
-						a.requestCell(c, p, rows[row], col, ruled[string(rows[row].ID)], same)
-					}).FontSize(12).Grow(1).MinHeight(0).ContextMenu(func(m *ui.Menu) {
-						if id := a.chosenRequestID(rows); id != "" && m.Item("Replay "+id).Chosen() {
-							a.actReplay(id)
-						}
-					})
+				// The columns read as a line of the trace does: when,
+				// what, where, then how long and what came back.
+				cols := []ui.TableColumn{
+					{Title: "Time", ID: "at", Width: 92},
+					{Title: "Method", ID: "method", Width: 84, Sortable: true},
+					{Title: "Host", ID: "host", Width: 190, Sortable: true},
+					{Title: "Path", ID: "path"},
+					{Title: "Latency", ID: "time", Width: 140, Align: ui.End, Sortable: true},
+					{Title: "Status", ID: "status", Width: 72, Align: ui.End, Sortable: true},
 				}
+				ruled := ruledRequests(st.traj)
+				ui.Table(c, &a.reqState, cols, len(rows), func(row, col int) {
+					// A time the line above already said is held back,
+					// so the column reads by where the second turns.
+					same := row > 0 && clockOf(rows[row-1].StartedAt) == clockOf(rows[row].StartedAt)
+					a.requestCell(c, p, rows[row], col, ruled[string(rows[row].ID)], same)
+				}).FontSize(12).Grow(1).MinHeight(0).ContextMenu(func(m *ui.Menu) {
+					if id := a.chosenRequestID(rows); id != "" && m.Item("Replay "+id).Chosen() {
+						a.actReplay(id)
+					}
+				})
 			})
 		},
 		func() { a.requestDetail(c, p, st, rows) },
@@ -123,10 +135,22 @@ func (a *app) requestsPage(c *ui.Context, p *palette) {
 // requestsEmpty is what the table's place shows while nothing has been
 // captured yet, as Mayoi's empty folder is: how to send the first request
 // through the proxy.
-func (a *app) requestsEmpty(c *ui.Context, p *palette) {
+func (a *app) requestsEmpty(c *ui.Context, p *palette, st store) {
+	// A search that matched nothing is not a proxy with no traffic.
+	if a.search != "" {
+		emptyState(c, p, iconList, "No matches",
+			"Nothing captured matches this search. Clear it to see every exchange.", "")
+		return
+	}
+	// The command names the address this daemon listens on, so it can be
+	// copied as it stands.
+	addr := st.status.ProxyAddr
+	if addr == "" {
+		addr = "127.0.0.1:8080"
+	}
 	emptyState(c, p, iconList, "No traffic yet",
 		"Point a client at the proxy and send a request. Every exchange shows up here as it happens.",
-		"export HTTP_PROXY=http://127.0.0.1:8080")
+		"export HTTP_PROXY=http://"+addr)
 }
 
 // chosenRequestID is the request the table's choice names, "" for none.
@@ -492,10 +516,22 @@ func (a *app) headerRows(c *ui.Context, p *palette, list []api.HeaderField, m ap
 		ui.Text(c, "None").FontSize(13).TextColor(p.faint)
 		return
 	}
+	// The column is as wide as its longest name, within reason, so a long
+	// name is not cut short and a short set does not push its values away.
+	longest := 0
+	for _, h := range list {
+		longest = max(longest, len(h.Name))
+	}
+	if len(list) == 0 {
+		for name := range m {
+			longest = max(longest, len(name))
+		}
+	}
+	nameW := min(max(float32(longest)*monoAdvance+4, 96), 240)
 	ui.Column(c).FillWidth().Children(func() {
 		draw := func(name, value string) {
-			ui.Row(c).FillWidth().Gap(12).AlignItems(ui.Start).Padding(3, 0).Children(func() {
-				ui.Text(c, name).FontSize(12).Font(mono()).TextColor(p.muted).SingleLine().Width(150).Shrink(0)
+			ui.Row(c).FillWidth().Gap(16).AlignItems(ui.Start).Padding(3, 0).Children(func() {
+				ui.Text(c, name).FontSize(12).Font(mono()).TextColor(p.muted).SingleLine().Width(nameW).Shrink(0).Tooltip(name)
 				dataText(c, p, value).LineHeight(1.5).Shrink(1).MinWidth(40)
 			})
 		}
@@ -696,11 +732,26 @@ func (a *app) ruleTraceSection(c *ui.Context, p *palette, traces []api.RuleTrace
 				}
 			})
 		}
+		// What the rule did closes the pipeline: its parameters as rows, a
+		// name and its value, as the rule's overview sets them, rather
+		// than as one line that runs off the pane.
 		for i, act := range tr.Actions {
-			node(fmt.Sprintf("act:%s:%s:%d", tr.RuleID, tr.Phase, i), p.accent, func() {
+			node(fmt.Sprintf("act:%s:%s:%d", tr.RuleID, tr.Phase, i), p.text.Mix(p.muted, 0.4), func() {
 				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 					ui.Text(c, string(act.Type)).FontSize(12).FontWeight(600).Font(mono()).TextColor(p.text).SingleLine().Shrink(0)
-					ui.Text(c, actionParams(act)).FontSize(12).Font(mono()).TextColor(p.muted).SingleLine().Shrink(1).MinWidth(20)
+					tag(c, p, "action")
+				})
+				keys := sortedKeys(act.Params)
+				if len(keys) == 0 {
+					return
+				}
+				ui.Column(c).FillWidth().Gap(3).Padding(4, 0, 0).Children(func() {
+					for _, k := range keys {
+						ui.Row(c.Key("param:" + k)).FillWidth().Gap(10).AlignItems(ui.Start).Children(func() {
+							ui.Text(c, k).FontSize(12).Font(mono()).TextColor(p.muted).SingleLine().Width(96).Shrink(0)
+							dataText(c, p, paramValue(act.Params[k])).LineHeight(1.5).Shrink(1).MinWidth(40).Selectable()
+						})
+					}
 				})
 			})
 		}

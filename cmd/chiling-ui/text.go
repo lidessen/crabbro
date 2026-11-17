@@ -14,6 +14,10 @@ import (
 // part that names the thing steps forward, and a figure's unit is set
 // smaller than the figure.
 
+// monoAdvance is the width of one character of the mono face at the size
+// data is set in, 12: what a column of names is measured by.
+const monoAdvance = 7.2
+
 // joiners are the marks that hold a value's parts together and carry no
 // meaning of their own.
 const joiners = `/:;=,&?@{}[]()<>|"'→`
