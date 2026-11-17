@@ -100,7 +100,10 @@ func (a *app) daemonPage(c *ui.Context, p *palette) {
 								FontSize(13).LineHeight(1.45).TextColor(p.muted).FillWidth()
 							return
 						}
-						a.fact(c, p, "Store", st.history.Path)
+						a.factRow(c, p, "Store", func() {
+							ui.RichText(c, filePathSpans(p, st.history.Path)...).Font(mono()).FontSize(12).
+								LineHeight(1.5).Shrink(1).MinWidth(30).Selectable()
+						})
 						a.factRoll(c, p, "Requests", fmt.Sprint(st.history.Requests))
 						if st.history.Retention != "" {
 							a.fact(c, p, "Retention", retentionLabel(st.history.Retention))
@@ -174,8 +177,10 @@ func (a *app) daemonHero(c *ui.Context, p *palette, st store) {
 					ui.Box(c).Size(7, 7).Radius(3.5).Background(p.added)
 					ui.Text(c, "Proxy listening on").FontSize(12).FontWeight(500).TextColor(p.muted).SingleLine()
 				})
-				ui.Text(c, st.status.ProxyAddr).FontSize(20).FontWeight(600).Font(mono()).LetterSpacing(-0.2).
-					TextColor(p.text).SingleLine().Selectable()
+				// The port is what a client is pointed at: it keeps the
+				// ink, and the host before it steps back.
+				ui.RichText(c, hostSpans(st.status.ProxyAddr, p.muted, p.text)...).FontSize(20).FontWeight(600).
+					Font(mono()).LetterSpacing(-0.2).SingleLine().Selectable()
 			})
 			ui.Spacer(c)
 			metric := func(key, label, value string, rule bool) {
@@ -231,7 +236,12 @@ func codeChip(c *ui.Context, p *palette, cmd string) {
 
 // fact is one label and its value on the daemon page.
 func (a *app) fact(c *ui.Context, p *palette, label, value string) {
-	a.factRow(c, p, label, func() { factText(c, p, value) })
+	a.factRow(c, p, label, func() {
+		if value == "" {
+			value = "—"
+		}
+		dataText(c, p, value).LineHeight(1.5).Shrink(1).MinWidth(30)
+	})
 }
 
 // factRoll is a fact whose value changes as the daemon runs: the text

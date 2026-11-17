@@ -363,15 +363,15 @@ func (a *app) traceMark(c *ui.Context, p *palette, it api.Activity, req uiReques
 func (a *app) traceRequest(c *ui.Context, p *palette, req uiRequestRow, v traceView) {
 	methodText(c, p, req.Method).Width(56)
 	ui.Row(c).Shrink(1).MinWidth(40).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, hostOf(req.URL)).FontSize(12).Font(mono()).TextColor(p.faint).SingleLine().Shrink(2).MinWidth(0)
-		ui.Text(c, pathOf(req.URL)).FontSize(12).Font(mono()).FontWeight(500).TextColor(p.text).SingleLine().Shrink(1).MinWidth(30)
+		hostText(c, hostOf(req.URL), p.faint, p.faint.Alpha(0.6)).SingleLine().Shrink(2).MinWidth(0)
+		pathText(c, p, pathOf(req.URL), 12).SingleLine().Shrink(1).MinWidth(30)
 	})
 	for _, name := range v.hits[string(req.ID)] {
 		ruleChip(c, p, name)
 	}
 	ui.Spacer(c)
 	latencyBar(c, p, req, v.maxMs)
-	ui.Text(c, latencyLabel(req)).FontSize(12).Font(mono()).TextColor(p.muted).
+	figureText(c, latencyLabel(req), 12, p.text.Mix(p.muted, 0.6), p.faint).
 		Width(50).TextAlign(ui.End).SingleLine().Shrink(0)
 	ui.Row(c).Width(40).Justify(ui.End).AlignItems(ui.Center).Shrink(0).Children(func() {
 		if req.Status == 0 {

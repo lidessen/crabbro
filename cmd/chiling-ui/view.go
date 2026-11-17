@@ -320,7 +320,7 @@ func (a *app) statusBar(c *ui.Context, p *palette) {
 				ui.Box(c.Key("conn-dot")).Width(6).Height(6).Radius(3).Background(p.added).
 					Shadow(0, 0, 0, 2, p.added.Alpha(0.16))
 				ui.Text(c, "Listening on").FontSize(12).TextColor(p.faint).SingleLine()
-				ui.Text(c, st.status.ProxyAddr).FontSize(11).Font(mono()).TextColor(p.muted).SingleLine()
+				hostText(c, st.status.ProxyAddr, p.faint, p.text.Mix(p.muted, 0.5)).FontSize(11).SingleLine()
 			})
 		}
 		if a.busy != "" {
