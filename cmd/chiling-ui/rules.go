@@ -108,7 +108,9 @@ func (a *app) ruleRow(c *ui.Context, p *palette, r api.Rule, i int) {
 		Radius(8).AlignItems(ui.Center).Label(ruleLabel(r))
 	switch {
 	case on:
-		b.Background(p.active)
+		// The chosen rule keeps a fine line of the accent round its tint,
+		// which holds the row's edge on a ground nearly its own color.
+		b.Background(p.active).InsetShadow(0, 0, 0, 1, p.accent.Alpha(0.14))
 	case b.Pressed():
 		b.Background(p.text.Alpha(0.06))
 	case b.Hovered():
@@ -251,7 +253,7 @@ func (a *app) ruleEditor(c *ui.Context, p *palette, st store, dirty bool) {
 				Clicked(func() { a.confirmDeleteRule(rule) })
 			a.ghostButton(c, "rule-revert", "Revert", iconUndo).Disabled(!dirty).
 				Clicked(func() { a.scriptDraft = a.scriptLoadedText(st.rules) })
-			a.fillButton(c, "rule-save", "Save", iconSave).Disabled(!dirty).
+			a.fillButton(c, "rule-save", "Save", iconSave, !dirty).
 				Clicked(func() { a.actSaveRule(rule, a.scriptDraft) })
 		})
 		ui.Row(c).FillWidth().Shrink(0).Padding(0, 24).Children(func() {
@@ -411,6 +413,7 @@ func (a *app) ruleCode(c *ui.Context, p *palette) {
 	} else if text := ruleCodeState.Buffer.String(); text != ruleCodeSeen {
 		a.scriptDraft, ruleCodeSeen = text, text
 	}
+	ruleCodeState.Theme = p.codeTheme(c, false)
 	ui.Column(c).Grow(1).MinHeight(0).Children(func() {
 		editor.View(c.Key("rule:yaml"), ruleCodeState).Grow(1).FillWidth().MinHeight(0).
 			Margin(8, 8, 0).Transition(editorFade)

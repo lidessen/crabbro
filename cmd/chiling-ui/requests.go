@@ -96,7 +96,10 @@ func (a *app) requestsPage(c *ui.Context, p *palette) {
 					}
 					ruled := ruledRequests(st.traj)
 					ui.Table(c, &a.reqState, cols, len(rows), func(row, col int) {
-						a.requestCell(c, p, rows[row], col, ruled[string(rows[row].ID)])
+						// A time the line above already said is held back,
+						// so the column reads by where the second turns.
+						same := row > 0 && clockOf(rows[row-1].StartedAt) == clockOf(rows[row].StartedAt)
+						a.requestCell(c, p, rows[row], col, ruled[string(rows[row].ID)], same)
 					}).FontSize(12).Grow(1).MinHeight(0).ContextMenu(func(m *ui.Menu) {
 						if id := a.chosenRequestID(rows); id != "" && m.Item("Replay "+id).Chosen() {
 							a.actReplay(id)
@@ -165,7 +168,7 @@ func (a *app) requestsToolbar(c *ui.Context, p *palette) {
 			ContentTransition(ui.ContentTransition{Numeric: true})
 		if failed > 0 {
 			ui.Text(c, "·").FontSize(12).TextColor(p.faint).SingleLine()
-			ui.Text(c, fmt.Sprintf("%d failed", failed)).FontSize(12).TextColor(p.removed).SingleLine().
+			ui.Text(c, fmt.Sprintf("%d failed", failed)).FontSize(12).FontFeatures("tnum").TextColor(p.removed).SingleLine().
 				ContentTransition(ui.ContentTransition{Numeric: true})
 		}
 		if a.bounceSearch(c) {
@@ -231,10 +234,10 @@ func ruledRequests(traj []api.Activity) map[string]bool {
 }
 
 // requestCell draws one cell of the requests table.
-func (a *app) requestCell(c *ui.Context, p *palette, r uiRequestRow, col int, ruled bool) {
+func (a *app) requestCell(c *ui.Context, p *palette, r uiRequestRow, col int, ruled, sameTime bool) {
 	switch col {
 	case 0:
-		ui.Text(c, clockOf(r.StartedAt)).FontSize(11).Font(mono()).TextColor(p.faint).SingleLine()
+		ui.Text(c, clockOf(r.StartedAt)).FontSize(11).Font(mono()).TextColor(timeTone(p, sameTime)).SingleLine()
 	case 1:
 		methodText(c, p, r.Method)
 	case 2:
@@ -268,6 +271,15 @@ func (a *app) requestCell(c *ui.Context, p *palette, r uiRequestRow, col int, ru
 		}
 		statusText(c, p, r.Status)
 	}
+}
+
+// timeTone is the color a line's time is set in: faint, and fainter still
+// when it repeats the time of the line above.
+func timeTone(p *palette, repeats bool) ui.Color {
+	if repeats {
+		return p.faint.Alpha(0.5)
+	}
+	return p.faint
 }
 
 // clockOf is an exchange's start as the clock said it, "" when the daemon
@@ -311,7 +323,9 @@ func (a *app) requestDetail(c *ui.Context, p *palette, st store, rows []uiReques
 		}
 	}
 	d, errText := st.detail, st.detailErr
-	ui.Column(c).Grow(1).MinHeight(0).BorderWidth(1, 0, 0, 0).BorderColor(p.border).Children(func() {
+	// The split draws the line between the table and the detail; a border
+	// here would double it.
+	ui.Column(c).Grow(1).MinHeight(0).Children(func() {
 		ui.Row(c).FillWidth().Shrink(0).Padding(14, 16, 4, 24).Gap(16).AlignItems(ui.Center).Children(func() {
 			ui.Column(c).Gap(3).Shrink(1).MinWidth(0).Children(func() {
 				ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
@@ -507,6 +521,7 @@ type bodyView struct {
 	contentType string
 	formatted   string
 	filename    string
+	lines       int
 	state       *editor.State
 }
 
@@ -550,11 +565,19 @@ func (a *app) bodyPane(c *ui.Context, p *palette, key, title string, body *strin
 	if v.state == nil || v.source != cacheKey {
 		buf := editor.NewBuffer(display)
 		buf.SetLanguage(editor.LanguageFor(filename))
-		v.state = &editor.State{Buffer: buf, Font: codeFont(), LineHeight: 1.6, ReadOnly: true, SoftWrap: true, NoScrollPastEnd: true, Label: title}
+		v.state = &editor.State{Buffer: buf, Font: codeFont(), LineHeight: 1.6, ReadOnly: true, SoftWrap: true, NoScrollPastEnd: true, Label: title,
+			NoActiveLine: true, NoFolding: true}
 		v.source = cacheKey
+		v.lines = strings.Count(display, "\n") + 1
 	}
-	editor.View(c.Key("body:"+key), v.state).FillWidth().Height(240).MinWidth(0).
-		Radius(6).Border(1, p.border)
+	v.state.Theme = p.codeTheme(c, true)
+	// The body lies on a sheet of its own, as the panels do, as high as
+	// its lines up to a limit; past that it scrolls.
+	h := min(max(float32(v.lines)*20+16, 56), 320)
+	ui.Box(c.Key("bodysheet:"+key)).FillWidth().Height(h).MinWidth(0).Radius(8).Border(1, p.border).
+		Background(p.surface).Shadow(0, 1, 2, 0, p.shade()).Clip().Children(func() {
+		editor.View(c.Key("body:"+key), v.state).Fill().MinWidth(0)
+	})
 }
 
 // readableBody formats JSON and HTML without loading or executing content.
