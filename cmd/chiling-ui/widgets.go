@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -252,24 +251,17 @@ func detailHead(d *api.RequestDetailResponse) string {
 	return d.Request.URL
 }
 
-// actionParams is an action's params as one line.
-func actionParams(act api.RuleAction) string {
-	parts := make([]string, 0, len(act.Params))
-	for k, v := range act.Params {
-		// JSON, not %v: a nested value would print as Go's map[...].
-		val := fmt.Sprint(v)
-		if _, plain := v.(string); !plain {
-			if b, err := json.Marshal(v); err == nil {
-				val = string(b)
-			}
-		}
-		parts = append(parts, k+"="+val)
+// paramValue is one parameter of an action as it is read: a string as
+// itself, anything else as JSON — %v would print a nested value as Go's
+// map[...].
+func paramValue(v any) string {
+	if s, ok := v.(string); ok {
+		return s
 	}
-	sort.Strings(parts)
-	if len(parts) == 0 {
-		return ""
+	if b, err := json.Marshal(v); err == nil {
+		return string(b)
 	}
-	return "(" + strings.Join(parts, ", ") + ")"
+	return fmt.Sprint(v)
 }
 
 func bodyOrNone(b *string) string {
