@@ -241,10 +241,10 @@ func (a *app) requestCell(c *ui.Context, p *palette, r uiRequestRow, col int, ru
 	case 1:
 		methodText(c, p, r.Method)
 	case 2:
-		ui.Text(c, hostOf(r.URL)).FontSize(12).Font(mono()).TextColor(p.muted).SingleLine()
+		hostText(c, hostOf(r.URL), p.muted, p.faint).SingleLine()
 	case 3:
 		ui.Row(c).Grow(1).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, pathOf(r.URL)).FontSize(12).Font(mono()).FontWeight(500).TextColor(p.text).SingleLine().Shrink(1).MinWidth(20)
+			pathText(c, p, pathOf(r.URL), 12).SingleLine().Shrink(1).MinWidth(20)
 			if ruled {
 				ruleMark(c, p, 13, true)
 			}
@@ -261,8 +261,7 @@ func (a *app) requestCell(c *ui.Context, p *palette, r uiRequestRow, col int, ru
 	case 4:
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Justify(ui.End).Children(func() {
 			latencyBar(c, p, r, reqMaxMs)
-			ui.Text(c, latencyLabel(r)).FontSize(12).Font(mono()).
-				TextColor(p.muted).Width(48).TextAlign(ui.End).SingleLine()
+			figureText(c, latencyLabel(r), 12, p.text.Mix(p.muted, 0.6), p.faint).Width(48).TextAlign(ui.End).SingleLine()
 		})
 	case 5:
 		if r.Status == 0 {
@@ -330,13 +329,17 @@ func (a *app) requestDetail(c *ui.Context, p *palette, st store, rows []uiReques
 			ui.Column(c).Gap(3).Shrink(1).MinWidth(0).Children(func() {
 				ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
 					ui.Text(c, methodLabel(row.Method)).FontSize(15).FontWeight(600).Font(mono()).TextColor(p.text).SingleLine().Shrink(0)
-					ui.Text(c, pathOf(row.URL)).FontSize(15).FontWeight(500).Font(mono()).TextColor(p.text).SingleLine().Shrink(1).MinWidth(40)
+					pathText(c, p, pathOf(row.URL), 15).SingleLine().Shrink(1).MinWidth(40).Selectable()
 				})
-				ui.Text(c, hostOf(row.URL)+"  ·  "+id).FontSize(11).Font(mono()).TextColor(p.faint).SingleLine()
+				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+					hostText(c, hostOf(row.URL), p.muted, p.faint).FontSize(11.5).SingleLine().Shrink(1).MinWidth(0)
+					ui.Text(c, id).FontSize(10.5).Font(mono()).TextColor(p.faint).Padding(1, 6).Radius(5).
+						Background(p.text.Alpha(0.045)).SingleLine().Shrink(0).Selectable()
+				})
 			})
 			ui.Spacer(c)
 			if row.Status != 0 {
-				ui.Text(c, latencyLabel(row)).FontSize(12).Font(mono()).TextColor(p.muted).SingleLine().Shrink(0)
+				figureText(c, latencyLabel(row), 13, p.muted, p.faint).SingleLine().Shrink(0)
 				// The status animates as it changes, as when the
 				// exchange completes or a replay lands.
 				ui.Text(c, fmt.Sprint(row.Status)).FontSize(20).FontWeight(600).Font(mono()).
@@ -493,7 +496,7 @@ func (a *app) headerRows(c *ui.Context, p *palette, list []api.HeaderField, m ap
 		draw := func(name, value string) {
 			ui.Row(c).FillWidth().Gap(12).AlignItems(ui.Start).Padding(3, 0).Children(func() {
 				ui.Text(c, name).FontSize(12).Font(mono()).TextColor(p.muted).SingleLine().Width(150).Shrink(0)
-				ui.Text(c, value).FontSize(12).Font(mono()).TextColor(p.text).Shrink(1).MinWidth(40)
+				dataText(c, p, value).LineHeight(1.5).Shrink(1).MinWidth(40)
 			})
 		}
 		for _, h := range list {
@@ -639,7 +642,7 @@ func (a *app) ruleTraceSection(c *ui.Context, p *palette, traces []api.RuleTrace
 			}
 			ui.Spacer(c)
 			if tr.DurationMs > 0 {
-				ui.Text(c, durationLabel(tr.DurationMs)).FontSize(11).Font(mono()).TextColor(p.faint).SingleLine()
+				figureText(c, durationLabel(tr.DurationMs), 11, p.muted, p.faint).SingleLine()
 			}
 			if !tr.Matched {
 				ui.Text(c, "did not match").FontSize(12).TextColor(p.faint).SingleLine()

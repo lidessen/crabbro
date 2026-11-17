@@ -130,7 +130,8 @@ func (a *app) ruleRow(c *ui.Context, p *palette, r api.Rule, i int) {
 					tag(c, p, "fail-closed")
 				}
 			})
-			ui.Text(c, ruleSummary(r)).FontSize(11).Font(mono()).TextColor(p.faint).SingleLine()
+			ui.RichText(c, dataSpans(ruleSummary(r), p.text.Mix(p.faint, 0.8), p.faint.Alpha(0.55))...).
+				Font(mono()).FontSize(11).SingleLine()
 		})
 		ui.Text(c, fmt.Sprint(r.Priority)).FontSize(11).Font(mono()).TextColor(p.faint).SingleLine().Shrink(0).
 			Tooltip("Priority")
@@ -393,7 +394,7 @@ func (a *app) stageBlock(c *ui.Context, p *palette, s *vmStage, n int, key strin
 			for _, k := range sortedKeys(s.With) {
 				ui.Row(c.Key("with:" + key + ":" + k)).FillWidth().Gap(10).AlignItems(ui.Start).Children(func() {
 					ui.Text(c, k).FontSize(12).Font(mono()).TextColor(p.muted).SingleLine().Width(96).Shrink(0)
-					ui.Text(c, paramString(s.With[k])).FontSize(12).Font(mono()).TextColor(p.text).Shrink(1).MinWidth(40)
+					dataText(c, p, paramString(s.With[k])).LineHeight(1.5).Shrink(1).MinWidth(40)
 				})
 			}
 		})
