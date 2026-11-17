@@ -111,8 +111,8 @@ func (a *app) recordControls(c *ui.Context, p *palette) {
 	// Read the session from the one snapshot: asking the store twice lets it
 	// change in between, and a session gone by the second look is a nil.
 	if s := st.session; s != nil && s.Recording && s.Name != "scope" {
-		ui.Row(c.Key("rec-pill")).Gap(7).AlignItems(ui.Center).Height(24).Padding(0, 10).
-			Radius(12).Background(p.removed.Alpha(0.09)).InsetShadow(0, 0, 0, 1, p.removed.Alpha(0.14)).Children(func() {
+		ui.Row(c.Key("rec-pill")).Gap(7).AlignItems(ui.Center).Height(26).Padding(0, 11).
+			Radius(13).Background(p.removed.Alpha(0.09)).InsetShadow(0, 0, 0, 1, p.removed.Alpha(0.14)).Children(func() {
 			// The dot breathes while the daemon records: 0.7s down and
 			// back, a 1.4s round, as the daemon page's does.
 			dot := ui.Box(c.Key("rec-pill-dot")).Width(7).Height(7).Radius(4).Background(p.removed).
@@ -151,6 +151,10 @@ func clockLabel(d time.Duration) string {
 // ---------------------------------------------------------------------------
 // buttons
 
+// buttonH is the height of a button: roomy enough to press without
+// aiming, and still at home in the title bar.
+const buttonH = 30
+
 type button ui.Element
 
 // Clicked reports the button was pressed this frame and runs fn then.
@@ -173,7 +177,7 @@ func (b button) Disabled(off bool) button {
 // accent would read as a second, paler primary.
 func (a *app) fillButton(c *ui.Context, key, label string, icon *ui.SVG, off bool) button {
 	p := a.pal
-	b := ui.ButtonBase(c.Key(key)).Height(26).Padding(0, 11).Gap(6).Radius(7).
+	b := ui.ButtonBase(c.Key(key)).Height(buttonH).Padding(0, 13).Gap(7).Radius(9).
 		AlignItems(ui.Center).Label(label).Tooltip(label)
 	ink := p.fillText
 	if off {
@@ -196,7 +200,7 @@ func (a *app) fillButton(c *ui.Context, key, label string, icon *ui.SVG, off boo
 		if icon != nil {
 			ui.Icon(c, icon).FontSize(13).TextColor(ink)
 		}
-		ui.Text(c, label).FontSize(12).FontWeight(600).TextColor(ink).SingleLine()
+		ui.Text(c, label).FontSize(12.5).FontWeight(500).TextColor(ink).SingleLine()
 	})
 	return button(b)
 }
@@ -217,7 +221,7 @@ func (a *app) quietButton(c *ui.Context, key, label string, icon *ui.SVG) button
 // whatever the button's state.
 func (a *app) plainButton(c *ui.Context, key, label string, icon *ui.SVG, faced bool, mark *ui.Color) button {
 	p := a.pal
-	b := ui.ButtonBase(c.Key(key)).Height(26).Padding(0, 9).Gap(6).Radius(7).
+	b := ui.ButtonBase(c.Key(key)).Height(buttonH).Padding(0, 11).Gap(7).Radius(9).
 		AlignItems(ui.Center).Label(label).Tooltip(label)
 	col := p.muted
 	if faced {

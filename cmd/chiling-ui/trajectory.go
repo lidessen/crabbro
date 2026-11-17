@@ -27,7 +27,7 @@ var trajOldest int
 
 // The measures of a line of the timeline.
 const (
-	traceRowH  = 36
+	traceRowH  = 40
 	traceTimeW = 78
 	traceRailW = 30
 )
@@ -230,7 +230,7 @@ func (a *app) traceStrip(c *ui.Context, p *palette, all []api.Activity, v traceV
 		return
 	}
 	// It sits in a shallow well, the one inset thing on the page.
-	ui.Row(c).Shrink(1).MinWidth(80).Padding(7, 12, 6).Radius(8).Background(p.text.Alpha(0.04)).Children(func() {
+	ui.Row(c).Shrink(1).MinWidth(80).Padding(7, 12, 6).Radius(10).Background(p.text.Alpha(0.04)).Children(func() {
 		ui.Box(c.Key("trace:strip")).Width(280).Height(30).Shrink(1).MinWidth(60).
 			Draw(func(pt *ui.Painter, r ui.Rect) {
 				base := r.Y + r.H - 1
@@ -307,7 +307,7 @@ func (a *app) traceLine(c *ui.Context, p *palette, it api.Activity, v traceView,
 			})
 			return
 		}
-		b := ui.ButtonBase(c.Key("traj:"+it.ID)).Grow(1).MinWidth(0).Padding(0, 10, 0, 6).Gap(10).Radius(6).
+		b := ui.ButtonBase(c.Key("traj:"+it.ID)).Grow(1).MinWidth(0).Padding(0, 10, 0, 6).Gap(10).Radius(8).
 			AlignItems(ui.Center).Label("Show the request " + it.RequestID).Tooltip("Open in Requests")
 		switch {
 		case b.Pressed():

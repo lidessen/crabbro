@@ -104,8 +104,8 @@ func (a *app) ruleList(c *ui.Context, p *palette, st store) {
 // ruleRow is one rule of the column.
 func (a *app) ruleRow(c *ui.Context, p *palette, r api.Rule, i int) {
 	on := i == a.ruleSel
-	b := ui.ButtonBase(c.Key("rule:"+string(r.ID))).FillWidth().Height(58).Padding(0, 12, 0, 20).Gap(13).
-		Radius(8).AlignItems(ui.Center).Label(ruleLabel(r))
+	b := ui.ButtonBase(c.Key("rule:"+string(r.ID))).FillWidth().Height(62).Padding(0, 14, 0, 20).Gap(13).
+		Radius(10).AlignItems(ui.Center).Label(ruleLabel(r))
 	switch {
 	case on:
 		// The chosen rule keeps a fine line of the accent round its tint,

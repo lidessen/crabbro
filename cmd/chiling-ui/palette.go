@@ -189,7 +189,7 @@ func lightPalette() *palette {
 	p := &palette{
 		editor:         ui.Hex("#fffbf4"),
 		chrome:         ui.Hex("#faf4e8"),
-		border:         ui.Hex("#ebe2d1"),
+		border:         ui.Hex("#efe7d8"),
 		hover:          ui.RGBA(0, 0, 0, 0.04),
 		active:         ui.RGBA(192, 52, 31, 0.08),
 		text:           ui.Hex("#2a1c1e"),
@@ -232,7 +232,7 @@ func applyPal(c *ui.Context) *palette {
 	t.Border = p.border
 	t.Text, t.TextMuted = p.text, p.muted
 	t.Selection = p.active
-	t.Radius = 6
+	t.Radius = 8
 	t.Spacing = 3.5
 	t.FontSize = 13
 	t.Font = fontSans
@@ -253,6 +253,9 @@ func (p *palette) quiet(c *ui.Context) {
 	// The header reads in the captions' color, so the column names label
 	// the data without outweighing it.
 	t.TextMuted = p.faint
+	// Rows get room to be read and pointed at: a line of traffic is a
+	// thing to choose, not a cell of a spreadsheet.
+	t.Spacing = 4.25
 	c.SetTheme(&t)
 }
 

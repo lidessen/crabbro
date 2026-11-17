@@ -40,7 +40,7 @@ func ruleMark(c *ui.Context, p *palette, size float32, on bool) {
 // from what it names. Groups are told apart by space and a hairline, not
 // by boxes.
 func caption(c *ui.Context, p *palette, title string) ui.Element {
-	return ui.Text(c, title).FontSize(12).FontWeight(600).TextColor(p.faint).SingleLine()
+	return ui.Text(c, title).FontSize(12).FontWeight(500).TextColor(p.faint).SingleLine()
 }
 
 // hairline is the rule between two groups.
@@ -53,7 +53,7 @@ func hairline(c *ui.Context, p *palette) ui.Element {
 // segmented controls would: the window has one way to choose among views.
 func (a *app) words(c *ui.Context, key string, sel *int, labels ...string) ui.Element {
 	p := a.pal
-	return ui.Row(c.Key(key)).Gap(20).Height(30).AlignItems(ui.Stretch).Shrink(0).Children(func() {
+	return ui.Row(c.Key(key)).Gap(22).Height(34).AlignItems(ui.Stretch).Shrink(0).Children(func() {
 		for i, label := range labels {
 			on := *sel == i
 			b := ui.ButtonBase(c.Key(fmt.Sprint(key, ":", i))).AlignItems(ui.Center).Label(label)
@@ -84,7 +84,7 @@ func (a *app) words(c *ui.Context, key string, sel *int, labels ...string) ui.El
 // no color of its own; a quiet wash sets it apart from the text around it.
 func tag(c *ui.Context, p *palette, label string) ui.Element {
 	return ui.Text(c, label).FontSize(11).Font(mono()).TextColor(p.muted).
-		Padding(1, 6).Radius(5).Background(p.text.Alpha(0.055)).SingleLine().Shrink(0)
+		Padding(2, 7).Radius(6).Background(p.text.Alpha(0.055)).SingleLine().Shrink(0)
 }
 
 // stateDot is a state said plainly: a small dot in its color, and the word
@@ -101,7 +101,7 @@ func stateDot(c *ui.Context, p *palette, col ui.Color, label string) {
 // hairline round it and a soft shadow under it. It is what gives a page a
 // surface to read on rather than a bare ground.
 func panel(c *ui.Context, p *palette) ui.Element {
-	return ui.Column(c).Background(p.editor).Border(1, p.border).Radius(10).
+	return ui.Column(c).Background(p.editor).Border(1, p.border).Radius(12).
 		Shadow(0, 1, 2, 0, p.shade()).Clip()
 }
 
@@ -110,8 +110,8 @@ func panel(c *ui.Context, p *palette) ui.Element {
 // statuses has a shape to scan and a failure stands out of it.
 func statusText(c *ui.Context, p *palette, status int) ui.Element {
 	tone := statusTone(p, status)
-	return ui.Text(c, fmt.Sprint(status)).FontSize(11).FontWeight(600).Font(mono()).
-		TextColor(tone).Padding(2, 6).Radius(5).Background(tone.Alpha(p.wash())).SingleLine().Shrink(0)
+	return ui.Text(c, fmt.Sprint(status)).FontSize(11).FontWeight(500).Font(mono()).
+		TextColor(tone).Padding(2.5, 7).Radius(6).Background(tone.Alpha(p.wash())).SingleLine().Shrink(0)
 }
 
 // methodText is a request's verb as a small mono chip: GET, the common
@@ -121,8 +121,8 @@ func methodText(c *ui.Context, p *palette, method string) ui.Element {
 	if method == "GET" || method == "CONNECT" || method == "" {
 		col, bg = p.muted, p.text.Alpha(0.045)
 	}
-	return ui.Text(c, methodLabel(method)).FontSize(11).FontWeight(600).Font(mono()).
-		TextColor(col).Padding(2, 6).Radius(5).Background(bg).TextAlign(ui.Center).SingleLine().Shrink(0)
+	return ui.Text(c, methodLabel(method)).FontSize(11).FontWeight(500).Font(mono()).
+		TextColor(col).Padding(2.5, 7).Radius(6).Background(bg).TextAlign(ui.Center).SingleLine().Shrink(0)
 }
 
 // ruleChip names a rule that applied to a request: its bolt and its name
@@ -149,7 +149,7 @@ func emptyStateWith(c *ui.Context, p *palette, icon *ui.SVG, title, help, cmd st
 		ui.Text(c, title).FontSize(15).FontWeight(600).TextColor(p.text).Margin(6, 0, 0, 0).SingleLine()
 		ui.Text(c, help).FontSize(13).TextColor(p.muted).TextAlign(ui.Center).LineHeight(1.5).MaxWidth(340)
 		if cmd != "" {
-			ui.Text(c, cmd).FontSize(12).Font(mono()).TextColor(p.muted).Padding(5, 10).Radius(6).
+			ui.Text(c, cmd).FontSize(12).Font(mono()).TextColor(p.muted).Padding(7, 12).Radius(8).
 				Background(p.text.Alpha(0.045)).InsetShadow(0, 0, 0, 1, p.text.Alpha(0.05)).
 				Margin(2, 0, 0).SingleLine().Selectable()
 		}

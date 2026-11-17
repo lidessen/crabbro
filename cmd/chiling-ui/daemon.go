@@ -225,7 +225,7 @@ func badge(c *ui.Context, p *palette, tone ui.Color, label string) {
 
 // codeChip is a command to run, set in mono on a quiet wash.
 func codeChip(c *ui.Context, p *palette, cmd string) {
-	ui.Text(c, cmd).FontSize(12).Font(mono()).TextColor(p.text).Padding(7, 10).Radius(6).
+	ui.Text(c, cmd).FontSize(12).Font(mono()).TextColor(p.text).Padding(8, 12).Radius(8).
 		Background(p.text.Alpha(0.05)).InsetShadow(0, 0, 0, 1, p.text.Alpha(0.05)).FillWidth().Selectable()
 }
 
@@ -283,7 +283,7 @@ func (a *app) factList(c *ui.Context, p *palette, label string, items []string) 
 // the margin.
 func (a *app) factRow(c *ui.Context, p *palette, label string, value func()) {
 	row := ui.Row(c.Key("fact:"+label)).FillWidth().Gap(10).AlignItems(ui.Center).
-		Padding(3, 6).Margin(-3, -6).Radius(6)
+		Padding(3, 6).Margin(-3, -6).Radius(7)
 	if row.Hovered() {
 		row.Background(p.hover)
 	}
