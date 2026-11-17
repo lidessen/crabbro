@@ -112,10 +112,11 @@ func (a *app) recordControls(c *ui.Context, p *palette) {
 	// change in between, and a session gone by the second look is a nil.
 	if s := st.session; s != nil && s.Recording && s.Name != "scope" {
 		ui.Row(c.Key("rec-pill")).Gap(7).AlignItems(ui.Center).Height(24).Padding(0, 10).
-			Radius(12).Background(p.removed.Alpha(0.1)).Children(func() {
+			Radius(12).Background(p.removed.Alpha(0.09)).InsetShadow(0, 0, 0, 1, p.removed.Alpha(0.14)).Children(func() {
 			// The dot breathes while the daemon records: 0.7s down and
 			// back, a 1.4s round, as the daemon page's does.
-			dot := ui.Box(c.Key("rec-pill-dot")).Width(7).Height(7).Radius(4).Background(p.removed)
+			dot := ui.Box(c.Key("rec-pill-dot")).Width(7).Height(7).Radius(4).Background(p.removed).
+				Shadow(0, 0, 0, 2.5, p.removed.Alpha(0.18))
 			dot.Opacity(dot.Keyframes("breathe", []ui.Keyframe{
 				{Value: 1},
 				{At: 700 * time.Millisecond, Value: 0.35, Ease: ui.EaseInOut},
@@ -166,24 +167,36 @@ func (b button) Disabled(off bool) button {
 }
 
 // fillButton is the primary button: the accent as its background, white
-// text on it, as Mayoi's are.
-func (a *app) fillButton(c *ui.Context, key, label string, icon *ui.SVG) button {
+// text on it, as Mayoi's are. It stands a little off the page — lit along
+// its top edge, a soft shadow of its own color under it. With nothing to
+// act on (off) it gives the color up and waits as a plain face: a washed
+// accent would read as a second, paler primary.
+func (a *app) fillButton(c *ui.Context, key, label string, icon *ui.SVG, off bool) button {
 	p := a.pal
 	b := ui.ButtonBase(c.Key(key)).Height(26).Padding(0, 11).Gap(6).Radius(7).
-		AlignItems(ui.Center).Label(label).Tooltip(label).
-		Background(p.fill).TextColor(p.fillText)
-	switch {
-	case b.Pressed():
-		b.Background(p.fillPressed)
-	case b.Hovered():
-		b.Background(p.fillHover)
+		AlignItems(ui.Center).Label(label).Tooltip(label)
+	ink := p.fillText
+	if off {
+		ink = p.faint
+		b.Background(p.text.Alpha(0.05)).Disabled(true)
+	} else {
+		under := p.fill.Mix(black, 0.5)
+		b.Background(p.fill).
+			InsetShadow(0, 1, 0, 0, ui.RGBA(255, 255, 255, 0.18)).
+			Shadow(0, 1, 2.5, 0, under.Alpha(0.28))
+		switch {
+		case b.Pressed():
+			b.Background(p.fillPressed).Shadow(0, 0, 1, 0, under.Alpha(0.2))
+		case b.Hovered():
+			b.Background(p.fillHover)
+		}
 	}
 	b.Transition(hoverFade)
 	b.Children(func() {
 		if icon != nil {
-			ui.Icon(c, icon).FontSize(13).TextColor(p.fillText)
+			ui.Icon(c, icon).FontSize(13).TextColor(ink)
 		}
-		ui.Text(c, label).FontSize(12).FontWeight(600).TextColor(p.fillText).SingleLine()
+		ui.Text(c, label).FontSize(12).FontWeight(600).TextColor(ink).SingleLine()
 	})
 	return button(b)
 }
@@ -209,6 +222,7 @@ func (a *app) plainButton(c *ui.Context, key, label string, icon *ui.SVG, faced 
 	col := p.muted
 	if faced {
 		b.Background(p.surface).Border(1, p.border)
+		p.lift(ui.Element(b))
 		col = p.text
 	}
 	switch {
@@ -274,7 +288,7 @@ func (a *app) offlinePage(c *ui.Context, p *palette, st store) {
 		ui.Text(c, "The daemon isn't running").FontSize(15).FontWeight(600).TextColor(p.text).Margin(6, 0, 0, 0).SingleLine()
 		ui.Text(c, "Capture, rules and MITM live in chilingd. Start it and this window picks up where it left off.").
 			FontSize(13).TextColor(p.muted).TextAlign(ui.Center).LineHeight(1.5).MaxWidth(380)
-		a.fillButton(c, "offline-start", "Start chilingd", iconPlay).Clicked(func() { a.actStartDaemon() })
+		a.fillButton(c, "offline-start", "Start chilingd", iconPlay, false).Clicked(func() { a.actStartDaemon() })
 		if st.connErr != "" {
 			ui.Text(c, st.connErr).FontSize(11).Font(mono()).TextColor(p.faint).TextAlign(ui.Center).MaxWidth(520)
 		}
@@ -299,7 +313,8 @@ func (a *app) statusBar(c *ui.Context, p *palette) {
 		} else {
 			// The one place the window says where the proxy listens.
 			ui.Row(c).Gap(7).AlignItems(ui.Center).Children(func() {
-				ui.Box(c.Key("conn-dot")).Width(6).Height(6).Radius(3).Background(p.added)
+				ui.Box(c.Key("conn-dot")).Width(6).Height(6).Radius(3).Background(p.added).
+					Shadow(0, 0, 0, 2, p.added.Alpha(0.16))
 				ui.Text(c, "Listening on").FontSize(12).TextColor(p.faint).SingleLine()
 				ui.Text(c, st.status.ProxyAddr).FontSize(11).Font(mono()).TextColor(p.muted).SingleLine()
 			})

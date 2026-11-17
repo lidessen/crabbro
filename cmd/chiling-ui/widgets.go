@@ -17,7 +17,8 @@ import (
 // emptyMark is the mark an empty page is known by: its icon in the accent,
 // on a soft square of the same.
 func emptyMark(c *ui.Context, p *palette, icon *ui.SVG) {
-	ui.Row(c).Size(44, 44).Center().Radius(12).Background(p.accent.Alpha(0.1)).Children(func() {
+	ui.Row(c).Size(44, 44).Center().Radius(12).Background(p.accent.Alpha(0.09)).
+		InsetShadow(0, 0, 0, 1, p.accent.Alpha(0.16)).Children(func() {
 		ui.Icon(c, icon).FontSize(20).TextColor(p.accent)
 	})
 }
@@ -67,7 +68,9 @@ func (a *app) words(c *ui.Context, key string, sel *int, labels ...string) ui.El
 			under = b.Animate("under", under, 160*time.Millisecond)
 			b.Children(func() {
 				ui.Text(c, label).FontSize(13).FontWeight(500).TextColor(col).SingleLine()
-				ui.Box(c).Absolute().Left(0).Right(0).Bottom(2).Height(2).Radius(1).
+				// The stroke rests on the hairline under the row of words,
+				// as the title bar's does on its own.
+				ui.Box(c).Absolute().Left(0).Right(0).Bottom(-1).Height(2).Radius(1).
 					Background(p.accent.Alpha(under))
 			})
 			if b.Clicked() {
@@ -88,7 +91,8 @@ func tag(c *ui.Context, p *palette, label string) ui.Element {
 // beside it in the text's own. Color marks the state; it does not fill it.
 func stateDot(c *ui.Context, p *palette, col ui.Color, label string) {
 	ui.Row(c).Gap(6).AlignItems(ui.Center).Shrink(0).Children(func() {
-		ui.Box(c).Size(6, 6).Radius(3).Background(col)
+		// The dot keeps a faint halo of its own color, as a lamp does.
+		ui.Box(c).Size(6, 6).Radius(3).Background(col).Shadow(0, 0, 0, 2, col.Alpha(0.16))
 		ui.Text(c, label).FontSize(13).TextColor(p.muted).SingleLine()
 	})
 }
@@ -146,7 +150,8 @@ func emptyStateWith(c *ui.Context, p *palette, icon *ui.SVG, title, help, cmd st
 		ui.Text(c, help).FontSize(13).TextColor(p.muted).TextAlign(ui.Center).LineHeight(1.5).MaxWidth(340)
 		if cmd != "" {
 			ui.Text(c, cmd).FontSize(12).Font(mono()).TextColor(p.muted).Padding(5, 10).Radius(6).
-				Background(p.text.Alpha(0.045)).Margin(2, 0, 0).SingleLine()
+				Background(p.text.Alpha(0.045)).InsetShadow(0, 0, 0, 1, p.text.Alpha(0.05)).
+				Margin(2, 0, 0).SingleLine().Selectable()
 		}
 		if act != nil {
 			ui.Row(c).Margin(4, 0, 0).Children(act)

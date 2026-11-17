@@ -4,7 +4,59 @@ import (
 	"os"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/egoist/mygo/ui/editor"
 )
+
+// lift stands a faced control on the shadow the panels have, so a button
+// reads as a thing above the page rather than an outline on it; on the
+// dark appearance it is lit along its top edge as well.
+func (p *palette) lift(e ui.Element) ui.Element {
+	e.Shadow(0, 1, 1.5, 0, p.shade())
+	if p.dark {
+		e.InsetShadow(0, 1, 0, 0, ui.RGBA(255, 255, 255, 0.045))
+	}
+	return e
+}
+
+// codeThemes keeps the code theme of each ground, by the appearance and
+// the face it was made for, so an editor is handed the same theme frame
+// after frame.
+var codeThemes = map[[2]bool]*editor.Theme{}
+
+// codeTheme colors code in the window's own voices rather than a borrowed
+// scheme: keys in the teal, strings in the amber, numbers in the blue of
+// what changed, and the accent kept for the few words that act. sheet is
+// code read on a face of its own, as a body is, rather than edited on the
+// page: it has no caret to mark a line or pair brackets round.
+func (p *palette) codeTheme(c *ui.Context, sheet bool) *editor.Theme {
+	key := [2]bool{p.dark, sheet}
+	if t := codeThemes[key]; t != nil {
+		return t
+	}
+	t := editor.DefaultTheme(c.Theme())
+	if sheet {
+		t.Background, t.MatchingBracket = p.surface, ui.Transparent
+	}
+	t.LineNumber = p.faint.Alpha(0.6)
+	t.ActiveLineNumber = p.muted
+	t.ActiveLine = p.text.Alpha(0.035)
+	t.IndentGuide = p.text.Alpha(0.07)
+	t.ActiveIndentGuide = p.text.Alpha(0.18)
+	t.Cursor = p.accent
+	tok := func(col ui.Color, kinds ...editor.TokenKind) {
+		for _, k := range kinds {
+			t.Tokens[k].Color = col
+		}
+	}
+	tok(p.teal(), editor.TokenProperty, editor.TokenAttribute, editor.TokenType)
+	tok(p.warning(), editor.TokenString, editor.TokenRegexp, editor.TokenLink, editor.TokenCode)
+	tok(p.changed, editor.TokenNumber, editor.TokenConstant, editor.TokenEscape, editor.TokenFunction, editor.TokenHeading)
+	tok(p.accent, editor.TokenKeyword, editor.TokenTag, editor.TokenMeta)
+	tok(p.faint, editor.TokenOperator, editor.TokenPunctuation, editor.TokenComment)
+	t.Tokens[editor.TokenComment].Italic = true
+	codeThemes[key] = t
+	return t
+}
 
 // teal is the second voice beside the coral accent: it tints what the
 // coral would otherwise share with the errors, as POST does.

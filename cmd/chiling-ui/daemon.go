@@ -25,7 +25,7 @@ func (a *app) daemonPage(c *ui.Context, p *palette) {
 					ui.Column(c).FillWidth().Gap(8).Children(func() {
 						ui.Text(c, st.connErr).FontSize(13).TextColor(p.removed).FillWidth()
 						ui.Row(c).Gap(8).Margin(2, 0, 0, 0).Children(func() {
-							a.fillButton(c, "daemon-start", "Start chilingd", iconPlay).
+							a.fillButton(c, "daemon-start", "Start chilingd", iconPlay, false).
 								Clicked(func() { a.actStartDaemon() })
 						})
 						ui.Text(c, "Or run chiling daemon start to choose the proxy address and MITM.").FontSize(13).TextColor(p.muted).FillWidth()
@@ -226,7 +226,7 @@ func badge(c *ui.Context, p *palette, tone ui.Color, label string) {
 // codeChip is a command to run, set in mono on a quiet wash.
 func codeChip(c *ui.Context, p *palette, cmd string) {
 	ui.Text(c, cmd).FontSize(12).Font(mono()).TextColor(p.text).Padding(7, 10).Radius(6).
-		Background(p.text.Alpha(0.05)).FillWidth().Selectable()
+		Background(p.text.Alpha(0.05)).InsetShadow(0, 0, 0, 1, p.text.Alpha(0.05)).FillWidth().Selectable()
 }
 
 // fact is one label and its value on the daemon page.
@@ -307,7 +307,8 @@ func factText(c *ui.Context, p *palette, value string) ui.Element {
 // breathes between full and faint, and, when the desktop asks for less
 // motion, sits still at full.
 func recDot(c *ui.Context, p *palette) {
-	dot := ui.Box(c.Key("rec-dot")).Size(7, 7).Radius(4).Background(p.removed)
+	dot := ui.Box(c.Key("rec-dot")).Size(7, 7).Radius(4).Background(p.removed).
+		Shadow(0, 0, 0, 2.5, p.removed.Alpha(0.18))
 	k := dot.Keyframes("breathe", []ui.Keyframe{
 		{Value: 1},
 		{At: 1100 * time.Millisecond, Value: 0.35, Ease: ui.EaseInOut},

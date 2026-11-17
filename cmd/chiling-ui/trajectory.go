@@ -104,7 +104,8 @@ func (a *app) trajectoryPage(c *ui.Context, p *palette) {
 								a.traceGap(c, p, it.ID, gap)
 							}
 						}
-						a.traceLine(c, p, it, v, i == 0, i == len(steps)-1)
+						same := i > 0 && steps[i-1].At.Local().Format("15:04:05") == it.At.Local().Format("15:04:05")
+						a.traceLine(c, p, it, v, i == 0, i == len(steps)-1, same)
 					}
 					if fetched >= trajFetch {
 						ui.Text(c, fmt.Sprintf("The latest %d steps.", trajFetch)).FontSize(11).
@@ -200,7 +201,7 @@ func (a *app) traceHeader(c *ui.Context, p *palette, st store, all []api.Activit
 					if n == 1 {
 						word = one
 					}
-					ui.Text(c, fmt.Sprintf("%d %s", n, word)).FontSize(12).TextColor(col).SingleLine().
+					ui.Text(c, fmt.Sprintf("%d %s", n, word)).FontSize(12).FontFeatures("tnum").TextColor(col).SingleLine().
 						ContentTransition(ui.ContentTransition{Numeric: true})
 				}
 				part(requests, "request", "requests", p.muted)
@@ -281,12 +282,12 @@ func (a *app) traceGap(c *ui.Context, p *palette, id string, gap time.Duration) 
 
 // traceLine is one line of the timeline: its time in the margin, its mark
 // on the rail, and what it was.
-func (a *app) traceLine(c *ui.Context, p *palette, it api.Activity, v traceView, first, last bool) {
+func (a *app) traceLine(c *ui.Context, p *palette, it api.Activity, v traceView, first, last, sameTime bool) {
 	req, hasReq := v.byID[it.RequestID]
 	capture := hasReq && isCapture(it)
 	ui.Row(c.Key("step:" + it.ID)).FillWidth().Height(traceRowH).AlignItems(ui.Stretch).Children(func() {
 		ui.Row(c).Width(traceTimeW).Shrink(0).AlignItems(ui.Center).Justify(ui.End).Children(func() {
-			ui.Text(c, it.At.Local().Format("15:04:05")).FontSize(11).Font(mono()).TextColor(p.faint).SingleLine()
+			ui.Text(c, it.At.Local().Format("15:04:05")).FontSize(11).Font(mono()).TextColor(timeTone(p, sameTime)).SingleLine()
 		})
 		ui.Box(c).Width(traceRailW).Shrink(0).Children(func() {
 			top, bottom := float32(0), float32(0)
