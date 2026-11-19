@@ -17,8 +17,10 @@ import (
 	"path/filepath"
 
 	"github.com/lidessen/crabbro/internal/api"
+	"github.com/lidessen/crabbro/internal/capture"
 	"github.com/lidessen/crabbro/internal/decision"
 	"github.com/lidessen/crabbro/internal/fixture"
+	"github.com/lidessen/crabbro/internal/gateway"
 	"github.com/lidessen/crabbro/internal/history"
 	"github.com/lidessen/crabbro/internal/inspect"
 	"github.com/lidessen/crabbro/internal/mitm"
@@ -26,6 +28,8 @@ import (
 	"github.com/lidessen/crabbro/internal/proxy"
 	"github.com/lidessen/crabbro/internal/ring"
 	"github.com/lidessen/crabbro/internal/rule"
+	"github.com/lidessen/crabbro/internal/secret"
+	"github.com/lidessen/crabbro/internal/session"
 	"github.com/lidessen/crabbro/internal/shared"
 	"github.com/lidessen/crabbro/internal/version"
 )
@@ -49,12 +53,14 @@ func run() error {
 	mitmEnabled := flag.Bool("mitm", false, "Enable HTTPS MITM interception on startup")
 	mitmAllow := flag.String("mitm-allow", "", "Comma-separated list of allowed domain patterns for MITM")
 	mitmDeny := flag.String("mitm-deny", "", "Comma-separated list of denied domain patterns for MITM")
-	decisionProvider := flag.String("decision-provider", "", "Decision provider: jev or openai (default from env)")
-	decisionBase := flag.String("decision-base-url", "", "Decision API base URL (default from env)")
-	decisionModel := flag.String("decision-model", "", "Decision model name (default from env)")
 	historyPath := flag.String("history", "", "SQLite history path (default: history.db next to the socket; 'off' disables)")
 	historyRetention := flag.Duration("history-retention", shared.DefaultHistoryRetention, "How long to keep captured exchanges")
 	historyMax := flag.Int("history-max-rows", shared.DefaultHistoryMaxRows, "Maximum stored exchanges")
+	gatewayAddr := flag.String("gateway-addr", shared.DefaultGatewayAddr, "Listen address for the multi-protocol LLM/Decision gateway ('off' disables)")
+	gatewayToken := flag.String("gateway-token", "", "Bearer/API token for gateway requests (required when binding non-loopback)")
+	gatewayCapture := flag.String("gateway-capture", "preview", "Gateway exchange capture mode: preview, metadata-only, or off")
+	gatewayMaxBody := flag.Int64("gateway-max-request-body", shared.DefaultMaxGatewayRequestBody, "Maximum gateway request body size in bytes")
+	gatewayUsageRetention := flag.Duration("gateway-usage-retention", shared.DefaultGatewayUsageRetention, "How long to retain gateway usage records")
 	flag.Parse()
 
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
@@ -69,11 +75,12 @@ func run() error {
 	ruleStore := rule.NewRuleStore()
 	ruleEngine := rule.NewRuleEngine()
 	homeDir := filepath.Dir(expandDaemonPath(*udsPath))
+	secretStore := secret.New(filepath.Join(homeDir, "secrets"))
 	rulesDir := rule.OpenDir(filepath.Join(homeDir, "rules"))
 	if diags, complete := rulesDir.Sync(ruleStore); !complete {
 		log.Printf("rules: %d file diagnostics", len(diags))
 	}
-	pluginMgr, err := plugin.NewManager(filepath.Join(homeDir, "plugins"))
+	pluginMgr, err := plugin.NewManager(filepath.Join(homeDir, "plugins"), secretStore)
 	if err != nil {
 		log.Printf("plugins: %v", err)
 	} else {
@@ -132,18 +139,22 @@ func run() error {
 			*mitmEnabled, mitmHandler.Matcher.AllowPatterns(), mitmHandler.Matcher.DenyPatterns())
 	}
 
-	// Start proxy.
-	pxy := proxy.New(*proxyAddr, rb, ruleStore, ruleEngine)
-	if pxy.Sessions != nil && pxy.EventHub != nil {
-		pxy.Sessions.SetObserver(func(a shared.Activity) {
-			pxy.EventHub.Emit(&shared.Event{
-				Type:      shared.EventActivity,
-				RequestID: shared.RequestID(a.RequestID),
-				Timestamp: a.At,
-				Payload:   a,
-			})
+	// Shared exchange observation sink.
+	bodyCache := capture.NewBodyCache(shared.MaxBodyCacheBytes, shared.MaxBodySize)
+	eventHub := capture.NewEventHub()
+	sessions := session.New(1024)
+	sessions.SetObserver(func(a shared.Activity) {
+		eventHub.Emit(&shared.Event{
+			Type:      shared.EventActivity,
+			RequestID: shared.RequestID(a.RequestID),
+			Timestamp: a.At,
+			Payload:   a,
 		})
-	}
+	})
+	sink := capture.NewDefaultSink(rb, bodyCache, eventHub, sessions, nil)
+
+	// Start proxy.
+	pxy := proxy.NewWithSink(*proxyAddr, sink, ruleStore, ruleEngine)
 
 	// Wire MITM to proxy (if configured) and publish one policy snapshot.
 	// An empty allowlist denies interception.
@@ -176,48 +187,30 @@ func run() error {
 	ruleCountFn := ruleStore.Count
 
 	// Start control API.
-	apiSrv := api.New(*udsPath, *tcpAddr, rb, pxy.BodyCache, pxy.EventHub, fixtureStore, ruleStore, ruleEngine, pxy.Addr(), mitmHandler)
+	apiSrv := api.New(*udsPath, *tcpAddr, rb, bodyCache, eventHub, fixtureStore, ruleStore, ruleEngine, pxy.Addr(), mitmHandler)
 	apiSrv.Version = "0.1.0"
 	apiSrv.RequestCountFn = pxy.RequestCount
 	apiSrv.RuleCountFn = ruleCountFn
-	apiSrv.Sessions = pxy.Sessions
+	apiSrv.Sessions = sessions
+	apiSrv.Secrets = secretStore
 	apiSrv.PublishMITM = func() { pxy.PublishFromMITM() }
 	apiSrv.Replay = func(req shared.VerifyRequest) (shared.VerifyResult, error) {
 		return pxy.Replay(string(req.RequestID), req.ExpectStatus, req.ExpectBodyContains)
 	}
-	decCfg := decision.FromEnv()
-	if *decisionProvider != "" {
-		decCfg.Provider = *decisionProvider
-	}
-	if *decisionBase != "" {
-		decCfg.BaseURL = *decisionBase
-	}
-	if *decisionModel != "" {
-		decCfg.Model = *decisionModel
-	}
-	apiSrv.Decision = decision.New(decCfg)
 	apiSrv.RulesDir = rulesDir
 	inspectRT := inspect.NewRuntime(filepath.Join(homeDir, "scope"))
-	inspectRT.Scopes = pxy.Sessions
+	inspectRT.Scopes = sessions
 	pxy.Inspect = inspectRT
 	apiSrv.Inspect = inspectRT
 	if pluginMgr != nil {
-		pluginMgr.Decision = apiSrv.Decision
 		apiSrv.Plugins = pluginMgr
-		sinkPath := filepath.Join(homeDir, "decision-sink.json")
-		if err := decision.WriteSink(sinkPath, decision.Sink{
-			Instance: "local", Principal: "crabbrod", Endpoint: decCfg.BaseURL,
-			Model: decCfg.Model, Provider: decCfg.Provider, Credential: "decision-api-key",
-		}); err != nil {
-			log.Printf("decision sink: %v", err)
-		}
 	}
 	if histPath := resolveHistoryPath(*historyPath, *udsPath); histPath != "" {
 		hist, err := history.Open(histPath, *historyRetention, *historyMax)
 		if err != nil {
 			log.Printf("history: %v", err)
 		} else {
-			pxy.History = hist
+			sink.History = hist
 			apiSrv.History = hist
 			log.Printf("history: %s (retention %s, max %d)", histPath, historyRetention.String(), *historyMax)
 			defer hist.Close()
@@ -232,7 +225,55 @@ func run() error {
 		log.Printf("control API token: %s", tokenPath)
 	}
 
+	var gw *gateway.Gateway
+	if gAddr := strings.TrimSpace(*gatewayAddr); gAddr != "" && !strings.EqualFold(gAddr, "off") && !strings.EqualFold(gAddr, "disabled") {
+		switch *gatewayCapture {
+		case "preview", "metadata-only", "off":
+		default:
+			pxy.Stop()
+			return fmt.Errorf("invalid --gateway-capture %q (expected preview|metadata-only|off)", *gatewayCapture)
+		}
+		var gErr error
+		gw, gErr = gateway.New(gateway.Options{
+			ListenAddr:     gAddr,
+			Token:          *gatewayToken,
+			CaptureMode:    *gatewayCapture,
+			MaxRequestBody: *gatewayMaxBody,
+			UsageRetention: *gatewayUsageRetention,
+			RootDir:        filepath.Join(homeDir, "gateway"),
+		}, secretStore, sink)
+		if gErr != nil {
+			pxy.Stop()
+			return fmt.Errorf("initializing gateway: %w", gErr)
+		}
+		if err := gw.Start(); err != nil {
+			_ = gw.Stop()
+			pxy.Stop()
+			return fmt.Errorf("starting gateway: %w", err)
+		}
+		apiSrv.Gateway = gw
+		decClient := decision.New(gw, "decision")
+		apiSrv.Decision = decClient
+		if pluginMgr != nil {
+			pluginMgr.Decision = decClient
+			st := decClient.Status()
+			sinkPath := filepath.Join(homeDir, "decision-sink.json")
+			if err := decision.WriteSink(sinkPath, decision.Sink{
+				Instance: "local", Principal: "crabbrod", Endpoint: "gateway://route/decision",
+				Model: st.Model, Provider: st.Provider,
+			}); err != nil {
+				log.Printf("decision sink: %v", err)
+			}
+		}
+		log.Printf("gateway addr:   %s (capture=%s)", gw.Addr(), *gatewayCapture)
+	} else {
+		log.Printf("gateway:        disabled")
+	}
+
 	if err := apiSrv.Start(); err != nil {
+		if gw != nil {
+			_ = gw.Stop()
+		}
 		pxy.Stop()
 		return fmt.Errorf("starting control API: %w", err)
 	}
@@ -246,6 +287,11 @@ func run() error {
 	log.Printf("received signal %v, shutting down", sig)
 
 	// Graceful shutdown.
+	if gw != nil {
+		if err := gw.Stop(); err != nil {
+			log.Printf("gateway shutdown error: %v", err)
+		}
+	}
 	if err := pxy.Stop(); err != nil {
 		log.Printf("proxy shutdown error: %v", err)
 	}

@@ -60,6 +60,12 @@ type store struct {
 	mitmKnown bool
 	history   api.HistoryStatus
 	lastEvent int64
+
+	gwStatus  api.GatewayStatusResponse
+	gwPlans   []api.GatewayPlanStatus
+	gwRoutes  []api.GatewayRouteStatus
+	gwUsage   api.GatewayUsageResponse
+	gwSecrets []api.SecretSummary
 }
 
 // app is the state of the Crabbro window: the client of the daemon, the
@@ -97,15 +103,21 @@ type app struct {
 	ruleShownID      string
 	ruleEditMode     int // 0 overview, 1 code
 	scriptDraft      string
-	section          int // the daemon pane's segmented choice
-	sessionName      string
+	section       int // the daemon pane's segmented choice
+	sessionName   string
+	reqKindIdx    int // 0: all, 1: proxy, 2: gateway
+	gwUsageWinIdx int // 0: 1h, 1: 24h, 2: 7d
+	gwSecretName  string
+	gwSecretVal   string
 
 	// mirror* are the view thread's search, hidden switch and page as of the
 	// last frame, under mu: the sync goroutine reads these, never the fields
 	// the widgets write.
-	mirrorSearch string
-	mirrorHidden bool
-	mirrorPage   string
+	mirrorSearch   string
+	mirrorHidden   bool
+	mirrorPage     string
+	mirrorKind     string
+	mirrorUsageWin string
 	trajAt       time.Time
 	notes        []string
 	busy         string // what an action is doing, shown in the status bar
@@ -116,7 +128,13 @@ type app struct {
 var hoverFade = ui.ElementTransition{Colors: true, Duration: 150 * time.Millisecond}
 
 func newApp(c *client.Client, ctx context.Context) *app {
-	a := &app{c: c, ctx: ctx, page: pageTrajectory}
+	a := &app{
+		c:              c,
+		ctx:            ctx,
+		page:           pageTrajectory,
+		gwUsageWinIdx:  1,
+		mirrorUsageWin: "24h",
+	}
 	a.refresh = make(chan refreshMsg, 1)
 	return a
 }
@@ -160,7 +178,46 @@ func (a *app) drainQueue() {
 func (a *app) mirrorView() {
 	a.mu.Lock()
 	a.mirrorSearch, a.mirrorHidden, a.mirrorPage = a.search, a.showHidden, a.page
+	a.mirrorKind = kindForIndex(a.reqKindIdx)
+	a.mirrorUsageWin = windowForIndex(a.gwUsageWinIdx)
 	a.mu.Unlock()
+}
+
+func kindForIndex(idx int) string {
+	switch idx {
+	case 1:
+		return "proxy"
+	case 2:
+		return "gateway"
+	default:
+		return ""
+	}
+}
+
+func windowForIndex(idx int) string {
+	switch idx {
+	case 0:
+		return "1h"
+	case 2:
+		return "7d"
+	default:
+		return "24h"
+	}
+}
+
+func (a *app) currentKind() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.mirrorKind
+}
+
+func (a *app) currentUsageWindow() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.mirrorUsageWin == "" {
+		return "24h"
+	}
+	return a.mirrorUsageWin
 }
 
 func (a *app) setServices(sv ui.Services) {
@@ -290,12 +347,17 @@ func (a *app) snapshot(ctx context.Context, query string) error {
 	if query == "" {
 		query = currentQuery(a)
 	}
-	reqs, reqErr := a.c.SearchRequests(ctx, query, client.RequestQuery{Limit: requestListLimit, All: a.showHiddenNow()})
+	reqs, reqErr := a.c.SearchRequests(ctx, query, client.RequestQuery{Limit: requestListLimit, All: a.showHiddenNow(), Kind: a.currentKind()})
 	traceReqs, _ := a.traceRequests(ctx, query, reqs, reqErr)
 	rules, _ := a.c.ListRules(ctx)
 	mitm, mitmErr := a.c.CAStatus(ctx)
 	hist, _ := a.c.History(ctx)
 	traj, _ := a.c.Activity(ctx, "", "", trajFetch)
+	gwSt, gwStErr := a.c.GatewayStatus(ctx)
+	gwPlans, gwPlansErr := a.c.ListGatewayPlans(ctx)
+	gwRoutes, gwRoutesErr := a.c.ListGatewayRoutes(ctx)
+	gwUsage, gwUsageErr := a.c.GatewayUsage(ctx, a.currentUsageWindow(), "")
+	gwSecrets, gwSecretsErr := a.c.ListSecrets(ctx)
 
 	a.mu.Lock()
 	a.st.status = status
@@ -312,6 +374,21 @@ func (a *app) snapshot(ctx context.Context, query string) error {
 	a.st.history = hist
 	a.st.traj = reverseActivity(traj.Items)
 	a.st.traceReqs = traceReqs
+	if gwStErr == nil {
+		a.st.gwStatus = gwSt
+	}
+	if gwPlansErr == nil {
+		a.st.gwPlans = gwPlans
+	}
+	if gwRoutesErr == nil {
+		a.st.gwRoutes = gwRoutes
+	}
+	if gwUsageErr == nil {
+		a.st.gwUsage = gwUsage
+	}
+	if gwSecretsErr == nil {
+		a.st.gwSecrets = gwSecrets
+	}
 	a.mu.Unlock()
 	a.invalidate()
 	return nil
@@ -367,7 +444,8 @@ func (a *app) follow(ctx context.Context, events <-chan api.Event) {
 			// Events drive the lists; the tick is the safety net, and the
 			// uptime on the daemon page. Off that page it runs every third.
 			ticks++
-			if a.currentPage() == pageDaemon || ticks%3 == 0 {
+			pg := a.currentPage()
+			if pg == pageDaemon || pg == pageGateway || ticks%3 == 0 {
 				a.refreshNow(ctx)
 			}
 		case <-ctx.Done():
@@ -383,12 +461,17 @@ func (a *app) refreshNow(ctx context.Context) {
 	query := currentQuery(a)
 
 	status, err := a.c.Status(ctx)
-	reqs, reqErr := a.c.SearchRequests(ctx, query, client.RequestQuery{Limit: requestListLimit, All: a.showHiddenNow()})
+	reqs, reqErr := a.c.SearchRequests(ctx, query, client.RequestQuery{Limit: requestListLimit, All: a.showHiddenNow(), Kind: a.currentKind()})
 	rules, rulesErr := a.c.ListRules(ctx)
 	sess, sessErr := a.c.CurrentSession(ctx)
 	scope, hasScope := a.scopeIfNeeded(ctx, sess)
 	mitm, mitmErr := a.c.CAStatus(ctx)
 	traceReqs, traceErr := a.traceRequests(ctx, query, reqs, reqErr)
+	gwSt, gwStErr := a.c.GatewayStatus(ctx)
+	gwPlans, gwPlansErr := a.c.ListGatewayPlans(ctx)
+	gwRoutes, gwRoutesErr := a.c.ListGatewayRoutes(ctx)
+	gwUsage, gwUsageErr := a.c.GatewayUsage(ctx, a.currentUsageWindow(), "")
+	gwSecrets, gwSecretsErr := a.c.ListSecrets(ctx)
 
 	a.mu.Lock()
 	if err == nil {
@@ -416,6 +499,21 @@ func (a *app) refreshNow(ctx context.Context) {
 	}
 	if traceErr == nil {
 		a.st.traceReqs = traceReqs
+	}
+	if gwStErr == nil {
+		a.st.gwStatus = gwSt
+	}
+	if gwPlansErr == nil {
+		a.st.gwPlans = gwPlans
+	}
+	if gwRoutesErr == nil {
+		a.st.gwRoutes = gwRoutes
+	}
+	if gwUsageErr == nil {
+		a.st.gwUsage = gwUsage
+	}
+	if gwSecretsErr == nil {
+		a.st.gwSecrets = gwSecrets
 	}
 	a.mu.Unlock()
 
@@ -478,6 +576,8 @@ func (a *app) applyEvent(ev api.Event) {
 		a.invalidate()
 	case api.EventMITMEnabled, api.EventMITMDisabled:
 		a.nudge("")
+	case api.EventGatewayConfigChanged, api.EventGatewayPlanHealthChanged:
+		a.nudgeLater()
 	default:
 		// request_started … request_failed, rule_evaluated, rule_applied:
 		// the list shows the row, the detail shows the exchange.
@@ -664,6 +764,79 @@ func (a *app) actStartDaemon() {
 			a.setBusy("")
 			if err != nil {
 				a.note("daemon: %v", err)
+			}
+			a.nudge("")
+		})
+	}()
+}
+
+func (a *app) actResetCooldown(planID string) {
+	a.setBusy("clearing cooldown")
+	go func() {
+		err := a.c.ResetGatewayPlanCooldown(a.ctx, planID)
+		a.post(func() {
+			a.setBusy("")
+			if err != nil {
+				a.note("reset cooldown: %v", err)
+			} else {
+				a.note("cleared cooldown for %s", planID)
+			}
+			a.nudge("")
+		})
+	}()
+}
+
+func (a *app) actReloadGateway() {
+	a.setBusy("reloading gateway")
+	go func() {
+		complete, diags, err := a.c.ReloadGateway(a.ctx)
+		a.post(func() {
+			a.setBusy("")
+			switch {
+			case err != nil:
+				a.note("gateway reload: %v", err)
+			case !complete && len(diags) > 0:
+				a.note("gateway reloaded with %d diagnostic(s)", len(diags))
+			default:
+				a.note("gateway config reloaded")
+			}
+			a.nudge("")
+		})
+	}()
+}
+
+func (a *app) actSaveSecret(name, val string) {
+	if name == "" || val == "" {
+		a.note("secret name and value are required")
+		return
+	}
+	a.setBusy("saving secret")
+	go func() {
+		err := a.c.SetSecret(a.ctx, name, val)
+		a.post(func() {
+			a.setBusy("")
+			a.gwSecretVal = ""
+			if err != nil {
+				a.note("save secret: %v", err)
+			} else {
+				a.gwSecretName = ""
+				a.note("saved secret %s", name)
+			}
+			a.nudge("")
+		})
+	}()
+}
+
+func (a *app) actDeleteSecret(name string) {
+	a.setBusy("deleting secret")
+	go func() {
+		err := a.c.DeleteSecret(a.ctx, name)
+		a.post(func() {
+			a.setBusy("")
+			if err != nil {
+				a.note("delete secret: %v", err)
+			} else {
+				a.note("deleted secret %s", name)
 			}
 			a.nudge("")
 		})

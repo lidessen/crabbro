@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/lidessen/crabbro/internal/history"
+	"github.com/lidessen/crabbro/internal/capture"
 	"github.com/lidessen/crabbro/internal/inspect"
 	"github.com/lidessen/crabbro/internal/mitm"
 	"github.com/lidessen/crabbro/internal/ring"
@@ -25,9 +25,7 @@ import (
 // emits lifecycle events.
 type Proxy struct {
 	ListenAddr  string
-	RingBuffer  *ring.RequestBuffer
-	BodyCache   *BodyCache
-	EventHub    *EventHub
+	Sink        capture.ExchangeSink
 	RuleStore   *rule.RuleStore
 	RuleEngine  *rule.RuleEngine
 	ReadTimeout time.Duration
@@ -39,9 +37,7 @@ type Proxy struct {
 	// read the field. CONNECT routing uses Policy.
 	MITMEnabled bool
 
-	Policy   PolicyStore
-	Sessions *session.Store
-	History  *history.Store
+	Policy PolicyStore
 	// Inspect attributes exchanges and applies view scope. Nil keeps the
 	// proxy behavior from before inspection existed.
 	Inspect *inspect.Runtime
@@ -71,18 +67,37 @@ func remoteAddr(s string) net.Addr {
 	return a
 }
 
+// New creates a new Proxy backed by a default ExchangeSink.
 func New(addr string, rb *ring.RequestBuffer, ruleStore *rule.RuleStore, ruleEngine *rule.RuleEngine) *Proxy {
+	sink := capture.NewDefaultSink(
+		rb,
+		capture.NewBodyCache(shared.MaxBodyCacheBytes, shared.MaxBodySize),
+		capture.NewEventHub(),
+		session.New(1024),
+		nil,
+	)
+	return NewWithSink(addr, sink, ruleStore, ruleEngine)
+}
+
+// NewWithSink creates a new Proxy emitting observations through sink.
+func NewWithSink(addr string, sink capture.ExchangeSink, ruleStore *rule.RuleStore, ruleEngine *rule.RuleEngine) *Proxy {
 	return &Proxy{
 		ListenAddr:  addr,
-		RingBuffer:  rb,
-		BodyCache:   NewBodyCache(shared.MaxBodyCacheBytes, shared.MaxBodySize),
-		EventHub:    NewEventHub(),
+		Sink:        sink,
 		RuleStore:   ruleStore,
 		RuleEngine:  ruleEngine,
 		ReadTimeout: 30 * time.Second,
-		Sessions:    session.New(1024),
 		tunnels:     map[net.Conn]struct{}{},
 	}
+}
+
+// DefaultSink returns the underlying DefaultSink when Sink is one, or nil.
+func (p *Proxy) DefaultSink() *capture.DefaultSink {
+	if p == nil || p.Sink == nil {
+		return nil
+	}
+	ds, _ := p.Sink.(*capture.DefaultSink)
+	return ds
 }
 
 // PublishPolicy stores one immutable network policy and mirrors Enabled onto

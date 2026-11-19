@@ -36,6 +36,7 @@ func cmdDaemonStart(cfg *clientConfig, args []string) error {
 	mitmOn := fs.Bool("mitm", false, "Enable HTTPS MITM")
 	allow := fs.String("mitm-allow", "", "Comma-separated MITM allow patterns")
 	proxyAddr := fs.String("proxy-addr", shared.DefaultProxyAddr, "Proxy listen address")
+	gatewayAddr := fs.String("gateway-addr", shared.DefaultGatewayAddr, "Gateway listen address ('off' disables)")
 	fs.Parse(args)
 
 	if err := cmdDaemonStop(cfg); err != nil && !os.IsNotExist(err) {
@@ -46,6 +47,9 @@ func cmdDaemonStart(cfg *clientConfig, args []string) error {
 		return err
 	}
 	argv := []string{"--proxy-addr", *proxyAddr, "--uds-path", cfg.UDS, "--tcp-addr", cfg.TCP}
+	if *gatewayAddr != "" && *gatewayAddr != shared.DefaultGatewayAddr {
+		argv = append(argv, "--gateway-addr", *gatewayAddr)
+	}
 	if *mitmOn {
 		argv = append(argv, "--mitm")
 	}

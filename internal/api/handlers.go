@@ -42,6 +42,11 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		resp.MITMEnabled = s.MITMHandler.Enabled()
 		resp.MITMCertInstalled = s.MITMHandler.CertInstalled()
 	}
+	if s.Gateway != nil {
+		st := s.Gateway.Status()
+		resp.GatewayEnabled = st.Enabled
+		resp.GatewayAddr = st.ListenAddr
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -170,6 +175,7 @@ func (s *Server) handleRequests(w http.ResponseWriter, r *http.Request) {
 		"session":   q.Get("session"),
 		"type":      q.Get("type"),
 		"initiator": q.Get("initiator"),
+		"kind":      q.Get("kind"),
 	})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, shared.ErrCodeBadRequest, "invalid filter",
@@ -204,9 +210,14 @@ func (s *Server) handleRequests(w http.ResponseWriter, r *http.Request) {
 		status := req.Status
 		durationMs := req.DurationMs
 
+		kind := req.Kind
+		if kind == "" {
+			kind = "proxy"
+		}
 		sum := shared.RequestSummary{
 			ID:           req.ID,
 			StartedAt:    req.StartedAt.Format(time.RFC3339Nano),
+			Kind:         kind,
 			Method:       req.Method,
 			URL:          req.URL,
 			Status:       status,
@@ -219,6 +230,11 @@ func (s *Server) handleRequests(w http.ResponseWriter, r *http.Request) {
 			sum.ResourceType = req.Attribution.ResourceType
 			sum.InitiatorURL = req.Attribution.InitiatorURL
 			sum.SourceID = req.Attribution.SourceID
+		}
+		if req.Gateway != nil {
+			sum.GatewayPlan = req.Gateway.ChosenPlan
+			sum.GatewayModel = req.Gateway.ChosenModel
+			sum.GatewayRoute = req.Gateway.RouteID
 		}
 		summaries = append(summaries, sum)
 	}

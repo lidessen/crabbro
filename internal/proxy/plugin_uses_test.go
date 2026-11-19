@@ -13,6 +13,7 @@ import (
 	"github.com/lidessen/crabbro/internal/plugin"
 	"github.com/lidessen/crabbro/internal/ring"
 	"github.com/lidessen/crabbro/internal/rule"
+	"github.com/lidessen/crabbro/internal/secret"
 )
 
 func TestPluginUsesSignsThroughProxy(t *testing.T) {
@@ -29,7 +30,8 @@ func TestPluginUsesSignsThroughProxy(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	mgr, err := plugin.NewManager(t.TempDir())
+	secStore := secret.New(t.TempDir())
+	mgr, err := plugin.NewManager(t.TempDir(), secStore)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +43,7 @@ func TestPluginUsesSignsThroughProxy(t *testing.T) {
 	if _, err := mgr.Install(src, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := mgr.PutSecret("partner", "topsecret"); err != nil {
+	if err := secStore.Set("partner", "topsecret"); err != nil {
 		t.Fatal(err)
 	}
 	if err := mgr.AddInstance("hmac", "primary", nil, map[string]string{"partner_hmac": "partner"}); err != nil {

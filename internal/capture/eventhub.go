@@ -1,4 +1,4 @@
-package proxy
+package capture
 
 import (
 	"sync"
@@ -16,11 +16,6 @@ type subscriber struct {
 
 // EventHub broadcasts events and retains a short ring so a client can resume
 // after a dropped stream. It is safe for concurrent use.
-//
-// IDs start at 1. Subscribe (and SubscribeAfter with a negative cursor) is
-// live-only. SubscribeAfter(n) with n >= 0 replays events whose ID is greater
-// than n, then continues live. The ring keeps the last 512 events; a longer
-// gap needs a fresh snapshot from the list endpoints.
 type EventHub struct {
 	mu          sync.Mutex
 	next        int64
@@ -33,8 +28,7 @@ func NewEventHub() *EventHub {
 	return &EventHub{}
 }
 
-// Subscribe creates a live-only subscription. Events emitted before this call
-// are not replayed. Slow subscribers miss events rather than blocking the proxy.
+// Subscribe creates a live-only subscription.
 func (eh *EventHub) Subscribe() <-chan *shared.Event {
 	return eh.SubscribeAfter(-1)
 }
@@ -70,7 +64,6 @@ func (eh *EventHub) Unsubscribe(ch <-chan *shared.Event) {
 }
 
 // Emit assigns a monotonic ID, stores the event, and broadcasts it.
-// A nil event is ignored. Slow subscribers drop the event.
 func (eh *EventHub) Emit(event *shared.Event) {
 	if event == nil {
 		return

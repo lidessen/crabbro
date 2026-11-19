@@ -24,6 +24,7 @@ import (
 
 	"github.com/lidessen/crabbro/internal/decision"
 	"github.com/lidessen/crabbro/internal/rule"
+	"github.com/lidessen/crabbro/internal/secret"
 	"github.com/lidessen/crabbro/internal/shared"
 )
 
@@ -36,6 +37,7 @@ var ErrNoNode = errors.New("node is not installed")
 // Manager installs plugins and supervises one Node host.
 type Manager struct {
 	Dir       string
+	Secrets   *secret.Store
 	Decision  *decision.Client
 	Heartbeat time.Duration
 	IdleGrace time.Duration
@@ -81,13 +83,17 @@ func ExecHost(sock string) error {
 	return cmd.Run()
 }
 
-// NewManager opens or creates a plugin directory.
-func NewManager(dir string) (*Manager, error) {
+// NewManager opens or creates a plugin directory backed by the shared secret store.
+func NewManager(dir string, secrets *secret.Store) (*Manager, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
+	if secrets == nil {
+		secrets = secret.New(filepath.Join(filepath.Dir(dir), "secrets"))
+	}
 	m := &Manager{
 		Dir:       dir,
+		Secrets:   secrets,
 		Heartbeat: 2 * time.Second,
 		IdleGrace: 30 * time.Second,
 		HeapMB:    64,
@@ -180,7 +186,7 @@ func (m *Manager) HasInstance(pluginID, instance string) bool {
 	return in != nil && in.Enabled
 }
 
-// Secret implements rule.Runtime. The value is read from the secrets directory.
+// Secret implements rule.Runtime. The value is read from the shared secret store.
 func (m *Manager) Secret(pluginID, instance, name string) (string, error) {
 	m.mu.Lock()
 	in := m.instanceByName(pluginID, instance)
@@ -188,18 +194,15 @@ func (m *Manager) Secret(pluginID, instance, name string) (string, error) {
 	if in != nil {
 		ref = in.Credentials[name]
 	}
+	secrets := m.Secrets
 	m.mu.Unlock()
 	if ref == "" {
 		ref = name
 	}
-	if strings.Contains(ref, "/") || strings.Contains(ref, "..") {
-		return "", fmt.Errorf("invalid credential ref")
+	if secrets == nil {
+		return "", fmt.Errorf("secret store is not configured")
 	}
-	b, err := os.ReadFile(filepath.Join(m.Dir, "secrets", ref))
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(b)), nil
+	return secrets.Get(ref)
 }
 
 // Invoke implements rule.Runtime.
@@ -595,10 +598,16 @@ func (m *Manager) decisionAsk(payload map[string]any) (any, error) {
 	res, err := m.Decision.Ask(ctx, prompt, kind, options)
 	out := map[string]any{
 		"choice": res.Choice, "text": res.Text, "decisionDiagnostic": res.Diagnostic,
-		"model": res.Model, "provider": res.Provider,
+		"model": res.Model, "provider": res.Provider, "calibrated": res.Calibrated,
+	}
+	if res.Mode != "" {
+		out["mode"] = res.Mode
 	}
 	if res.Noul != nil {
 		out["noul"] = *res.Noul
+	}
+	if res.Score != nil {
+		out["score"] = *res.Score
 	}
 	return out, err
 }
@@ -761,23 +770,29 @@ func rssKB(pid int) int64 {
 	return 0
 }
 
+func secretValues(secrets map[string]string) []string {
+	if len(secrets) == 0 {
+		return nil
+	}
+	vals := make([]string, 0, len(secrets))
+	for _, v := range secrets {
+		if v != "" {
+			vals = append(vals, v)
+		}
+	}
+	return vals
+}
+
 func scrubAction(a shared.RuleAction, secrets map[string]string) shared.RuleAction {
 	if a.Params == nil {
 		return a
 	}
-	raw, err := json.Marshal(a.Params)
-	if err != nil {
+	vals := secretValues(secrets)
+	if len(vals) == 0 {
 		return a
 	}
-	s := string(raw)
-	for _, v := range secrets {
-		if v != "" {
-			s = strings.ReplaceAll(s, v, "[redacted]")
-		}
-	}
-	var params map[string]any
-	if json.Unmarshal([]byte(s), &params) == nil {
-		a.Params = params
+	if m, ok := secret.ScrubAny(a.Params, vals...).(map[string]any); ok {
+		a.Params = m
 	}
 	return a
 }
@@ -786,21 +801,14 @@ func scrubMap(m map[string]any, secrets map[string]string) map[string]any {
 	if m == nil {
 		return nil
 	}
-	raw, err := json.Marshal(m)
-	if err != nil {
-		return map[string]any{}
+	vals := secretValues(secrets)
+	if len(vals) == 0 {
+		return m
 	}
-	s := string(raw)
-	for _, v := range secrets {
-		if v != "" {
-			s = strings.ReplaceAll(s, v, "[redacted]")
-		}
+	if out, ok := secret.ScrubAny(m, vals...).(map[string]any); ok {
+		return out
 	}
-	var out map[string]any
-	if json.Unmarshal([]byte(s), &out) != nil {
-		return map[string]any{}
-	}
-	return out
+	return map[string]any{}
 }
 
 // Hooks runs onRequest for enabled plugins whose static match passes.

@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"os"
 	"time"
+
+	"github.com/lidessen/crabbro/internal/gateway/ir"
 )
 
-// Diagnostic is the safe record of one decision call. It never carries the
-// credential, request headers, or upstream body.
+// Diagnostic is the safe record of one decision call. It never carries any
+// credential, request headers, or upstream raw body.
 type Diagnostic struct {
 	Category               string `json:"category"`
 	RequestMayHaveBeenSent bool   `json:"requestMayHaveBeenSent"`
@@ -17,121 +19,107 @@ type Diagnostic struct {
 	DurationMs             int64  `json:"durationMs,omitempty"`
 }
 
-// AskResult is a validated choice or noul plus the diagnostic.
+// AskResult is a validated choice, noul, or score plus calibration metadata and diagnostics.
 type AskResult struct {
 	Choice     string     `json:"choice,omitempty"`
 	Noul       *float64   `json:"noul,omitempty"`
+	Score      *float64   `json:"score,omitempty"`
 	Text       string     `json:"text,omitempty"`
+	Calibrated bool       `json:"calibrated,omitempty"`
+	Mode       string     `json:"mode,omitempty"`
 	Diagnostic Diagnostic `json:"decisionDiagnostic"`
 	Model      string     `json:"model,omitempty"`
 	Provider   string     `json:"provider,omitempty"`
 }
 
-// Ask performs one provider call. The caller must already have removed any
-// endpoint, header, or credential the plugin tried to set. A timeout does not
-// prove the provider did not charge, and this method does not retry.
+// Ask runs one decision question (noul | choice | score) through the gateway decision route.
 func (c *Client) Ask(ctx context.Context, prompt, kind string, options []string) (AskResult, error) {
-	out := AskResult{Provider: c.cfg.Provider, Model: c.cfg.Model}
-	if c == nil || !c.cfg.Configured() {
+	st := c.Status()
+	out := AskResult{Provider: st.Provider, Model: st.Model}
+	if !st.Configured {
 		out.Diagnostic = Diagnostic{Category: "not_configured"}
 		return out, ErrNotConfigured
 	}
-	if kind == "" {
-		kind = "noul"
-	}
-	start := time.Now()
-	sent := true
-	var err error
-	switch c.cfg.Provider {
-	case "jev":
-		out, err = c.askJev(ctx, prompt, kind, options)
-	case "openai":
-		out, err = c.askOpenAI(ctx, prompt, kind, options)
+	switch kind {
+	case "":
+		kind = ir.DecisionKindNoul
+	case ir.DecisionKindNoul, ir.DecisionKindChoice, ir.DecisionKindScore:
 	default:
-		out.Diagnostic = Diagnostic{Category: "bad_provider"}
-		return out, fmt.Errorf("unknown decision provider")
+		out.Diagnostic = Diagnostic{Category: "bad_question_type"}
+		return out, fmt.Errorf("unsupported decision question kind %q", kind)
 	}
-	out.Diagnostic.DurationMs = time.Since(start).Milliseconds()
-	out.Diagnostic.RequestMayHaveBeenSent = sent
+
+	q := ir.DecisionQuestion{
+		Type:         kind,
+		Instructions: prompt,
+	}
+	switch kind {
+	case ir.DecisionKindNoul:
+		q.Criteria = map[string]string{
+			"true":  "yes / matches the condition",
+			"false": "no / does not match the condition",
+		}
+	case ir.DecisionKindChoice:
+		if len(options) > 0 {
+			m := make(map[string]string, len(options))
+			for _, opt := range options {
+				m[opt] = opt
+			}
+			q.Criteria = m
+		}
+	case ir.DecisionKindScore:
+		if len(options) >= 2 {
+			q.Criteria = options
+		} else {
+			q.Criteria = []string{"low: condition does not apply", "high: condition strongly applies"}
+		}
+	}
+
+	start := time.Now()
+	resp, err := c.invoker.InvokeDecision(ctx, c.routeID, &ir.DecisionRequest{
+		Model: st.Model,
+		State: map[string]any{"prompt": prompt, "options": options},
+		Questions: map[string]ir.DecisionQuestion{
+			"answer": q,
+		},
+	})
+	durMs := time.Since(start).Milliseconds()
 	if err != nil {
-		if out.Diagnostic.Category == "" {
-			out.Diagnostic.Category = "provider_error"
+		out.Diagnostic = Diagnostic{
+			Category:               "provider_error",
+			RequestMayHaveBeenSent: true,
+			DurationMs:             durMs,
 		}
 		return out, err
 	}
-	if out.Diagnostic.Category == "" {
-		out.Diagnostic.Category = "ok"
+
+	ans, ok := resp.Answers["answer"]
+	if !ok {
+		out.Diagnostic = Diagnostic{
+			Category:               "invalid_response",
+			RequestMayHaveBeenSent: true,
+			DurationMs:             durMs,
+		}
+		return out, fmt.Errorf("decision response missing answer")
+	}
+
+	out.Choice = ans.Choice
+	out.Noul = ans.Noul
+	out.Score = ans.Score
+	out.Calibrated = resp.Calibrated
+	out.Mode = resp.Mode
+	out.Model = firstNonEmpty(resp.Model, st.Model)
+	out.Provider = providerWithMode(st.Provider, resp.Mode)
+	out.Diagnostic = Diagnostic{
+		Category:               "ok",
+		RequestMayHaveBeenSent: true,
+		Status:                 200,
+		DurationMs:             durMs,
 	}
 	return out, nil
 }
 
-func (c *Client) askJev(ctx context.Context, prompt, kind string, options []string) (AskResult, error) {
-	q := jevQuestion{Type: kind, Instructions: prompt}
-	if kind == "choice" {
-		q.Criteria = options
-	}
-	body := jevRequest{
-		Model: c.cfg.Model,
-		State: map[string]any{"prompt": prompt},
-		Questions: map[string]jevQuestion{
-			"answer": q,
-		},
-	}
-	var resp jevResponse
-	if err := c.postJSON(ctx, c.endpoint("/v1/systemone"), body, &resp); err != nil {
-		return AskResult{Provider: "jev", Model: c.cfg.Model, Diagnostic: Diagnostic{Category: "provider_error", RequestMayHaveBeenSent: true}}, err
-	}
-	ans, ok := resp.Answers["answer"]
-	if !ok {
-		return AskResult{Provider: "jev", Diagnostic: Diagnostic{Category: "invalid_response", RequestMayHaveBeenSent: true}}, fmt.Errorf("decision response missing answer")
-	}
-	return AskResult{
-		Choice: ans.Choice, Noul: ans.Noul, Provider: "jev", Model: resp.Model,
-		Diagnostic: Diagnostic{Category: "ok", RequestMayHaveBeenSent: true, Status: 200},
-	}, nil
-}
-
-func (c *Client) askOpenAI(ctx context.Context, prompt, kind string, options []string) (AskResult, error) {
-	schema := map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"choice": map[string]any{"type": "string"},
-			"text":   map[string]any{"type": "string"},
-		},
-		"required":             []string{"choice", "text"},
-		"additionalProperties": false,
-	}
-	var parsed struct {
-		Choice string `json:"choice"`
-		Text   string `json:"text"`
-	}
-	user, _ := json.Marshal(map[string]any{"prompt": prompt, "type": kind, "options": options})
-	model, err := c.complete(ctx, "decision_ask", schema, "Answer with the schema only.", string(user), &parsed)
-	if err != nil {
-		return AskResult{Provider: "openai", Model: c.cfg.Model, Diagnostic: Diagnostic{Category: "provider_error", RequestMayHaveBeenSent: true}}, err
-	}
-	return AskResult{
-		Choice: parsed.Choice, Text: parsed.Text, Provider: "openai", Model: model,
-		Diagnostic: Diagnostic{Category: "ok", RequestMayHaveBeenSent: true, Status: 200},
-	}, nil
-}
-
-func (c *Client) endpoint(path string) string {
-	base := c.cfg.BaseURL
-	if base == "" {
-		return path
-	}
-	return stringsTrimRightSlash(base) + path
-}
-
-func stringsTrimRightSlash(s string) string {
-	for len(s) > 0 && s[len(s)-1] == '/' {
-		s = s[:len(s)-1]
-	}
-	return s
-}
-
-// Sink binds a decision instance without storing the credential.
+// Sink describes the bound decision route for diagnostics (never stores credentials).
 type Sink struct {
 	Instance      string `json:"instance"`
 	PackageDigest string `json:"packageDigest"`
@@ -142,7 +130,7 @@ type Sink struct {
 	Credential    string `json:"credential"`
 }
 
-// WriteSink writes the sink mode 0600. It refuses a symlink.
+// WriteSink writes the sink metadata mode 0600, refusing symlinks.
 func WriteSink(path string, sink Sink) error {
 	if fi, err := os.Lstat(path); err == nil && fi.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("sink path is a symlink")
@@ -154,7 +142,7 @@ func WriteSink(path string, sink Sink) error {
 	return os.WriteFile(path, append(body, '\n'), 0o600)
 }
 
-// ReadSink loads a sink file. The credential value is not in this file.
+// ReadSink loads a sink metadata file, refusing symlinks.
 func ReadSink(path string) (Sink, error) {
 	fi, err := os.Lstat(path)
 	if err != nil {

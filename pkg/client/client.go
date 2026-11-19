@@ -237,6 +237,7 @@ func (c *Client) Status(ctx context.Context) (api.DaemonStatus, error) {
 type RequestQuery struct {
 	Since     string
 	SinceTime string
+	Kind      string
 	Method    string
 	Host      string
 	Path      string
@@ -259,6 +260,7 @@ func (q RequestQuery) values() url.Values {
 	}
 	set("since", q.Since)
 	set("sinceTime", q.SinceTime)
+	set("kind", q.Kind)
 	set("method", q.Method)
 	set("host", q.Host)
 	set("path", q.Path)

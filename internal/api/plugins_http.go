@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 
+	gwconfig "github.com/lidessen/crabbro/internal/gateway/config"
 	"github.com/lidessen/crabbro/internal/rule"
 	"github.com/lidessen/crabbro/internal/shared"
 )
@@ -56,12 +58,66 @@ func (s *Server) handleRulesReload(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"complete": complete, "diagnostics": diags})
 }
 
+func isGatewayConfigKind(kind string) bool {
+	return kind == gwconfig.KindPlan || kind == gwconfig.KindRoute
+}
+
+func (s *Server) gatewayConfigStore(w http.ResponseWriter) *gwconfig.Store {
+	if s.Gateway == nil || s.Gateway.Config == nil {
+		writeError(w, http.StatusBadRequest, shared.ErrCodeBadRequest, "gateway is not configured")
+		return nil
+	}
+	return s.Gateway.Config
+}
+
 func (s *Server) handleConfigStatus(w http.ResponseWriter, r *http.Request) {
+	kind := r.URL.Query().Get("kind")
+	if isGatewayConfigKind(kind) || kind == "gateway" {
+		store := s.gatewayConfigStore(w)
+		if store == nil {
+			return
+		}
+		files, complete, err := store.Status()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, shared.ErrCodeInternal, "gateway config unreadable")
+			return
+		}
+		if isGatewayConfigKind(kind) {
+			var filtered []gwconfig.FileStatus
+			for _, f := range files {
+				if f.Kind == kind {
+					filtered = append(filtered, f)
+				}
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"complete": complete, "files": filtered})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"complete": complete, "files": files})
+		return
+	}
 	s.handleRulesDiagnose(w, r)
 }
 
 func (s *Server) handleConfigDraft(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
+	kind := r.URL.Query().Get("kind")
+	if isGatewayConfigKind(kind) {
+		store := s.gatewayConfigStore(w)
+		if store == nil {
+			return
+		}
+		body, err := io.ReadAll(io.LimitReader(r.Body, ruleMaxBody+1))
+		if err != nil || id == "" {
+			writeError(w, http.StatusBadRequest, shared.ErrCodeBadRequest, "id and body are required")
+			return
+		}
+		if err := store.Draft(kind, id, body); err != nil {
+			writeError(w, http.StatusBadRequest, shared.ErrCodeBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"id": id, "kind": kind, "draft": true})
+		return
+	}
 	if s.handleScopeDraft(w, r, id) {
 		return
 	}
@@ -83,7 +139,17 @@ func (s *Server) handleConfigDraft(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleConfigValidate(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
-	if r.URL.Query().Get("kind") == "scope" && s.Inspect != nil && s.Inspect.Durable != nil {
+	kind := r.URL.Query().Get("kind")
+	if isGatewayConfigKind(kind) {
+		store := s.gatewayConfigStore(w)
+		if store == nil {
+			return
+		}
+		diags := store.ValidateFile(kind, id)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": len(diags) == 0, "diagnostics": diags})
+		return
+	}
+	if kind == "scope" && s.Inspect != nil && s.Inspect.Durable != nil {
 		diags := s.Inspect.Durable.ValidateFile(id)
 		writeJSON(w, http.StatusOK, map[string]any{"ok": len(diags) == 0, "diagnostics": diags})
 		return
@@ -99,7 +165,20 @@ func (s *Server) handleConfigValidate(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleConfigCommit(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
-	if r.URL.Query().Get("kind") == "scope" && s.Inspect != nil && s.Inspect.Durable != nil {
+	kind := r.URL.Query().Get("kind")
+	if isGatewayConfigKind(kind) {
+		store := s.gatewayConfigStore(w)
+		if store == nil {
+			return
+		}
+		if err := store.Commit(kind, id); err != nil {
+			writeError(w, http.StatusBadRequest, shared.ErrCodeBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"id": id, "kind": kind, "committed": true})
+		return
+	}
+	if kind == "scope" && s.Inspect != nil && s.Inspect.Durable != nil {
 		if err := s.Inspect.Durable.Commit(id); err != nil {
 			writeError(w, http.StatusBadRequest, shared.ErrCodeBadRequest, "commit rejected")
 			return
@@ -135,7 +214,24 @@ func (s *Server) handleConfigCommit(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleConfigDiscard(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
-	if r.URL.Query().Get("kind") == "scope" && s.Inspect != nil && s.Inspect.Durable != nil {
+	kind := r.URL.Query().Get("kind")
+	if isGatewayConfigKind(kind) {
+		store := s.gatewayConfigStore(w)
+		if store == nil {
+			return
+		}
+		if err := store.Discard(kind, id); err != nil {
+			if os.IsNotExist(err) {
+				writeError(w, http.StatusNotFound, shared.ErrCodeNotFound, "no draft")
+				return
+			}
+			writeError(w, http.StatusBadRequest, shared.ErrCodeBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"id": id, "kind": kind, "discarded": true})
+		return
+	}
+	if kind == "scope" && s.Inspect != nil && s.Inspect.Durable != nil {
 		if err := s.Inspect.Durable.Discard(id); err != nil {
 			writeError(w, http.StatusNotFound, shared.ErrCodeNotFound, "no draft")
 			return

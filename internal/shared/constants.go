@@ -17,6 +17,15 @@ const (
 	// DefaultProxyAddr is the default address for the HTTP proxy listener.
 	DefaultProxyAddr = "localhost:8080"
 
+	// DefaultGatewayAddr is the default loopback listener for the LLM & Decision gateway.
+	DefaultGatewayAddr = api.DefaultGatewayAddr
+
+	// DefaultMaxGatewayRequestBody is the maximum request body buffered for gateway failover (32 MiB).
+	DefaultMaxGatewayRequestBody = 32 * 1024 * 1024
+
+	// DefaultGatewayUsageRetention is how long gateway accounting rows are retained.
+	DefaultGatewayUsageRetention = 90 * 24 * time.Hour
+
 	// DefaultRingBufferCapacity is the default number of requests kept in the
 	// in-memory ring buffer.
 	DefaultRingBufferCapacity = 1024

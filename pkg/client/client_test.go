@@ -13,9 +13,9 @@ import (
 	"time"
 
 	daemon "github.com/lidessen/crabbro/internal/api"
+	"github.com/lidessen/crabbro/internal/capture"
 	"github.com/lidessen/crabbro/internal/fixture"
 	"github.com/lidessen/crabbro/internal/inspect"
-	"github.com/lidessen/crabbro/internal/proxy"
 	"github.com/lidessen/crabbro/internal/ring"
 	"github.com/lidessen/crabbro/internal/rule"
 	"github.com/lidessen/crabbro/internal/session"
@@ -40,11 +40,11 @@ func TestPackagesDoNotImportInternal(t *testing.T) {
 	}
 }
 
-func testDaemon(t *testing.T) (*daemon.Server, *proxy.EventHub, *ring.RequestBuffer, *httptest.Server) {
+func testDaemon(t *testing.T) (*daemon.Server, *capture.EventHub, *ring.RequestBuffer, *httptest.Server) {
 	t.Helper()
 	rb := ring.NewRequestBuffer(32)
-	hub := proxy.NewEventHub()
-	cache := proxy.NewBodyCache(1<<20, 1<<20)
+	hub := capture.NewEventHub()
+	cache := capture.NewBodyCache(1<<20, 1<<20)
 	rules := rule.NewRuleStore()
 	engine := rule.NewRuleEngine()
 	fixtures, err := fixture.New(t.TempDir())
@@ -293,7 +293,7 @@ func TestEventStreamResume(t *testing.T) {
 	}
 }
 
-func waitSubscribers(t *testing.T, hub *proxy.EventHub, n int) {
+func waitSubscribers(t *testing.T, hub *capture.EventHub, n int) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {

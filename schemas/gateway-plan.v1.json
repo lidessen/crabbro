@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crabbro.dev/schemas/gateway-plan.v1.json",
+  "title": "Crabbro gateway plan",
+  "description": "Schema for an API-key coding plan or decision backend under ~/.crabbro/gateway/plans/<id>.yaml.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "id", "credential", "endpoints", "models"],
+  "properties": {
+    "version": { "const": 1 },
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+    "enabled": { "type": "boolean" },
+    "description": { "type": "string", "maxLength": 1024 },
+    "credential": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$" },
+    "proxyUrl": { "type": "string", "format": "uri", "pattern": "^(https?|socks5h?)://" },
+    "timeout": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ttft": { "$ref": "#/$defs/duration" },
+        "idle": { "$ref": "#/$defs/duration" }
+      }
+    },
+    "cache": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ttl": { "$ref": "#/$defs/duration" }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "rpm": { "type": "integer", "minimum": 1 },
+        "tpm": { "type": "integer", "minimum": 1 },
+        "concurrency": { "type": "integer", "minimum": 1 },
+        "windows": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["duration"],
+            "anyOf": [
+              { "required": ["maxTokens"] },
+              { "required": ["maxRequests"] }
+            ],
+            "properties": {
+              "name": { "type": "string", "minLength": 1, "maxLength": 64 },
+              "duration": { "$ref": "#/$defs/duration" },
+              "maxTokens": { "type": "integer", "minimum": 1 },
+              "maxRequests": { "type": "integer", "minimum": 1 },
+              "resetSchedule": { "type": "string", "minLength": 1, "maxLength": 64 },
+              "mode": { "enum": ["soft", "hard"] }
+            }
+          }
+        }
+      }
+    },
+    "endpoints": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "properties": {
+        "openai-chat": { "$ref": "#/$defs/endpoint" },
+        "openai-responses": { "$ref": "#/$defs/endpoint" },
+        "anthropic": { "$ref": "#/$defs/endpoint" },
+        "gemini": { "$ref": "#/$defs/endpoint" },
+        "typesafe-jev": { "$ref": "#/$defs/endpoint" }
+      }
+    },
+    "models": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 128,
+      "propertyNames": { "type": "string", "minLength": 1, "maxLength": 128 },
+      "additionalProperties": { "$ref": "#/$defs/modelSpec" }
+    }
+  },
+  "$defs": {
+    "duration": {
+      "type": "string",
+      "pattern": "^[0-9]+(ms|s|m|h|d)$"
+    },
+    "endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["baseUrl"],
+      "properties": {
+        "baseUrl": { "type": "string", "pattern": "^https?://" },
+        "authHeader": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "authPrefix": { "type": "string", "maxLength": 64 },
+        "headers": {
+          "type": "object",
+          "maxProperties": 32,
+          "additionalProperties": { "type": "string" }
+        },
+        "apiVersion": { "type": "string", "minLength": 1, "maxLength": 64 }
+      }
+    },
+    "modelSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tier": { "enum": ["fast", "strong", "frontier"] },
+        "codingScore": { "type": "number", "minimum": 0, "maximum": 1 },
+        "contextWindow": { "type": "integer", "minimum": 1024 },
+        "maxOutputTokens": { "type": "integer", "minimum": 1 },
+        "cacheTtl": { "$ref": "#/$defs/duration" },
+        "capabilities": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "tools": { "type": "boolean" },
+            "vision": { "type": "boolean" },
+            "thinking": { "type": "boolean" },
+            "structuredOutput": { "type": "boolean" },
+            "promptCache": { "type": "boolean" }
+          }
+        },
+        "extraBody": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    }
+  }
+}

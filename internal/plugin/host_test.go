@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/lidessen/crabbro/internal/rule"
+	"github.com/lidessen/crabbro/internal/secret"
 )
 
 func TestHostFrames(t *testing.T) {
@@ -89,7 +90,8 @@ func TestInstallAndSign(t *testing.T) {
 	if _, err := exec.LookPath("npm"); err != nil {
 		t.Skip("npm is not installed")
 	}
-	m, err := NewManager(t.TempDir())
+	secStore := secret.New(t.TempDir())
+	m, err := NewManager(t.TempDir(), secStore)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +104,7 @@ func TestInstallAndSign(t *testing.T) {
 	if st := m.Status(); st.Running {
 		t.Fatal("install started the host")
 	}
-	if err := m.PutSecret("partner", "topsecret"); err != nil {
+	if err := secStore.Set("partner", "topsecret"); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.AddInstance("hmac", "primary", nil, map[string]string{"partner_hmac": "partner"}); err != nil {
@@ -130,7 +132,7 @@ func TestLifecycleScriptsDoNotRun(t *testing.T) {
 		t.Skip("npm is not installed")
 	}
 	dir := t.TempDir()
-	m, err := NewManager(dir)
+	m, err := NewManager(dir, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +147,7 @@ func TestLifecycleScriptsDoNotRun(t *testing.T) {
 }
 
 func TestMissingLock(t *testing.T) {
-	m, err := NewManager(t.TempDir())
+	m, err := NewManager(t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

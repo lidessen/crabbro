@@ -11,6 +11,9 @@ const DefaultUDSPath = "~/.crabbro/proxy.sock"
 // DefaultTCPAddr is the localhost TCP fallback for the control API.
 const DefaultTCPAddr = "localhost:16379"
 
+// DefaultGatewayAddr is the loopback listener for the LLM & Decision gateway.
+const DefaultGatewayAddr = "127.0.0.1:8081"
+
 // DaemonStatus is GET /v1/status.
 type DaemonStatus = StatusResponse
 

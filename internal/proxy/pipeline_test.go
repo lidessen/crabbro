@@ -68,7 +68,7 @@ func TestPlainHTTPForwardsBodyBeyondCaptureLimit(t *testing.T) {
 			if r.RequestBodyBytes != int64(len(payload)) {
 				t.Errorf("forwarded byte count = %d, want %d", r.RequestBodyBytes, len(payload))
 			}
-			cached := pxy.BodyCache.Get(r.RequestBodyRef)
+			cached := pxy.DefaultSink().GetBody(r.RequestBodyRef)
 			if len(cached) == 0 || len(cached) >= len(payload) {
 				t.Fatalf("cached %d bytes, want a short preview", len(cached))
 			}
@@ -187,7 +187,7 @@ func TestAgentLoopRecordInspectRuleVerify(t *testing.T) {
 	rs := rule.NewRuleStore()
 	re := rule.NewRuleEngine()
 	pxy := New(":0", ring.NewRequestBuffer(32), rs, re)
-	sess := pxy.Sessions.Start("login-hunt")
+	sess := pxy.DefaultSink().Sessions.Start("login-hunt")
 	if err := pxy.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +202,7 @@ func TestAgentLoopRecordInspectRuleVerify(t *testing.T) {
 	resp.Body.Close()
 
 	var loginID string
-	for _, rec := range pxy.RingBuffer.List(0) {
+	for _, rec := range pxy.DefaultSink().List(0) {
 		if strings.Contains(rec.URL, "/v1/login") {
 			loginID = string(rec.ID)
 			if rec.SessionID != sess.ID {
@@ -214,11 +214,11 @@ func TestAgentLoopRecordInspectRuleVerify(t *testing.T) {
 		t.Fatal("login request was not recorded")
 	}
 	// Prefix resolves when it is unique.
-	if pxy.RingBuffer.Resolve(shared.RequestID(loginID)) == nil {
+	if pxy.DefaultSink().Resolve(shared.RequestID(loginID)) == nil {
 		t.Fatal("resolve failed")
 	}
 
-	captured := pxy.RingBuffer.GetByID(shared.RequestID(loginID))
+	captured := pxy.DefaultSink().RingBuffer.GetByID(shared.RequestID(loginID))
 	script := rule.Scaffold(captured, "mock", `{"token":"mocked"}`, "application/json")
 	if _, err := rs.Create("mock-login", 100, script); err != nil {
 		t.Fatal(err)

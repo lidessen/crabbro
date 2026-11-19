@@ -1,99 +1,30 @@
-// Package decision asks a configured model to judge captured flows.
-//
-// Two providers share one Go result type:
-//
-//   - jev: TypeSafe's Jev model, POST {base}/v1/systemone, questions of type
-//     noul or choice. This is the "typesafe jev" decision API.
-//   - openai: OpenAI Chat Completions, or any compatible third-party base URL,
-//     with a strict JSON schema. The response is unmarshaled into the same
-//     structs and rejected when it does not match.
-//
-// The proxy works with no key configured. Find and Draft return
-// ErrNotConfigured in that case.
+// Package decision asks a configured gateway decision route to judge captured
+// flows, draft YAML v1 rule pipelines, or answer plugin decision prompts.
 package decision
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
-	"os"
+	"net/url"
+	"sort"
 	"strings"
-	"time"
+
+	"github.com/lidessen/crabbro/internal/gateway/ir"
+	"github.com/lidessen/crabbro/internal/rule"
+	"github.com/lidessen/crabbro/internal/shared"
 )
 
-// ErrNotConfigured is returned when no decision API key is configured.
+// ErrNotConfigured is returned when no enabled gateway decision route is available.
 var ErrNotConfigured = errors.New("decision API is not configured")
 
-// Config selects a provider. Secrets come from the environment, not argv.
-type Config struct {
-	Provider string
-	BaseURL  string
-	APIKey   string
-	Model    string
+// Invoker decouples decision orchestration from concrete gateway HTTP/execution internals.
+type Invoker interface {
+	InvokeDecision(ctx context.Context, routeID string, req *ir.DecisionRequest) (*ir.DecisionResponse, error)
+	DecisionStatus(routeID string) (configured bool, provider, model, routeName string)
 }
 
-// Configured reports whether a request can be sent.
-func (c Config) Configured() bool {
-	return strings.TrimSpace(c.APIKey) != "" && (c.Provider == "jev" || c.Provider == "openai")
-}
-
-// FromEnv loads CRABBRO_DECISION_* with OPENAI_* and TYPESAFE_API_KEY fallbacks.
-// Provider defaults to jev when only a TypeSafe key is present, otherwise openai.
-func FromEnv() Config {
-	cfg := Config{
-		Provider: strings.ToLower(strings.TrimSpace(os.Getenv("CRABBRO_DECISION_PROVIDER"))),
-		BaseURL:  strings.TrimSpace(os.Getenv("CRABBRO_DECISION_BASE_URL")),
-		APIKey:   strings.TrimSpace(os.Getenv("CRABBRO_DECISION_API_KEY")),
-		Model:    strings.TrimSpace(os.Getenv("CRABBRO_DECISION_MODEL")),
-	}
-	if cfg.Provider == "" {
-		switch {
-		case os.Getenv("TYPESAFE_API_KEY") != "" && os.Getenv("OPENAI_API_KEY") == "":
-			cfg.Provider = "jev"
-		default:
-			cfg.Provider = "openai"
-		}
-	}
-	if cfg.APIKey == "" {
-		if cfg.Provider == "jev" {
-			cfg.APIKey = strings.TrimSpace(os.Getenv("TYPESAFE_API_KEY"))
-		}
-		if cfg.APIKey == "" {
-			cfg.APIKey = strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
-		}
-		if cfg.APIKey == "" {
-			cfg.APIKey = strings.TrimSpace(os.Getenv("TYPESAFE_API_KEY"))
-		}
-	}
-	if cfg.BaseURL == "" {
-		if cfg.Provider == "jev" {
-			if v := strings.TrimSpace(os.Getenv("TYPESAFE_BASE_URL")); v != "" {
-				cfg.BaseURL = v
-			} else {
-				cfg.BaseURL = "https://api.typesafe.ai"
-			}
-		} else if v := strings.TrimSpace(os.Getenv("OPENAI_BASE_URL")); v != "" {
-			cfg.BaseURL = v
-		} else {
-			cfg.BaseURL = "https://api.openai.com/v1"
-		}
-	}
-	if cfg.Model == "" {
-		if cfg.Provider == "jev" {
-			cfg.Model = "jev-latest"
-		} else {
-			cfg.Model = "gpt-4o-mini"
-		}
-	}
-	cfg.BaseURL = strings.TrimRight(cfg.BaseURL, "/")
-	return cfg
-}
-
-// Flow is one captured exchange shown to the model. Bodies are previews.
+// Flow is one captured exchange shown to the decision model. Bodies are previews.
 type Flow struct {
 	ID           string `json:"id"`
 	Method       string `json:"method"`
@@ -117,7 +48,7 @@ type FindResult struct {
 	Provider string `json:"provider"`
 }
 
-// DraftResult is a rule scaffold the model selected or wrote.
+// DraftResult is a validated YAML rule scaffold selected by the decision model.
 type DraftResult struct {
 	Name        string `json:"name"`
 	Script      string `json:"script"`
@@ -127,111 +58,229 @@ type DraftResult struct {
 	Provider    string `json:"provider"`
 }
 
-// Client calls the configured provider.
-type Client struct {
-	cfg  Config
-	HTTP *http.Client
-}
-
-// New returns a client. It does not require the config to be complete.
-func New(cfg Config) *Client {
-	return &Client{
-		cfg:  cfg,
-		HTTP: &http.Client{Timeout: 60 * time.Second},
-	}
-}
-
-// Config returns a copy of the configuration with the API key redacted.
-func (c *Client) Config() Config {
-	out := c.cfg
-	if out.APIKey != "" {
-		out.APIKey = "set"
-	}
-	return out
-}
-
-// Status is the public configuration view.
+// Status is the public configuration view of the decision route.
 type Status struct {
 	Configured bool   `json:"configured"`
 	Provider   string `json:"provider"`
-	BaseURL    string `json:"baseUrl"`
 	Model      string `json:"model"`
+	Route      string `json:"route,omitempty"`
 }
 
-// Status reports whether calls can be made, without the secret.
+// Client invokes a configured gateway decision route.
+type Client struct {
+	invoker Invoker
+	routeID string
+}
+
+// New constructs a Client routed through invoker for routeID (default "decision").
+func New(invoker Invoker, routeID string) *Client {
+	if strings.TrimSpace(routeID) == "" {
+		routeID = "decision"
+	}
+	return &Client{invoker: invoker, routeID: routeID}
+}
+
+// Status reports whether the backing gateway decision route is configured.
 func (c *Client) Status() Status {
+	if c == nil || c.invoker == nil {
+		return Status{Configured: false}
+	}
+	ok, provider, model, route := c.invoker.DecisionStatus(c.routeID)
 	return Status{
-		Configured: c.cfg.Configured(),
-		Provider:   c.cfg.Provider,
-		BaseURL:    c.cfg.BaseURL,
-		Model:      c.cfg.Model,
+		Configured: ok,
+		Provider:   provider,
+		Model:      model,
+		Route:      route,
 	}
 }
 
-// Find ranks flows against a natural-language query.
+// Find ranks flows against a natural-language query via the gateway decision route.
 func (c *Client) Find(ctx context.Context, query string, flows []Flow) (FindResult, error) {
-	if !c.cfg.Configured() {
+	st := c.Status()
+	if !st.Configured {
 		return FindResult{}, ErrNotConfigured
 	}
 	if strings.TrimSpace(query) == "" {
 		return FindResult{}, fmt.Errorf("query is required")
 	}
 	if len(flows) == 0 {
-		return FindResult{Model: c.cfg.Model, Provider: c.cfg.Provider}, nil
+		return FindResult{Model: st.Model, Provider: st.Provider}, nil
 	}
-	switch c.cfg.Provider {
-	case "jev":
-		return c.findJev(ctx, query, flows)
-	case "openai":
-		return c.findOpenAI(ctx, query, flows)
-	default:
-		return FindResult{}, fmt.Errorf("unknown decision provider %q", c.cfg.Provider)
+	if len(flows) > 32 {
+		flows = flows[len(flows)-32:]
 	}
+
+	questions := make(map[string]ir.DecisionQuestion, len(flows))
+	ids := make(map[string]string, len(flows))
+	for i, f := range flows {
+		qid := fmt.Sprintf("m_%d_%s", i, sanitizeID(f.ID))
+		ids[qid] = f.ID
+		questions[qid] = ir.DecisionQuestion{
+			Type:         ir.DecisionKindNoul,
+			Instructions: fmt.Sprintf("The user is looking for: %s. Does flow %s match that description?", query, f.ID),
+			Criteria: map[string]string{
+				"true":  "This flow matches the query",
+				"false": "This flow does not match the query",
+			},
+		}
+	}
+
+	resp, err := c.invoker.InvokeDecision(ctx, c.routeID, &ir.DecisionRequest{
+		Model:     st.Model,
+		State:     map[string]any{"query": query, "flows": flows},
+		Questions: questions,
+	})
+	if err != nil {
+		return FindResult{}, err
+	}
+
+	out := FindResult{
+		Model:    firstNonEmpty(resp.Model, st.Model),
+		Provider: providerWithMode(st.Provider, resp.Mode),
+	}
+	for qid, ans := range resp.Answers {
+		if ans.Noul == nil || *ans.Noul < 0.5 {
+			continue
+		}
+		origID, ok := ids[qid]
+		if !ok {
+			continue
+		}
+		out.Hits = append(out.Hits, Hit{
+			RequestID: origID,
+			Score:     *ans.Noul,
+			Reason:    fmt.Sprintf("decision noul %.2f for %q", *ans.Noul, query),
+		})
+	}
+	sort.Slice(out.Hits, func(i, j int) bool {
+		if out.Hits[i].Score == out.Hits[j].Score {
+			return out.Hits[i].RequestID < out.Hits[j].RequestID
+		}
+		return out.Hits[i].Score > out.Hits[j].Score
+	})
+	return out, nil
 }
 
-// Draft chooses or writes a rule for a description. flow may be nil.
+// Draft selects an appropriate rule action via the gateway decision route and
+// generates a validated YAML v1 rule pipeline.
 func (c *Client) Draft(ctx context.Context, description string, flow *Flow) (DraftResult, error) {
-	if !c.cfg.Configured() {
+	st := c.Status()
+	if !st.Configured {
 		return DraftResult{}, ErrNotConfigured
 	}
 	if strings.TrimSpace(description) == "" {
 		return DraftResult{}, fmt.Errorf("description is required")
 	}
-	switch c.cfg.Provider {
-	case "jev":
-		return c.draftJev(ctx, description, flow)
-	case "openai":
-		return c.draftOpenAI(ctx, description, flow)
-	default:
-		return DraftResult{}, fmt.Errorf("unknown decision provider %q", c.cfg.Provider)
+
+	allowedActions := []string{"mockResponse", "block", "setRequestHeader", "rewriteURL", "tag"}
+	criteria := map[string]string{
+		"mockResponse":     "Return a synthetic response without calling upstream",
+		"block":            "Reject the matching request with an error status",
+		"setRequestHeader": "Add or replace a request header before forwarding",
+		"rewriteURL":       "Rewrite the destination URL",
+		"tag":              "Attach metadata tags to matching exchanges",
 	}
+	state := map[string]any{"description": description}
+	if flow != nil {
+		state["flow"] = flow
+	}
+	resp, err := c.invoker.InvokeDecision(ctx, c.routeID, &ir.DecisionRequest{
+		Model: st.Model,
+		State: state,
+		Questions: map[string]ir.DecisionQuestion{
+			"action": {
+				Type:         ir.DecisionKindChoice,
+				Instructions: "Which single rule action best matches the description?",
+				Criteria:     criteria,
+			},
+		},
+	})
+	if err != nil {
+		return DraftResult{}, err
+	}
+	ans, ok := resp.Answers["action"]
+	if !ok || !containsString(allowedActions, ans.Choice) {
+		return DraftResult{}, fmt.Errorf("decision choice %q is not an allowed rule action", ans.Choice)
+	}
+
+	script := scaffoldYAMLRule(description, ans.Choice, flow)
+	if diags := rule.Validate(script, true, nil); len(diags) > 0 {
+		return DraftResult{}, fmt.Errorf("drafted YAML rule invalid: %s", diags[0].Message)
+	}
+
+	conf := 0.0
+	if ans.Confidence != nil {
+		conf = *ans.Confidence
+	}
+	return DraftResult{
+		Name:        "draft-" + ans.Choice,
+		Script:      script,
+		Explanation: fmt.Sprintf("decision (%s) chose %s (confidence %.2f) for %q", firstNonEmpty(resp.Mode, "native"), ans.Choice, conf, description),
+		Action:      ans.Choice,
+		Model:       firstNonEmpty(resp.Model, st.Model),
+		Provider:    providerWithMode(st.Provider, resp.Mode),
+	}, nil
 }
 
-func (c *Client) postJSON(ctx context.Context, url string, payload any, out any) error {
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return err
+func scaffoldYAMLRule(description, action string, flow *Flow) string {
+	var host, path, method string
+	if flow != nil {
+		method = flow.Method
+		if u, err := url.Parse(flow.URL); err == nil {
+			host = u.Hostname()
+			path = u.Path
+		}
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return err
+	note := strings.ReplaceAll(description, "\n", " ")
+	if len(note) > 180 {
+		note = note[:180]
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return err
+	if strings.TrimSpace(note) == "" {
+		note = "drafted via gateway decision"
 	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return err
+	return rule.ScaffoldWithNote(&shared.Request{
+		Method: method,
+		Host:   host,
+		Path:   path,
+	}, action, `{"ok":true}`, "application/json", note)
+}
+
+func sanitizeID(id string) string {
+	var b strings.Builder
+	for _, r := range id {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('_')
+		}
 	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("decision API status %d", resp.StatusCode)
+	if b.Len() == 0 {
+		return "flow"
 	}
-	if err := json.Unmarshal(raw, out); err != nil {
-		return fmt.Errorf("decision API returned invalid JSON: %w", err)
+	return b.String()
+}
+
+func containsString(list []string, target string) bool {
+	for _, item := range list {
+		if item == target {
+			return true
+		}
 	}
-	return nil
+	return false
+}
+
+func providerWithMode(provider, mode string) string {
+	if mode != "" && provider != "" {
+		return provider + ":" + mode
+	}
+	return firstNonEmpty(provider, mode)
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }

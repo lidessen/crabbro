@@ -114,48 +114,42 @@ WebSocket upgrades (`ws://` and `wss://`) are relayed after the 101, with
 optional frame rules. WebSocket over HTTP/2 (extended CONNECT) is not
 implemented.
 
-## Decision API
+## LLM & Decision Gateway
 
-Natural-language find and rule draft call an optional decision API. With no
-key, the proxy, capture, and rules still work; `find` and `rules draft` return
-a clear error.
+`crabbrod` embeds an API-key LLM & Decision Gateway on `127.0.0.1:8081` (`--gateway-addr`, or `off` to disable) alongside the forward HTTP proxy. It exposes five wire protocols (with optional `/p/{profile}` path scoping):
 
-Two providers share one Go result type. Responses are unmarshaled into those
-structs and rejected when a score, choice, or request id is out of range.
+- **Generative (`family: generative`)**:
+  - `openai-chat`: `POST /v1/chat/completions`
+  - `openai-responses`: `POST /v1/responses`
+  - `anthropic`: `POST /v1/messages`, `POST /v1/messages/count_tokens`
+  - `gemini`: `POST /v1beta/models/{model}:generateContent`, `:streamGenerateContent`
+- **Decision (`family: decision`)**:
+  - `typesafe-jev`: `POST /v1/systemone` (`noul`, `choice`, `score` — routed natively to TypeSafe backends or emulated with `allowEmulation: true` over `openai-chat`, `openai-responses`, `gemini`, or `anthropic` via structured output)
+- **Model listing**: `GET /v1/models`
 
-| Provider | What it calls | Default base URL | Default model |
-|---|---|---|---|
-| `jev` | TypeSafe Jev `POST /v1/systemone` (noul per flow, choice for the rule action) | `https://api.typesafe.ai` | `jev-latest` |
-| `openai` | Chat Completions with strict `json_schema` | `https://api.openai.com/v1` | `gpt-4o-mini` |
-
-`openai` is any OpenAI-compatible base URL, including third-party hosts.
-Jev is the TypeSafe decision model (choice, score, noul), not a chat model.
-The design docs do not name a library called “jev”; this uses the public
-TypeSafe HTTP API and, for OpenAI-compatible endpoints, structured outputs
-checked against Go structs.
+Credentials live mode `0600` in `~/.crabbro/secrets/` and are referenced by name from YAML plans and routes under `~/.crabbro/gateway/plans/*.yaml` and `~/.crabbro/gateway/routes/*.yaml` (validated with Draft 2020-12 schemas and staged/committed via `crabbro config`):
 
 ```sh
-# Jev (first-party TypeSafe, or a compatible deployment)
-export CRABBRO_DECISION_PROVIDER=jev
-export CRABBRO_DECISION_API_KEY="$TYPESAFE_API_KEY"   # TYPESAFE_API_KEY also works
-# export CRABBRO_DECISION_BASE_URL=https://api.typesafe.ai
-# export CRABBRO_DECISION_MODEL=jev-latest
+# Store credentials safely (never written into YAML files or captured history)
+crabbro secrets set glm_key --from-env GLM_API_KEY
+crabbro secrets set typesafe_key --from-env TYPESAFE_API_KEY
 
-# OpenAI or a third-party compatible endpoint
-export CRABBRO_DECISION_PROVIDER=openai
-export CRABBRO_DECISION_API_KEY="$OPENAI_API_KEY"    # OPENAI_API_KEY also works
-# export CRABBRO_DECISION_BASE_URL=https://api.openai.com/v1
-# export OPENAI_BASE_URL=https://your-host/v1
-# export CRABBRO_DECISION_MODEL=gpt-4o-mini
+# Stage, validate, and atomically commit gateway plans & routes
+crabbro config draft ./glm-plan.yaml --gateway-plan
+crabbro config validate glm-plan --gateway-plan
+crabbro config commit glm-plan --gateway-plan
+crabbro config draft ./coding-route.yaml --gateway-route
+crabbro config commit coding-route --gateway-route
 
-crabbrod   # the daemon reads the environment; the key is not a CLI flag
-crabbro decision status
-crabbro find "the login request that returns the user token"
-crabbro rules draft "mock the login response" --from req_1 --apply
+# Inspect runtime status, rolling quota windows, dry-run routing, and usage ledger
+crabbro gw status --pretty
+crabbro gw plans --pretty
+crabbro gw routes --pretty
+crabbro gw preview --protocol anthropic --model coding-main --tools --pretty
+crabbro gw usage --window 24h --pretty
 ```
 
-If only `TYPESAFE_API_KEY` is set, the provider defaults to `jev`. Otherwise it
-defaults to `openai`. `crabbro decision status` never prints the key.
+The `find`, `rules draft`, and plugin `decision.ask` helpers use the gateway's enabled `decision` route automatically (returning `decision API is not configured` when none is configured). See [docs/design/gateway.md](docs/design/gateway.md) for the full schema, `Quality × Cache × Quota` scoring, TTL-decay cache gravity, semantic tiering, and failover model.
 
 ## CLI reference
 
@@ -172,21 +166,24 @@ reads the token file itself.
 
 | Command | Purpose |
 |---|---|
-| `daemon start [--mitm] [--mitm-allow PAT] [--proxy-addr ADDR]` | Start `crabbrod` in the background |
+| `daemon start [--mitm] [--mitm-allow PAT] [--proxy-addr ADDR] [--gateway-addr ADDR]` | Start `crabbrod` in the background |
 | `daemon stop` | Stop the background daemon |
 | `status` | Daemon status |
 | `doctor [--fix] [--pretty]` | Setup checks |
 | `listen` | Live events, one JSON object per line |
 | `record start [--name N]` / `stop` / `status` | Recording session |
-| `requests list\|search` | Filter captured flows |
+| `requests list\|search [--kind proxy\|gateway]` | Filter captured flows |
 | `requests get\|show ID [--include headers,body,rule-trace] [--pretty]` | One flow. ID may be a unique prefix |
-| `find "QUERY" [--pretty]` | Decision-API search |
+| `find "QUERY" [--pretty]` | Decision-route natural-language search |
 | `verify replay ID [--expect-status N] [--expect-body-contains TEXT]` | Replay through the proxy |
+| `secrets list\|set\|delete` | Manage mode-`0600` credentials in `~/.crabbro/secrets/` |
+| `gw status\|plans\|routes\|usage\|preview\|cooldown-clear\|reload` | Gateway status, quotas, dry-run routing, and reload |
+| `config status\|draft\|validate\|commit\|discard` | Safe staging for rules, scope, `--gateway-plan`, and `--gateway-route` |
 | `rules list\|get\|create\|enable\|disable\|delete\|test` | Rule CRUD and fixture test |
 | `rules from ID [--action mock\|block\|header\|rewrite\|tag] [--name N] [--apply=false]` | Scaffold from a capture and create it |
-| `rules draft "TEXT" [--from ID] [--apply]` | Decision-API draft |
+| `rules draft "TEXT" [--from ID] [--apply]` | Decision-route draft |
 | `rules fixture save\|list\|delete` | Saved fixtures |
-| `decision status` | Whether a decision provider is configured |
+| `decision status` | Whether an enabled `decision` route is configured |
 | `history status` | SQLite history path, count, retention |
 | `history prune` | Delete expired or overflow rows |
 | `mitm status\|enable\|disable\|cert\|install-ca\|uninstall-ca` | MITM and CA |

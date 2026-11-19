@@ -68,6 +68,10 @@ func run() error {
 		return cmdHistory(cfg, flag.Args()[1:])
 	case "plugin":
 		return cmdPlugin(cfg, flag.Args()[1:])
+	case "secrets":
+		return cmdSecrets(cfg, flag.Args()[1:])
+	case "gw":
+		return cmdGateway(cfg, flag.Args()[1:])
 	case "sources":
 		return cmdSources(cfg, flag.Args()[1:])
 	case "scope":
@@ -113,7 +117,11 @@ Commands:
   plugin install <path>     Install from a directory with package-lock.json
   plugin inspect <id>       Read tools and uses (starts the worker)
   plugin invoke <p> <i> <t> Call a tool
-  config status             List rule files and drafts
+  secrets list|set|delete   Manage mode-0600 credentials under ~/.crabbro/secrets/
+  gw status|plans|routes    Inspect multi-protocol LLM & Decision gateway
+  gw usage|preview|reload   View quota usage, dry-run router, or reload config
+  gw cooldown-clear <plan>  Clear an active plan cooldown
+  config status             List rule, scope, or gateway config files and drafts
   rules list                List rules
   rules validate <file>     Check a YAML rule without loading it
   rules migrate <file.js>   Wrap a legacy script as a run stage

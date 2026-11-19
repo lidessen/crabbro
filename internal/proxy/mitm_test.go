@@ -376,8 +376,8 @@ func TestHandleMITMExchange_EmitEvents(t *testing.T) {
 	}
 	defer pxy.Stop()
 
-	sub := pxy.EventHub.Subscribe()
-	defer pxy.EventHub.Unsubscribe(sub)
+	sub := pxy.DefaultSink().EventHub.Subscribe()
+	defer pxy.DefaultSink().EventHub.Unsubscribe(sub)
 
 	clientTLS := doMITMExchange(t, pxy.Addr(), upstreamHost)
 	defer clientTLS.Close()
@@ -528,7 +528,7 @@ func TestHandleMITMExchange_BodyCached(t *testing.T) {
 
 	// Find the request record in the ring buffer.
 	var foundReq *shared.Request
-	for _, r := range pxy.RingBuffer.List(100) {
+	for _, r := range pxy.DefaultSink().List(100) {
 		if r.Intercepted && r.Scheme == "https" && r.Method == "GET" {
 			foundReq = r
 			break
@@ -540,7 +540,7 @@ func TestHandleMITMExchange_BodyCached(t *testing.T) {
 	if foundReq.ResponseBodyRef == "" {
 		t.Error("response body reference should be set")
 	} else {
-		cachedBody := pxy.BodyCache.Get(foundReq.ResponseBodyRef)
+		cachedBody := pxy.DefaultSink().GetBody(foundReq.ResponseBodyRef)
 		if cachedBody == nil {
 			t.Fatal("response body should be in cache")
 		}
@@ -605,7 +605,7 @@ func TestHandleMITMExchange_KeepAlive(t *testing.T) {
 
 	// Verify both requests are logged in the ring buffer as intercepted.
 	foundFirst, foundSecond := false, false
-	for _, r := range pxy.RingBuffer.List(100) {
+	for _, r := range pxy.DefaultSink().List(100) {
 		if !r.Intercepted || r.Method != "GET" {
 			continue
 		}
@@ -713,7 +713,7 @@ func TestHandleMITMExchange_RequestBody(t *testing.T) {
 
 	// Verify the request body was cached.
 	var foundReq *shared.Request
-	for _, r := range pxy.RingBuffer.List(100) {
+	for _, r := range pxy.DefaultSink().List(100) {
 		if r.Intercepted && r.Method == "POST" {
 			foundReq = r
 			break
@@ -725,7 +725,7 @@ func TestHandleMITMExchange_RequestBody(t *testing.T) {
 	if foundReq.RequestBodyRef == "" {
 		t.Error("request body should be cached")
 	} else {
-		cachedBody := pxy.BodyCache.Get(foundReq.RequestBodyRef)
+		cachedBody := pxy.DefaultSink().GetBody(foundReq.RequestBodyRef)
 		if string(cachedBody) != bodyContent {
 			t.Errorf("cached body = %q, want %q", string(cachedBody), bodyContent)
 		}
@@ -791,7 +791,7 @@ request:
 
 	// Verify the request record is in the ring buffer with a completed status.
 	var foundReq *shared.Request
-	for _, r := range pxy.RingBuffer.List(100) {
+	for _, r := range pxy.DefaultSink().List(100) {
 		if r.Intercepted && r.Method == "GET" {
 			foundReq = r
 			break
@@ -857,7 +857,7 @@ request:
 
 	// Verify the request is in the ring buffer with the mock status.
 	var foundReq *shared.Request
-	for _, r := range pxy.RingBuffer.List(100) {
+	for _, r := range pxy.DefaultSink().List(100) {
 		if r.Intercepted && r.Method == "GET" {
 			foundReq = r
 			break
@@ -895,8 +895,8 @@ request:
 	}
 	defer pxy.Stop()
 
-	sub := pxy.EventHub.Subscribe()
-	defer pxy.EventHub.Unsubscribe(sub)
+	sub := pxy.DefaultSink().EventHub.Subscribe()
+	defer pxy.DefaultSink().EventHub.Unsubscribe(sub)
 
 	clientTLS := doMITMExchange(t, pxy.Addr(), upstreamHost)
 	defer clientTLS.Close()
@@ -1035,8 +1035,8 @@ request:
 	}
 	defer pxy.Stop()
 
-	sub := pxy.EventHub.Subscribe()
-	defer pxy.EventHub.Unsubscribe(sub)
+	sub := pxy.DefaultSink().EventHub.Subscribe()
+	defer pxy.DefaultSink().EventHub.Unsubscribe(sub)
 
 	clientTLS := doMITMExchange(t, pxy.Addr(), upstreamHost)
 	defer clientTLS.Close()

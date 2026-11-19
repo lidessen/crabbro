@@ -220,18 +220,6 @@ func (m *Manager) RemoveInstance(pluginID, name string) error {
 	return m.save()
 }
 
-// PutSecret writes a credential file mode 0600. The name is the ref, not a path.
-func (m *Manager) PutSecret(name, value string) error {
-	if name == "" || strings.Contains(name, "/") || strings.Contains(name, "..") {
-		return fmt.Errorf("invalid secret name")
-	}
-	dir := filepath.Join(m.Dir, "secrets")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(dir, name), []byte(value), 0o600)
-}
-
 func (m *Manager) packageByID(id string) *PackageRecord {
 	for i := range m.state.Packages {
 		if m.state.Packages[i].ID == id {

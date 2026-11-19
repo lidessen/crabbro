@@ -165,7 +165,13 @@ func (a *app) chosenRequestID(rows []uiRequestRow) string {
 func (a *app) requestsToolbar(c *ui.Context, p *palette) {
 	ui.Row(c).FillWidth().Height(54).Shrink(0).Padding(0, 12).
 		Gap(10).AlignItems(ui.Center).Children(func() {
-		ui.SearchField(c, &a.search).Grow(1).Shrink(1).MinWidth(40).MaxWidth(300)
+		ui.SearchField(c, &a.search).Grow(1).Shrink(1).MinWidth(40).MaxWidth(260)
+		prevKind := a.reqKindIdx
+		a.words(c, "req-kind", &a.reqKindIdx, "All", "Proxy", "Gateway")
+		if a.reqKindIdx != prevKind {
+			a.mirrorView()
+			a.nudge(a.search)
+		}
 		wasHidden := a.showHidden
 		ui.Checkbox(c, &a.showHidden, "Show hidden").FontSize(13)
 		if a.showHidden != wasHidden {
@@ -269,6 +275,15 @@ func (a *app) requestCell(c *ui.Context, p *palette, r uiRequestRow, col int, ru
 	case 3:
 		ui.Row(c).Grow(1).Gap(8).AlignItems(ui.Center).Children(func() {
 			pathText(c, p, pathOf(r.URL), 12).SingleLine().Shrink(1).MinWidth(20)
+			if r.Kind == "gateway" {
+				lbl := "gateway"
+				if r.GatewayPlan != "" && r.GatewayModel != "" {
+					lbl = r.GatewayPlan + "/" + r.GatewayModel
+				} else if r.GatewayPlan != "" {
+					lbl = r.GatewayPlan
+				}
+				tag(c, p, lbl)
+			}
 			if ruled {
 				ruleMark(c, p, 13, true)
 			}
@@ -373,7 +388,14 @@ func (a *app) requestDetail(c *ui.Context, p *palette, st store, rows []uiReques
 			a.replayButton(c, p, id)
 		})
 		ui.Row(c).FillWidth().Shrink(0).Padding(0, 16, 0, 24).AlignItems(ui.Center).Children(func() {
-			a.words(c, "detail-tabs", &a.detailTab, detailTabs...)
+			tabs := detailTabs
+			if d != nil && d.Request.Gateway != nil {
+				tabs = append([]string(nil), detailTabs...)
+				tabs = append(tabs, "Gateway")
+			} else if a.detailTab >= len(detailTabs) {
+				a.detailTab = 0
+			}
+			a.words(c, "detail-tabs", &a.detailTab, tabs...)
 			ui.Spacer(c)
 			if a.detailTab == 1 {
 				label := "Formatted"
@@ -501,6 +523,8 @@ func (a *app) detailBody(c *ui.Context, p *palette, d *api.RequestDetailResponse
 			})
 	case 2:
 		a.ruleTraceSection(c, p, d.Request.RuleTrace)
+	case 3:
+		a.gatewayTraceSection(c, p, d.Request.Gateway)
 	default:
 		sides(c, p,
 			func() { a.headerRows(c, p, d.Request.RequestHeaderList, d.Request.RequestHeaders) },

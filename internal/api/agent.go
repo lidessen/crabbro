@@ -434,8 +434,18 @@ func filterRequests(all []*shared.Request, q map[string]string) ([]*shared.Reque
 	needle := strings.ToLower(q["q"])
 	tag := q["tag"]
 	session := q["session"]
+	kindFilter := strings.ToLower(q["kind"])
 	out := make([]*shared.Request, 0, len(all))
 	for _, req := range all {
+		if kindFilter != "" {
+			k := req.Kind
+			if k == "" {
+				k = "proxy"
+			}
+			if !strings.EqualFold(k, kindFilter) {
+				continue
+			}
+		}
 		if !sinceTime.IsZero() && req.StartedAt.Before(sinceTime) {
 			continue
 		}

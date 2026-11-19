@@ -39,14 +39,14 @@ request:
 	}
 	pxy := New(":0", ring.NewRequestBuffer(16), rs, rule.NewRuleEngine())
 	rt := inspect.NewRuntime(t.TempDir())
-	rt.Scopes = pxy.Sessions
+	rt.Scopes = pxy.DefaultSink().Sessions
 	pxy.Inspect = rt
 	if err := pxy.Start(); err != nil {
 		t.Fatal(err)
 	}
 	defer pxy.Stop()
 
-	_, scope, implicit := pxy.Sessions.EnsureScope()
+	_, scope, implicit := pxy.DefaultSink().Sessions.EnsureScope()
 	if !implicit {
 		t.Fatal("expected an implicit recording session")
 	}
@@ -89,7 +89,7 @@ request:
 		tags   []string
 	}
 	hidden := 0
-	for _, rec := range pxy.RingBuffer.List(0) {
+	for _, rec := range pxy.DefaultSink().List(0) {
 		if rec.Method == "CONNECT" {
 			continue
 		}
@@ -131,7 +131,7 @@ request:
 		t.Fatalf("hidden = %d, want image, font, and script", hidden)
 	}
 	var hiddenTagged bool
-	for _, rec := range pxy.RingBuffer.List(0) {
+	for _, rec := range pxy.DefaultSink().List(0) {
 		if rec.Hidden {
 			for _, tag := range rec.Tags {
 				if tag == "ran" {

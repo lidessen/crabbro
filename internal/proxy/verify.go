@@ -15,7 +15,10 @@ import (
 // Replay sends a captured request back through this proxy and returns the
 // new exchange plus whether it satisfied the optional expectations.
 func (p *Proxy) Replay(requestID string, expectStatus int, expectBody string) (shared.VerifyResult, error) {
-	req := p.RingBuffer.Resolve(shared.RequestID(requestID))
+	if p.Sink == nil {
+		return shared.VerifyResult{}, fmt.Errorf("request %q not found", requestID)
+	}
+	req := p.Sink.Resolve(shared.RequestID(requestID))
 	if req == nil {
 		return shared.VerifyResult{}, fmt.Errorf("request %q not found", requestID)
 	}
@@ -24,8 +27,8 @@ func (p *Proxy) Replay(requestID string, expectStatus int, expectBody string) (s
 	}
 	token := fmt.Sprintf("replay-%d", time.Now().UnixNano())
 	var body io.Reader
-	if req.RequestBodyRef != "" && p.BodyCache != nil {
-		if b := p.BodyCache.Get(req.RequestBodyRef); len(b) > 0 {
+	if req.RequestBodyRef != "" {
+		if b := p.Sink.GetBody(req.RequestBodyRef); len(b) > 0 {
 			body = bytes.NewReader(b)
 		}
 	}
@@ -63,7 +66,7 @@ func (p *Proxy) Replay(requestID string, expectStatus int, expectBody string) (s
 	result.ResponseBody = string(respBody)
 
 	var found *shared.Request
-	for _, cand := range p.RingBuffer.List(0) {
+	for _, cand := range p.Sink.List(0) {
 		if cand.RequestHeaders["X-Crabbro-Replay"] == token || headerListHas(cand, token) {
 			found = cand
 		}
@@ -88,9 +91,7 @@ func (p *Proxy) Replay(requestID string, expectStatus int, expectBody string) (s
 		result.Notes = append(result.Notes, "replay completed and no enabled rule matched")
 	}
 	result.OK = len(result.Errors) == 0
-	if p.Sessions != nil {
-		p.Sessions.Note("verify", "", string(result.ReplayRequestID), "", fmt.Sprintf("replay %s -> %d ok=%t", req.ID, result.Status, result.OK))
-	}
+	p.Sink.NoteActivity("verify", "", string(result.ReplayRequestID), "", fmt.Sprintf("replay %s -> %d ok=%t", req.ID, result.Status, result.OK))
 	return result, nil
 }
 

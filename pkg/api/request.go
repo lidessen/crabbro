@@ -67,6 +67,12 @@ type Request struct {
 
 	// Attribution is filled when the proxy can name a source, page, or resource type.
 	Attribution *Attribution `json:"attribution,omitempty"`
+
+	// Kind identifies the data plane that produced this exchange ("proxy" or "gateway").
+	Kind string `json:"kind"`
+
+	// Gateway is populated when Kind == "gateway".
+	Gateway *GatewayTrace `json:"gateway,omitempty"`
 }
 
 // Attribution identifies where a captured exchange came from.

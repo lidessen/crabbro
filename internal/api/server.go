@@ -14,15 +14,17 @@ import (
 
 	"crypto/subtle"
 
+	"github.com/lidessen/crabbro/internal/capture"
 	"github.com/lidessen/crabbro/internal/decision"
 	"github.com/lidessen/crabbro/internal/fixture"
+	"github.com/lidessen/crabbro/internal/gateway"
 	"github.com/lidessen/crabbro/internal/history"
 	"github.com/lidessen/crabbro/internal/inspect"
 	"github.com/lidessen/crabbro/internal/mitm"
 	"github.com/lidessen/crabbro/internal/plugin"
-	"github.com/lidessen/crabbro/internal/proxy"
 	"github.com/lidessen/crabbro/internal/ring"
 	"github.com/lidessen/crabbro/internal/rule"
+	"github.com/lidessen/crabbro/internal/secret"
 	"github.com/lidessen/crabbro/internal/session"
 	"github.com/lidessen/crabbro/internal/shared"
 )
@@ -32,8 +34,8 @@ type Server struct {
 	UDS          string
 	TCPAddr      string
 	RingBuffer   *ring.RequestBuffer
-	BodyCache    *proxy.BodyCache
-	EventHub     *proxy.EventHub
+	BodyCache    *capture.BodyCache
+	EventHub     *capture.EventHub
 	RuleStore    *rule.RuleStore
 	RuleEngine   *rule.RuleEngine
 	FixtureStore *fixture.FixtureStore
@@ -56,6 +58,10 @@ type Server struct {
 	Decision *decision.Client
 	// Plugins is the Node host supervisor. Nil disables plugin routes.
 	Plugins *plugin.Manager
+	// Secrets is the shared mode-0600 credential store.
+	Secrets *secret.Store
+	// Gateway is the multi-protocol LLM & Decision gateway. Nil disables it.
+	Gateway *gateway.Gateway
 	// Inspect attributes traffic and holds session scope plus durable lists.
 	Inspect *inspect.Runtime
 	// RulesDir is the on-disk rule directory. Nil disables draft/commit.
@@ -79,7 +85,7 @@ type Server struct {
 
 // New creates a new API server backed by the given proxy and store components.
 // If mitmHandler is non-nil, MITM control routes are registered during construction.
-func New(uds string, tcpAddr string, rb *ring.RequestBuffer, bodyCache *proxy.BodyCache, eventHub *proxy.EventHub, fixtureStore *fixture.FixtureStore, ruleStore *rule.RuleStore, ruleEngine *rule.RuleEngine, proxyAddr string, mitmHandler *mitm.MITMHandler) *Server {
+func New(uds string, tcpAddr string, rb *ring.RequestBuffer, bodyCache *capture.BodyCache, eventHub *capture.EventHub, fixtureStore *fixture.FixtureStore, ruleStore *rule.RuleStore, ruleEngine *rule.RuleEngine, proxyAddr string, mitmHandler *mitm.MITMHandler) *Server {
 	s := &Server{
 		UDS:          uds,
 		TCPAddr:      tcpAddr,
@@ -127,6 +133,15 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/v1/plugins/host", s.handlePluginHost)
 	s.mux.HandleFunc("/v1/plugins", s.handlePlugins)
 	s.mux.HandleFunc("/v1/plugins/", s.handlePluginByID)
+	s.mux.HandleFunc("/v1/secrets", s.handleSecrets)
+	s.mux.HandleFunc("/v1/secrets/", s.handleSecretByName)
+	s.mux.HandleFunc("/v1/gateway/status", s.handleGatewayStatus)
+	s.mux.HandleFunc("/v1/gateway/plans", s.handleGatewayPlans)
+	s.mux.HandleFunc("/v1/gateway/plans/", s.handleGatewayPlanAction)
+	s.mux.HandleFunc("/v1/gateway/routes", s.handleGatewayRoutes)
+	s.mux.HandleFunc("/v1/gateway/usage", s.handleGatewayUsage)
+	s.mux.HandleFunc("/v1/gateway/preview", s.handleGatewayPreview)
+	s.mux.HandleFunc("/v1/gateway/reload", s.handleGatewayReload)
 	s.mux.HandleFunc("/v1/rules/", s.handleRulesByID)
 
 	s.mux.HandleFunc("/v1/fixtures", s.handleFixturesListOrSave)

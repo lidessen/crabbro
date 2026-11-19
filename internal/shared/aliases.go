@@ -60,9 +60,28 @@ type (
 	RulePreview           = api.RulePreview
 	ValidateResult        = api.ValidateResult
 	ConfigAck             = api.ConfigAck
-	PluginList            = api.PluginList
-	SessionList           = api.SessionList
-	CurrentSession        = api.CurrentSession
+	PluginList               = api.PluginList
+	SessionList              = api.SessionList
+	CurrentSession           = api.CurrentSession
+	TokenUsage               = api.TokenUsage
+	CandidateScores          = api.CandidateScores
+	CandidateDecision        = api.CandidateDecision
+	RouteDecision            = api.RouteDecision
+	GatewayAttempt           = api.GatewayAttempt
+	GatewayTrace             = api.GatewayTrace
+	SecretSummary            = api.SecretSummary
+	SecretListResponse       = api.SecretListResponse
+	GatewayStatusResponse    = api.GatewayStatusResponse
+	GatewayWindowUsage       = api.GatewayWindowUsage
+	GatewayPlanStatus        = api.GatewayPlanStatus
+	GatewayPlanListResponse  = api.GatewayPlanListResponse
+	GatewayRouteTargetStatus = api.GatewayRouteTargetStatus
+	GatewayRouteStatus       = api.GatewayRouteStatus
+	GatewayRouteListResponse = api.GatewayRouteListResponse
+	GatewayUsageBucket       = api.GatewayUsageBucket
+	GatewayUsageResponse     = api.GatewayUsageResponse
+	GatewayPreviewRequest    = api.GatewayPreviewRequest
+	GatewayPreviewResponse   = api.GatewayPreviewResponse
 )
 
 const (
@@ -83,8 +102,10 @@ const (
 	EventRequestFailed         = api.EventRequestFailed
 	EventMITMEnabled           = api.EventMITMEnabled
 	EventMITMDisabled          = api.EventMITMDisabled
-	EventScopeChanged          = api.EventScopeChanged
-	EventActivity              = api.EventActivity
+	EventScopeChanged             = api.EventScopeChanged
+	EventActivity                 = api.EventActivity
+	EventGatewayConfigChanged     = api.EventGatewayConfigChanged
+	EventGatewayPlanHealthChanged = api.EventGatewayPlanHealthChanged
 
 	ActionAbort                = api.ActionAbort
 	ActionBlock                = api.ActionBlock

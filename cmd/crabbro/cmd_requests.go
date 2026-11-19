@@ -45,6 +45,7 @@ func cmdRequestsList(cfg *clientConfig, args []string) error {
 	session := fs.String("session", "", "Filter by recording session id")
 	typ := fs.String("type", "", "Filter by resource type (xhr, script, image, ...)")
 	initiator := fs.String("initiator", "", "Filter by initiator URL")
+	kind := fs.String("kind", "", "Filter by data plane (proxy, gateway)")
 	all := fs.Bool("all", false, "Include exchanges hidden by the current scope")
 	pretty := fs.Bool("pretty", false, "Human-readable output")
 	fs.Parse(args)
@@ -83,6 +84,9 @@ func cmdRequestsList(cfg *clientConfig, args []string) error {
 	}
 	if *initiator != "" {
 		params = append(params, "initiator="+*initiator)
+	}
+	if *kind != "" {
+		params = append(params, "kind="+*kind)
 	}
 	if *all {
 		params = append(params, "all=1")

@@ -248,7 +248,7 @@ func TestHTTP2MITM(t *testing.T) {
 		t.Fatalf("upstream proto = %s, want HTTP/2.0", gotProto)
 	}
 	var intercepted *string
-	for _, rec := range pxy.RingBuffer.List(0) {
+	for _, rec := range pxy.DefaultSink().List(0) {
 		if strings.Contains(rec.URL, "/check") {
 			if !rec.Intercepted {
 				t.Fatal("request was not marked intercepted")
@@ -274,7 +274,7 @@ func TestHistorySurvivesRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	pxy := New(":0", ring.NewRequestBuffer(8), nil, nil)
-	pxy.History = hist
+	pxy.DefaultSink().History = hist
 	if err := pxy.Start(); err != nil {
 		t.Fatal(err)
 	}

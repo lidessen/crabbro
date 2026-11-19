@@ -118,34 +118,46 @@ func cmdConfig(cfg *clientConfig, args []string) error {
 	}
 	switch args[0] {
 	case "status":
-		return printAPI(cfg, http.MethodGet, "/v1/config/status", nil)
+		kind := strings.TrimPrefix(configKind(args[1:]), "&")
+		path := "/v1/config/status"
+		if kind != "" {
+			path += "?" + kind
+		}
+		return printAPI(cfg, http.MethodGet, path, nil)
 	case "validate":
 		if len(args) < 2 {
-			return fmt.Errorf("usage: crabbro config validate <id>")
+			return fmt.Errorf("usage: crabbro config validate <id> [--gateway-plan|--gateway-route|--scope]")
 		}
-		return printAPI(cfg, http.MethodPost, "/v1/config/validate?id="+args[1]+configKind(args), nil)
+		return printAPI(cfg, http.MethodPost, "/v1/config/validate?id="+args[1]+configKind(args[2:]), nil)
 	case "commit":
 		if len(args) < 2 {
-			return fmt.Errorf("usage: crabbro config commit <id>")
+			return fmt.Errorf("usage: crabbro config commit <id> [--gateway-plan|--gateway-route|--scope]")
 		}
-		return printAPI(cfg, http.MethodPost, "/v1/config/commit?id="+args[1]+configKind(args), nil)
+		return printAPI(cfg, http.MethodPost, "/v1/config/commit?id="+args[1]+configKind(args[2:]), nil)
 	case "discard":
 		if len(args) < 2 {
-			return fmt.Errorf("usage: crabbro config discard <id>")
+			return fmt.Errorf("usage: crabbro config discard <id> [--gateway-plan|--gateway-route|--scope]")
 		}
-		return printAPI(cfg, http.MethodPost, "/v1/config/discard?id="+args[1]+configKind(args), nil)
+		return printAPI(cfg, http.MethodPost, "/v1/config/discard?id="+args[1]+configKind(args[2:]), nil)
 	case "draft":
 		if len(args) < 2 {
-			return fmt.Errorf("usage: crabbro config draft <file>")
+			return fmt.Errorf("usage: crabbro config draft <file> [--gateway-plan|--gateway-route|--scope]")
 		}
 		b, err := os.ReadFile(args[1])
 		if err != nil {
 			return err
 		}
 		id := strings.TrimSuffix(strings.TrimSuffix(fileBase(args[1]), ".draft"), ".yaml")
-		kind := ""
-		if strings.Contains(args[1], "/scope/") {
-			kind = "&kind=scope"
+		kind := configKind(args[2:])
+		if kind == "" {
+			switch {
+			case strings.Contains(args[1], "/gateway/plans/") || strings.Contains(args[1], "/plans/"):
+				kind = "&kind=gateway-plan"
+			case strings.Contains(args[1], "/gateway/routes/") || strings.Contains(args[1], "/routes/"):
+				kind = "&kind=gateway-route"
+			case strings.Contains(args[1], "/scope/"):
+				kind = "&kind=scope"
+			}
 		}
 		return printAPI(cfg, http.MethodPost, "/v1/config/draft?id="+id+kind, bytes.NewReader(b))
 	default:
@@ -155,7 +167,14 @@ func cmdConfig(cfg *clientConfig, args []string) error {
 
 func configKind(args []string) string {
 	for _, a := range args {
-		if a == "--scope" || a == "allow" || a == "deny" {
+		switch a {
+		case "--gateway-plan":
+			return "&kind=gateway-plan"
+		case "--gateway-route":
+			return "&kind=gateway-route"
+		case "--gateway":
+			return "&kind=gateway"
+		case "--scope", "allow", "deny":
 			return "&kind=scope"
 		}
 	}

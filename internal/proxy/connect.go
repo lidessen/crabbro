@@ -25,8 +25,10 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if p.Inspect != nil {
-		if p.Sessions != nil {
-			p.Inspect.Scopes = p.Sessions
+		if p.Sink != nil {
+			if ss := p.Sink.SessionStore(); ss != nil {
+				p.Inspect.Scopes = ss
+			}
 		}
 		if p.Inspect.BypassHost(remoteAddr(r.RemoteAddr), host) {
 			p.tunnelPassthrough(w, r, host, startTime, nil)
@@ -35,26 +37,27 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create request record for the CONNECT tunnel.
-	req := p.RingBuffer.Add("CONNECT", "https", host, "", "", "https://"+host, r.RemoteAddr)
-	req.StartedAt = startTime
-
-	// Capture request headers.
-	req.RequestHeaders = make(shared.Headers)
+	reqHeaders := make(shared.Headers)
 	for k, v := range r.Header {
-		req.RequestHeaders[k] = strings.Join(v, ", ")
+		reqHeaders[k] = strings.Join(v, ", ")
+	}
+	req := &shared.Request{
+		StartedAt:      startTime,
+		Kind:           "proxy",
+		Method:         "CONNECT",
+		Scheme:         "https",
+		Host:           host,
+		URL:            "https://" + host,
+		ClientAddr:     r.RemoteAddr,
+		RequestHeaders: reqHeaders,
+	}
+	if p.Sink != nil {
+		req = p.Sink.Start(req)
 	}
 
 	// Emit events.
-	p.EventHub.Emit(&shared.Event{
-		Type:      shared.EventRequestStarted,
-		RequestID: req.ID,
-		Timestamp: startTime,
-	})
-	p.EventHub.Emit(&shared.Event{
-		Type:      shared.EventRequestHeaders,
-		RequestID: req.ID,
-		Timestamp: startTime,
-	})
+	p.emit(shared.EventRequestStarted, req.ID, nil)
+	p.emit(shared.EventRequestHeaders, req.ID, nil)
 
 	// MITM interception uses one policy snapshot for this new tunnel.
 	policy := p.policyForTunnel()
@@ -62,22 +65,14 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		hijacker, ok := w.(http.Hijacker)
 		if !ok {
 			completeRequest(req, startTime, http.StatusInternalServerError)
-			p.EventHub.Emit(&shared.Event{
-				Type:      shared.EventRequestFailed,
-				RequestID: req.ID,
-				Timestamp: time.Now(),
-			})
+			p.emit(shared.EventRequestFailed, req.ID, nil)
 			writeError(w, http.StatusInternalServerError, "Hijacking not supported")
 			return
 		}
 		clientConn, _, err := hijacker.Hijack()
 		if err != nil {
 			completeRequest(req, startTime, http.StatusInternalServerError)
-			p.EventHub.Emit(&shared.Event{
-				Type:      shared.EventRequestFailed,
-				RequestID: req.ID,
-				Timestamp: time.Now(),
-			})
+			p.emit(shared.EventRequestFailed, req.ID, nil)
 			writeError(w, http.StatusInternalServerError, "Hijacking failed")
 			return
 		}
@@ -87,12 +82,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		if _, certErr := p.MITMHandler.CertManager.GetCertificate(host); certErr != nil {
 			clientConn.Close()
 			completeRequest(req, startTime, http.StatusBadGateway)
-			p.EventHub.Emit(&shared.Event{
-				Type:      shared.EventRequestFailed,
-				RequestID: req.ID,
-				Timestamp: time.Now(),
-				Payload:   map[string]string{"stage": "tls"},
-			})
+			p.emit(shared.EventRequestFailed, req.ID, map[string]string{"stage": "tls"})
 			return
 		}
 
@@ -122,12 +112,7 @@ func (p *Proxy) tunnelPassthrough(w http.ResponseWriter, r *http.Request, host s
 			req.CompletedAt = &now
 			req.Status = http.StatusBadGateway
 			req.DurationMs = time.Since(startTime).Milliseconds()
-			p.EventHub.Emit(&shared.Event{
-				Type:      shared.EventRequestFailed,
-				RequestID: req.ID,
-				Timestamp: now,
-				Payload:   map[string]string{"error": "failed to connect to " + host},
-			})
+			p.emit(shared.EventRequestFailed, req.ID, map[string]string{"error": "failed to connect to " + host})
 		}
 		writeError(w, http.StatusBadGateway, "Failed to connect to "+host)
 		return
@@ -142,11 +127,7 @@ func (p *Proxy) tunnelPassthrough(w http.ResponseWriter, r *http.Request, host s
 			req.CompletedAt = &now
 			req.Status = http.StatusInternalServerError
 			req.DurationMs = time.Since(startTime).Milliseconds()
-			p.EventHub.Emit(&shared.Event{
-				Type:      shared.EventRequestFailed,
-				RequestID: req.ID,
-				Timestamp: now,
-			})
+			p.emit(shared.EventRequestFailed, req.ID, nil)
 		}
 		writeError(w, http.StatusInternalServerError, "Hijacking not supported")
 		return
@@ -159,11 +140,7 @@ func (p *Proxy) tunnelPassthrough(w http.ResponseWriter, r *http.Request, host s
 			req.CompletedAt = &now
 			req.Status = http.StatusInternalServerError
 			req.DurationMs = time.Since(startTime).Milliseconds()
-			p.EventHub.Emit(&shared.Event{
-				Type:      shared.EventRequestFailed,
-				RequestID: req.ID,
-				Timestamp: now,
-			})
+			p.emit(shared.EventRequestFailed, req.ID, nil)
 		}
 		writeError(w, http.StatusInternalServerError, "Hijacking failed")
 		return
@@ -205,11 +182,7 @@ func (p *Proxy) tunnelPassthrough(w http.ResponseWriter, r *http.Request, host s
 		now := time.Now()
 		req.CompletedAt = &now
 		req.DurationMs = time.Since(startTime).Milliseconds()
-		p.EventHub.Emit(&shared.Event{
-			Type:      shared.EventResponseCompleted,
-			RequestID: req.ID,
-			Timestamp: now,
-		})
+		p.emit(shared.EventResponseCompleted, req.ID, nil)
 	}
 }
 
@@ -232,12 +205,7 @@ func (p *Proxy) handleMITMExchange(clientConn net.Conn, connectReq *shared.Reque
 	tlsConn, err := p.MITMHandler.Intercept(clientConn, host)
 	if err != nil {
 		completeRequest(connectReq, connectStartTime, 0)
-		p.EventHub.Emit(&shared.Event{
-			Type:      shared.EventRequestFailed,
-			RequestID: connectReq.ID,
-			Timestamp: time.Now(),
-			Payload:   map[string]string{"stage": "tls"},
-		})
+		p.emit(shared.EventRequestFailed, connectReq.ID, map[string]string{"stage": "tls"})
 		return
 	}
 	defer tlsConn.Close()
@@ -280,11 +248,7 @@ func (p *Proxy) handleMITMExchange(clientConn net.Conn, connectReq *shared.Reque
 	_ = srv.Close()
 
 	completeRequest(connectReq, connectStartTime, http.StatusOK)
-	p.EventHub.Emit(&shared.Event{
-		Type:      shared.EventResponseCompleted,
-		RequestID: connectReq.ID,
-		Timestamp: time.Now(),
-	})
+	p.emit(shared.EventResponseCompleted, connectReq.ID, nil)
 }
 
 func (p *Proxy) serveMITMH2(tlsConn *tls.Conn, connectReq *shared.Request, host, sni string, connectStartTime time.Time) {
@@ -305,11 +269,7 @@ func (p *Proxy) serveMITMH2(tlsConn *tls.Conn, connectReq *shared.Request, host,
 		}),
 	})
 	completeRequest(connectReq, connectStartTime, http.StatusOK)
-	p.EventHub.Emit(&shared.Event{
-		Type:      shared.EventResponseCompleted,
-		RequestID: connectReq.ID,
-		Timestamp: time.Now(),
-	})
+	p.emit(shared.EventResponseCompleted, connectReq.ID, nil)
 }
 
 // singleConnListener feeds one already-accepted connection to http.Server.

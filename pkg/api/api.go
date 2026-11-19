@@ -11,6 +11,8 @@ type StatusResponse struct {
 	Version           string `json:"version"`
 	UptimeSeconds     int64  `json:"uptimeSeconds"`
 	ProxyAddr         string `json:"proxyAddr"`
+	GatewayAddr       string `json:"gatewayAddr,omitempty"`
+	GatewayEnabled    bool   `json:"gatewayEnabled"`
 	RequestCount      int64  `json:"requestCount"`
 	RuleCount         int    `json:"ruleCount"`
 	MITMEnabled       bool   `json:"mitmEnabled"`
@@ -29,6 +31,7 @@ type ListRequestsResponse struct {
 type RequestSummary struct {
 	ID           RequestID `json:"id"`
 	StartedAt    string    `json:"startedAt"`
+	Kind         string    `json:"kind"`
 	Method       string    `json:"method"`
 	URL          string    `json:"url"`
 	Status       int       `json:"status"`
@@ -39,6 +42,9 @@ type RequestSummary struct {
 	ResourceType string    `json:"resourceType,omitempty"`
 	InitiatorURL string    `json:"initiatorUrl,omitempty"`
 	SourceID     string    `json:"sourceId,omitempty"`
+	GatewayPlan  string    `json:"gatewayPlan,omitempty"`
+	GatewayModel string    `json:"gatewayModel,omitempty"`
+	GatewayRoute string    `json:"gatewayRoute,omitempty"`
 }
 
 // RequestDetailResponse is returned by GET /v1/requests/:id.

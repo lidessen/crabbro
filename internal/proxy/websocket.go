@@ -112,14 +112,14 @@ func (p *Proxy) bridgeWebSocket(w http.ResponseWriter, ex *Exchange, resp *http.
 		ex.upgradeConn.Close()
 		ex.failureStage = "websocket"
 		http.Error(w, "Bad Gateway", http.StatusBadGateway)
-		p.persist(ex.record)
+		p.complete(ex.record)
 		return
 	}
 	client, brw, err := hj.Hijack()
 	if err != nil {
 		ex.upgradeConn.Close()
 		ex.failureStage = "websocket"
-		p.persist(ex.record)
+		p.complete(ex.record)
 		return
 	}
 	defer client.Close()
@@ -166,7 +166,7 @@ func (p *Proxy) bridgeWebSocket(w http.ResponseWriter, ex *Exchange, resp *http.
 		ex.record.RuleTrace = append([]shared.RuleTrace(nil), ex.traces...)
 	}
 	p.emit(shared.EventResponseCompleted, ex.record.ID, map[string]any{"status": 101, "websocket": true})
-	p.persist(ex.record)
+	p.complete(ex.record)
 }
 
 func (ex *Exchange) clientReader(c net.Conn) io.Reader {

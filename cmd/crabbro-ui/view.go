@@ -11,6 +11,7 @@ import (
 const (
 	pageRequests   = "requests"
 	pageRules      = "rules"
+	pageGateway    = "gateway"
 	pageTrajectory = "trajectory"
 	pageDaemon     = "daemon"
 )
@@ -69,6 +70,7 @@ func (a *app) titleBar(c *ui.Context, p *palette) {
 			a.navWord(c, p, pageTrajectory, "Trace", len(foldTrace(st.traj)))
 			a.navWord(c, p, pageRequests, "Requests", len(st.requests))
 			a.navWord(c, p, pageRules, "Rules", len(st.rules))
+			a.navWord(c, p, pageGateway, "Gateway", len(st.gwPlans))
 			a.navWord(c, p, pageDaemon, "Daemon", 0)
 		})
 		ui.Spacer(c)
@@ -271,6 +273,8 @@ func (a *app) pageBody(c *ui.Context, p *palette) {
 		a.requestsPage(c, p)
 	case pageRules:
 		a.rulesPage(c, p)
+	case pageGateway:
+		a.gatewayPage(c, p)
 	case pageDaemon:
 		a.daemonPage(c, p)
 	default:

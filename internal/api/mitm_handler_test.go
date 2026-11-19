@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lidessen/crabbro/internal/capture"
 	"github.com/lidessen/crabbro/internal/fixture"
 	"github.com/lidessen/crabbro/internal/mitm"
-	"github.com/lidessen/crabbro/internal/proxy"
 	"github.com/lidessen/crabbro/internal/ring"
 	"github.com/lidessen/crabbro/internal/rule"
 	"github.com/lidessen/crabbro/internal/shared"
@@ -34,8 +34,8 @@ func testMITMServer(t *testing.T) *Server {
 	mitmHandler.SetCertInstalled(true)
 
 	rb := ring.NewRequestBuffer(100)
-	bodyCache := proxy.NewBodyCache(1<<20, 1<<20)
-	eventHub := proxy.NewEventHub()
+	bodyCache := capture.NewBodyCache(1<<20, 1<<20)
+	eventHub := capture.NewEventHub()
 	fixtureStore, err := fixture.New(t.TempDir())
 	if err != nil {
 		t.Fatalf("fixture.New: %v", err)
@@ -67,8 +67,8 @@ func testMITMServerWithoutHandler(t *testing.T) *Server {
 	t.Helper()
 
 	rb := ring.NewRequestBuffer(100)
-	bodyCache := proxy.NewBodyCache(1<<20, 1<<20)
-	eventHub := proxy.NewEventHub()
+	bodyCache := capture.NewBodyCache(1<<20, 1<<20)
+	eventHub := capture.NewEventHub()
 	fixtureStore, err := fixture.New(t.TempDir())
 	if err != nil {
 		t.Fatalf("fixture.New: %v", err)

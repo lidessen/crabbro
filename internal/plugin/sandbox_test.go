@@ -26,7 +26,11 @@ func startFrameHost(t *testing.T) *frameHost {
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node is not installed")
 	}
-	dir := t.TempDir()
+	dir, err := os.MkdirTemp("", "cp-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	if err := extractRuntime(dir); err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +147,7 @@ func managerWith(t *testing.T) *Manager {
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skip("node is not installed")
 	}
-	m, err := NewManager(t.TempDir())
+	m, err := NewManager(t.TempDir(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

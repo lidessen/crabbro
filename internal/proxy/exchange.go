@@ -149,6 +149,7 @@ func (p *Proxy) newExchange(r *http.Request, ingress string, tunnelID shared.Req
 	reqHeaders, flatReq := headerFields(r.Header)
 	record := &shared.Request{
 		StartedAt:         start,
+		Kind:              "proxy",
 		Method:            r.Method,
 		Scheme:            target.Scheme,
 		Host:              target.Host,
@@ -166,8 +167,10 @@ func (p *Proxy) newExchange(r *http.Request, ingress string, tunnelID shared.Req
 	}
 	bypass := false
 	if p.Inspect != nil {
-		if p.Sessions != nil {
-			p.Inspect.Scopes = p.Sessions
+		if p.Sink != nil {
+			if ss := p.Sink.SessionStore(); ss != nil {
+				p.Inspect.Scopes = ss
+			}
 		}
 		bypass = p.Inspect.Annotate(record, r.Header, remoteAddr(r.RemoteAddr))
 	}
@@ -186,23 +189,8 @@ func (p *Proxy) newExchange(r *http.Request, ingress string, tunnelID shared.Req
 		ex.outbound = out
 		return ex, nil
 	}
-	if p.RingBuffer != nil {
-		stored := p.RingBuffer.Add(record.Method, record.Scheme, record.Host, record.Path, record.Query, record.URL, record.ClientAddr)
-		stored.StartedAt = start
-		stored.OriginalURL = record.OriginalURL
-		stored.EffectiveURL = record.EffectiveURL
-		stored.RequestHeaders = record.RequestHeaders
-		stored.RequestHeaderList = record.RequestHeaderList
-		stored.Intercepted = record.Intercepted
-		stored.TunnelID = record.TunnelID
-		stored.PolicyGeneration = record.PolicyGeneration
-		stored.Attribution = record.Attribution
-		stored.Hidden = record.Hidden
-		stored.HiddenReason = record.HiddenReason
-		record = stored
-	}
-	if p.Sessions != nil {
-		p.Sessions.NoteRequest(record)
+	if p.Sink != nil {
+		record = p.Sink.Start(record)
 	}
 
 	p.emit(shared.EventRequestStarted, record.ID, map[string]any{
@@ -294,11 +282,14 @@ func (p *Proxy) prepareRequestBody(ex *Exchange, r *http.Request) {
 	ex.reqCapture = &captureReader{r: stream, limit: limit}
 	ex.outbound.Body = io.NopCloser(ex.reqCapture)
 	ex.outbound.ContentLength = r.ContentLength
-	if len(preview) > 0 {
-		ex.record.RequestBodyRef = p.BodyCache.Store(append([]byte(nil), preview...))
+	if len(preview) > 0 && p.Sink != nil {
+		ex.record.RequestBodyRef = p.Sink.StoreBody(append([]byte(nil), preview...))
 		ex.record.RequestBodyBytes = int64(len(preview))
 		ex.record.RequestBodyTruncated = ex.previewTruncated
 		p.emit(shared.EventRequestBodyAvailable, ex.record.ID, nil)
+	} else if len(preview) > 0 {
+		ex.record.RequestBodyBytes = int64(len(preview))
+		ex.record.RequestBodyTruncated = ex.previewTruncated
 	}
 }
 
@@ -492,10 +483,10 @@ func (m *ruleMiddleware) applyResponsePhase(ex *Exchange, resp *http.Response) (
 }
 
 func (p *Proxy) noteApply(ex *Exchange, rl *shared.Rule, phase string) {
-	if p == nil || p.Sessions == nil || rl == nil || ex == nil || ex.record == nil {
+	if p == nil || p.Sink == nil || rl == nil || ex == nil || ex.record == nil {
 		return
 	}
-	p.Sessions.Note("rule_applied", ex.record.SessionID, string(ex.record.ID), string(rl.ID), strings.TrimSpace(phase+" "+rl.Name))
+	p.Sink.NoteActivity("rule_applied", ex.record.SessionID, string(ex.record.ID), string(rl.ID), strings.TrimSpace(phase+" "+rl.Name))
 }
 
 func applyRequestPatch(ex *Exchange, actions []shared.RuleAction) (*http.Response, error) {
@@ -589,8 +580,8 @@ func (p *Proxy) finishExchange(ex *Exchange, status int, resp *http.Response, w 
 	}
 	defer resp.Body.Close()
 
-	if ex.reqCapture != nil && len(ex.reqCapture.buf) > 0 && ex.record.RequestBodyRef == "" {
-		ex.record.RequestBodyRef = p.BodyCache.Store(append([]byte(nil), ex.reqCapture.buf...))
+	if ex.reqCapture != nil && len(ex.reqCapture.buf) > 0 && ex.record.RequestBodyRef == "" && p.Sink != nil {
+		ex.record.RequestBodyRef = p.Sink.StoreBody(append([]byte(nil), ex.reqCapture.buf...))
 		p.emit(shared.EventRequestBodyAvailable, ex.record.ID, nil)
 	}
 	if ex.reqCapture != nil && ex.reqCapture.n > 0 {
@@ -629,8 +620,8 @@ func (p *Proxy) finishExchange(ex *Exchange, status int, resp *http.Response, w 
 		dst = flushWriter{w: w, f: f}
 	}
 	_, copyErr := io.Copy(dst, ex.respCapture)
-	if len(ex.respCapture.buf) > 0 {
-		ex.record.ResponseBodyRef = p.BodyCache.Store(append([]byte(nil), ex.respCapture.buf...))
+	if len(ex.respCapture.buf) > 0 && p.Sink != nil {
+		ex.record.ResponseBodyRef = p.Sink.StoreBody(append([]byte(nil), ex.respCapture.buf...))
 		p.emit(shared.EventResponseBodyAvailable, ex.record.ID, nil)
 	}
 	ex.record.ResponseBodyBytes = ex.respCapture.n
@@ -648,22 +639,26 @@ func (p *Proxy) finishExchange(ex *Exchange, status int, resp *http.Response, w 
 		payload["stage"] = ex.record.FailureStage
 	}
 	p.emit(eventKindType(eventKind), ex.record.ID, payload)
-	if p.Sessions != nil && ex.record.SessionID != "" {
-		p.Sessions.Note("request_completed", ex.record.SessionID, string(ex.record.ID), "", ex.record.Method+" "+ex.record.URL)
+	if p.Sink != nil {
+		if ex.record.SessionID != "" {
+			p.Sink.NoteActivity("request_completed", ex.record.SessionID, string(ex.record.ID), "", ex.record.Method+" "+ex.record.URL)
+		}
+		p.Sink.Complete(ex.record)
 	}
-	p.persist(ex.record)
 }
 
 func (p *Proxy) emit(typ shared.EventType, id shared.RequestID, payload any) {
-	if p.EventHub == nil {
+	if p == nil || p.Sink == nil {
 		return
 	}
-	p.EventHub.Emit(&shared.Event{
-		Type:      typ,
-		RequestID: id,
-		Timestamp: time.Now(),
-		Payload:   payload,
-	})
+	p.Sink.Emit(typ, id, payload)
+}
+
+func (p *Proxy) complete(rec *shared.Request) {
+	if p == nil || p.Sink == nil {
+		return
+	}
+	p.Sink.Complete(rec)
 }
 
 func eventKindType(kind string) shared.EventType {

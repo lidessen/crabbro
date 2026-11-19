@@ -91,7 +91,7 @@ request:
 	var tagged bool
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) && !tagged {
-		for _, rec := range pxy.RingBuffer.List(0) {
+		for _, rec := range pxy.DefaultSink().List(0) {
 			for _, tag := range rec.Tags {
 				if tag == "password-login" {
 					tagged = true

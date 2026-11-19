@@ -37,6 +37,11 @@ const (
 	// EventActivity is emitted when a trajectory step is appended.
 	// Payload is an Activity.
 	EventActivity EventType = "activity"
+
+	// EventGatewayConfigChanged is emitted when gateway plans or routes reload.
+	EventGatewayConfigChanged EventType = "gateway_config_changed"
+	// EventGatewayPlanHealthChanged is emitted when a plan enters or exits cooldown.
+	EventGatewayPlanHealthChanged EventType = "gateway_plan_health_changed"
 )
 
 // Event is a structured observation emitted by the daemon. Events are
