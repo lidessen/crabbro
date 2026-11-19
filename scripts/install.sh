@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Install Chiling from this checkout.
+# Install Crabbro from this checkout.
 #
-# macOS: build the CLI, daemon, and MyGo UI, wrap them in Chiling.app, and
-# replace /Applications/Chiling.app. Contents/MacOS/chiling-ui is the UI
+# macOS: build the CLI, daemon, and MyGo UI, wrap them in Crabbro.app, and
+# replace /Applications/Crabbro.app. Contents/MacOS/crabbro-ui is the UI
 # when that build succeeds, and a launcher that starts the daemon otherwise
 # (the name keeps the app's executable off the CLI's: macOS filesystems are
-# case-insensitive, so Chiling would overwrite chiling).
+# case-insensitive, so Crabbro would overwrite crabbro).
 #
 # Linux and other Unix: install the CLI binaries into a prefix. The .app
 # bundle is macOS-only.
@@ -15,8 +15,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_NAME="Chiling"
-BUNDLE_ID="dev.chiling.app"
+APP_NAME="Crabbro"
+BUNDLE_ID="dev.crabbro.app"
 MIN_GO_MAJOR=1
 MIN_GO_MINOR=26
 
@@ -33,11 +33,11 @@ Usage: ./scripts/install.sh [options]
 
 Build this checkout and install it locally.
 
-  --app-dir DIR     Directory that receives Chiling.app (macOS, default /Applications).
+  --app-dir DIR     Directory that receives Crabbro.app (macOS, default /Applications).
   --prefix DIR      CLI location. A path ending in /bin is used as-is; otherwise
                     DIR/bin is used. On macOS, if --app-dir is omitted and DIR's
                     name is Applications, DIR is also where the .app is placed.
-  --no-cli-link     Do not link chiling onto PATH.
+  --no-cli-link     Do not link crabbro onto PATH.
   --dry-run         Print the actions and do not change disk or stop processes.
   --uninstall       Remove the app bundle and the CLI links this script installed.
   -h, --help        Show this help.
@@ -50,8 +50,8 @@ Examples:
   ./scripts/install.sh --uninstall
 
 After a macOS install the script does not trust a CA or set a proxy. Run:
-  chiling daemon start
-  chiling mitm install-ca
+  crabbro daemon start
+  crabbro mitm install-ca
 EOF
 }
 
@@ -93,7 +93,7 @@ srun() {
 
 need_go() {
 	if ! command -v go >/dev/null 2>&1; then
-		die "go is not installed. Chiling needs Go ${MIN_GO_MAJOR}.${MIN_GO_MINOR} or newer."
+		die "go is not installed. Crabbro needs Go ${MIN_GO_MAJOR}.${MIN_GO_MINOR} or newer."
 	fi
 	local line ver major rest minor
 	line="$(go version 2>/dev/null || true)"
@@ -105,7 +105,7 @@ need_go() {
 		die "could not parse the Go version from: ${line:-<empty>}"
 	fi
 	if [[ "$major" -lt "$MIN_GO_MAJOR" ]] || { [[ "$major" -eq "$MIN_GO_MAJOR" ]] && [[ "$minor" -lt "$MIN_GO_MINOR" ]]; }; then
-		die "Go ${ver} is too old. Chiling needs Go ${MIN_GO_MAJOR}.${MIN_GO_MINOR} or newer (go.mod asks for 1.26.3)."
+		die "Go ${ver} is too old. Crabbro needs Go ${MIN_GO_MAJOR}.${MIN_GO_MINOR} or newer (go.mod asks for 1.26.3)."
 	fi
 	log "using $(go version)"
 }
@@ -130,22 +130,22 @@ git_version() {
 build_bins() {
 	local out=$1
 	local ldflags
-	ldflags="-s -w -X github.com/lidessen/chiling/internal/version.Version=${VERSION} -X github.com/lidessen/chiling/internal/version.Commit=${COMMIT}"
+	ldflags="-s -w -X github.com/lidessen/crabbro/internal/version.Version=${VERSION} -X github.com/lidessen/crabbro/internal/version.Commit=${COMMIT}"
 	mkdir -p "$out"
-	log "building chiling, chilingd, and chiling-plugin-host (${VERSION} ${COMMIT})"
+	log "building crabbro, crabbrod, and crabbro-plugin-host (${VERSION} ${COMMIT})"
 	(
 		cd "$ROOT"
-		CGO_ENABLED=0 go build -trimpath -ldflags "$ldflags" -o "$out/chiling" ./cmd/chiling
-		CGO_ENABLED=0 go build -trimpath -ldflags "$ldflags" -o "$out/chilingd" ./cmd/chilingd
-		CGO_ENABLED=0 go build -trimpath -ldflags "$ldflags" -o "$out/chiling-plugin-host" ./cmd/chiling-plugin-host
+		CGO_ENABLED=0 go build -trimpath -ldflags "$ldflags" -o "$out/crabbro" ./cmd/crabbro
+		CGO_ENABLED=0 go build -trimpath -ldflags "$ldflags" -o "$out/crabbrod" ./cmd/crabbrod
+		CGO_ENABLED=0 go build -trimpath -ldflags "$ldflags" -o "$out/crabbro-plugin-host" ./cmd/crabbro-plugin-host
 		if [[ "$OS" == "Darwin" ]]; then
 			# The UI is optional: when its build fails the bundle keeps the
 			# launcher, which starts the daemon as before.
-			log "building chiling-ui (the Chiling.app window)"
-			if CGO_ENABLED=0 go build -trimpath -ldflags "$ldflags" -o "$out/chiling-ui" ./cmd/chiling-ui; then
-				touch "$out/chiling-ui.ok"
+			log "building crabbro-ui (the Crabbro.app window)"
+			if CGO_ENABLED=0 go build -trimpath -ldflags "$ldflags" -o "$out/crabbro-ui" ./cmd/crabbro-ui; then
+				touch "$out/crabbro-ui.ok"
 			else
-				log "warning: chiling-ui did not build; Chiling.app will start the daemon without a window"
+				log "warning: crabbro-ui did not build; Crabbro.app will start the daemon without a window"
 			fi
 		fi
 	)
@@ -189,20 +189,20 @@ warn_path() {
 
 stop_running() {
 	if [[ "$DRY_RUN" -eq 1 ]]; then
-		log "dry-run: would stop a running daemon (chiling daemon stop) and quit Chiling.app"
+		log "dry-run: would stop a running daemon (crabbro daemon stop) and quit Crabbro.app"
 		return 0
 	fi
 	local cli=""
-	if [[ -n "${CLI_DIR:-}" && -x "${CLI_DIR}/chiling" ]]; then
-		cli="${CLI_DIR}/chiling"
-	elif command -v chiling >/dev/null 2>&1; then
-		cli="$(command -v chiling)"
+	if [[ -n "${CLI_DIR:-}" && -x "${CLI_DIR}/crabbro" ]]; then
+		cli="${CLI_DIR}/crabbro"
+	elif command -v crabbro >/dev/null 2>&1; then
+		cli="$(command -v crabbro)"
 	fi
 	if [[ -n "$cli" ]]; then
 		"$cli" daemon stop >/dev/null 2>&1 || true
 	fi
 	if [[ "$OS" == "Darwin" ]]; then
-		osascript -e 'tell application "Chiling" to quit' >/dev/null 2>&1 || true
+		osascript -e 'tell application "Crabbro" to quit' >/dev/null 2>&1 || true
 	fi
 }
 
@@ -228,9 +228,9 @@ write_plist() {
 	<key>CFBundleShortVersionString</key>
 	<string>${VERSION}</string>
 	<key>CFBundleExecutable</key>
-	<string>chiling-ui</string>
+	<string>crabbro-ui</string>
 	<key>CFBundleIconFile</key>
-	<string>Chiling.icns</string>
+	<string>Crabbro.icns</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleInfoDictionaryVersion</key>
@@ -245,23 +245,23 @@ ${lsuielement}
 EOF
 }
 
-# write_launcher is the chiling-ui executable when the UI did not build:
+# write_launcher is the crabbro-ui executable when the UI did not build:
 # a script that starts the daemon, as double-clicking the app should. The
 # name keeps it off the CLI's: macOS filesystems are case-insensitive, so a
-# file named Chiling would overwrite the chiling binary beside it.
+# file named Crabbro would overwrite the crabbro binary beside it.
 write_launcher() {
 	local dest=$1
 	cat >"$dest" <<'EOF'
 #!/bin/bash
 # Finder launches this with no arguments. The UI binary replaces this file
-# when it builds. The CLI and daemon stay beside it so `chiling daemon
-# start` finds chilingd.
+# when it builds. The CLI and daemon stay beside it so `crabbro daemon
+# start` finds crabbrod.
 set -euo pipefail
 dir="$(cd "$(dirname "$0")" && pwd)"
 if [[ $# -eq 0 ]]; then
-	exec "$dir/chiling" daemon start
+	exec "$dir/crabbro" daemon start
 fi
-exec "$dir/chiling" "$@"
+exec "$dir/crabbro" "$@"
 EOF
 	chmod 755 "$dest"
 }
@@ -273,42 +273,42 @@ assemble_app() {
 	local res="${app}/Contents/Resources"
 	local ui=0
 	mkdir -p "$macos" "$res"
-	cp "$ROOT/assets/logos/chiling-crab-coral.icns" "$res/Chiling.icns"
-	cp "$bins/chiling" "$bins/chilingd" "$bins/chiling-plugin-host" "$macos/"
-	chmod 755 "$macos/chiling" "$macos/chilingd" "$macos/chiling-plugin-host"
-	if [[ -x "$bins/chiling-ui" && -f "$bins/chiling-ui.ok" ]]; then
+	cp "$ROOT/assets/logos/crabbro-crab-coral.icns" "$res/Crabbro.icns"
+	cp "$bins/crabbro" "$bins/crabbrod" "$bins/crabbro-plugin-host" "$macos/"
+	chmod 755 "$macos/crabbro" "$macos/crabbrod" "$macos/crabbro-plugin-host"
+	if [[ -x "$bins/crabbro-ui" && -f "$bins/crabbro-ui.ok" ]]; then
 		# The window: it talks to the daemon over the control socket, so the
 		# daemon keeps running when the window closes.
-		cp "$bins/chiling-ui" "$macos/chiling-ui"
-		chmod 755 "$macos/chiling-ui"
+		cp "$bins/crabbro-ui" "$macos/crabbro-ui"
+		chmod 755 "$macos/crabbro-ui"
 		ui=1
 	else
-		write_launcher "$macos/chiling-ui"
+		write_launcher "$macos/crabbro-ui"
 	fi
 	write_plist "${app}/Contents/Info.plist" "$ui"
 	if [[ "$ui" -eq 1 ]]; then
 		cat >"${res}/README.txt" <<EOF
-Chiling ${VERSION} (${COMMIT})
+Crabbro ${VERSION} (${COMMIT})
 
 Contents/MacOS holds:
-  chiling-ui              the desktop UI (MyGo native window)
-  chiling                 CLI
-  chilingd                daemon
-  chiling-plugin-host     plugin host entry
+  crabbro-ui              the desktop UI (MyGo native window)
+  crabbro                 CLI
+  crabbrod                daemon
+  crabbro-plugin-host     plugin host entry
 
 Double-clicking the app opens the window, which starts the daemon if it is
 not running. Closing the window leaves capture, rules, and MITM running.
 EOF
 	else
 		cat >"${res}/README.txt" <<EOF
-Chiling ${VERSION} (${COMMIT})
+Crabbro ${VERSION} (${COMMIT})
 
 This bundle has no window in this build; the UI binary did not compile.
 Contents/MacOS holds:
-  chiling-ui              launcher (double-click starts the daemon)
-  chiling                 CLI
-  chilingd                daemon
-  chiling-plugin-host     plugin host entry
+  crabbro-ui              launcher (double-click starts the daemon)
+  crabbro                 CLI
+  crabbrod                daemon
+  crabbro-plugin-host     plugin host entry
 
 Re-run scripts/install.sh once the UI builds to replace this app in place.
 EOF
@@ -340,7 +340,7 @@ link_cli_into() {
 		return 0
 	fi
 	local name
-	for name in chiling chilingd chiling-plugin-host; do
+	for name in crabbro crabbrod crabbro-plugin-host; do
 		srun ln -sfn "${target_dir}/${name}" "${bin_dir}/${name}"
 	done
 	warn_path "$bin_dir"
@@ -371,13 +371,13 @@ install_macos() {
 	local work bins app
 	if [[ "$DRY_RUN" -eq 1 ]]; then
 		log "dry-run: would build into a temp dir and assemble ${APP_NAME}.app"
-		log "dry-run: bundle id ${BUNDLE_ID}, version ${VERSION} (${COMMIT}), Chiling is the UI when it builds"
+		log "dry-run: bundle id ${BUNDLE_ID}, version ${VERSION} (${COMMIT}), Crabbro is the UI when it builds"
 		log "dry-run: would replace ${APP_DIR}/${APP_NAME}.app"
 		link_cli_into "$CLI_DIR" "${APP_DIR}/${APP_NAME}.app/Contents/MacOS"
 		codesign_and_unquarantine "${APP_DIR}/${APP_NAME}.app"
 		return 0
 	fi
-	work="$(mktemp -d "${TMPDIR:-/tmp}/chiling-install.XXXXXX")"
+	work="$(mktemp -d "${TMPDIR:-/tmp}/crabbro-install.XXXXXX")"
 	bins="${work}/bin"
 	build_bins "$bins"
 	assemble_app "$bins" "$work"
@@ -390,20 +390,20 @@ install_macos() {
 
 install_cli_only() {
 	local work
-	log "this system is ${OS}. Chiling.app is macOS-only; installing the CLI binaries."
+	log "this system is ${OS}. Crabbro.app is macOS-only; installing the CLI binaries."
 	if [[ "$DRY_RUN" -eq 1 ]]; then
-		log "dry-run: would build chiling, chilingd, and chiling-plugin-host into ${CLI_DIR}"
+		log "dry-run: would build crabbro, crabbrod, and crabbro-plugin-host into ${CLI_DIR}"
 		warn_path "$CLI_DIR"
 		return 0
 	fi
-	work="$(mktemp -d "${TMPDIR:-/tmp}/chiling-install.XXXXXX")"
+	work="$(mktemp -d "${TMPDIR:-/tmp}/crabbro-install.XXXXXX")"
 	build_bins "$work"
 	srun mkdir -p "$CLI_DIR"
-	srun cp "$work/chiling" "$work/chilingd" "$work/chiling-plugin-host" "$CLI_DIR/"
-	srun chmod 755 "$CLI_DIR/chiling" "$CLI_DIR/chilingd" "$CLI_DIR/chiling-plugin-host"
+	srun cp "$work/crabbro" "$work/crabbrod" "$work/crabbro-plugin-host" "$CLI_DIR/"
+	srun chmod 755 "$CLI_DIR/crabbro" "$CLI_DIR/crabbrod" "$CLI_DIR/crabbro-plugin-host"
 	rm -rf "$work"
 	warn_path "$CLI_DIR"
-	log "installed chiling, chilingd, and chiling-plugin-host in ${CLI_DIR}"
+	log "installed crabbro, crabbrod, and crabbro-plugin-host in ${CLI_DIR}"
 }
 
 uninstall() {
@@ -416,7 +416,7 @@ uninstall() {
 		fi
 		if [[ "$LINK_CLI" -eq 1 ]]; then
 			local name link
-			for name in chiling chilingd chiling-plugin-host; do
+			for name in crabbro crabbrod crabbro-plugin-host; do
 				link="${CLI_DIR}/${name}"
 				if [[ -L "$link" ]]; then
 					srun rm -f "$link"
@@ -426,7 +426,7 @@ uninstall() {
 	else
 		if [[ "$LINK_CLI" -eq 1 ]]; then
 			local name
-			for name in chiling chilingd chiling-plugin-host; do
+			for name in crabbro crabbrod crabbro-plugin-host; do
 				if [[ -e "${CLI_DIR}/${name}" ]]; then
 					srun rm -f "${CLI_DIR}/${name}"
 				fi
@@ -439,11 +439,11 @@ uninstall() {
 next_steps() {
 	cat <<'EOF'
 
-Chiling is installed. This script did not trust a certificate or change your proxy.
+Crabbro is installed. This script did not trust a certificate or change your proxy.
 
 Next:
-  chiling daemon start
-  chiling mitm install-ca
+  crabbro daemon start
+  crabbro mitm install-ca
 
 Point a client at the proxy when you want to capture traffic:
   export HTTP_PROXY=http://localhost:8080 HTTPS_PROXY=http://localhost:8080

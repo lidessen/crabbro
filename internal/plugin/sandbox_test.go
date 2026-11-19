@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lidessen/chiling/internal/rule"
+	"github.com/lidessen/crabbro/internal/rule"
 )
 
 // frameHost drives the Node host over its socket, one frame at a time.

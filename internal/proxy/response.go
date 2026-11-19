@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lidessen/chiling/internal/shared"
+	"github.com/lidessen/crabbro/internal/shared"
 )
 
 func splitStage(actions []shared.RuleAction) (request, response []shared.RuleAction) {

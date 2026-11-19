@@ -1,6 +1,6 @@
-# Chiling
+# Crabbro
 
-Chiling is a local HTTP proxy that an agent drives and a person can inspect.
+Crabbro is a local HTTP proxy that an agent drives and a person can inspect.
 The daemon owns capture, rules, and MITM. The CLI is a client of that daemon,
 and the desktop UI attaches to the same control API.
 
@@ -20,11 +20,11 @@ Requires Go 1.26 or newer. From a checkout, one command builds the binaries and 
 ./scripts/install.sh
 ```
 
-On macOS that replaces `/Applications/Chiling.app` — the MyGo window is the app's executable, with the CLI and daemon beside it — and links `chiling` onto `PATH`. On Linux it installs the CLI into `~/.local/bin` or `/usr/local/bin`. It does not trust the MITM CA or change the system proxy. After it finishes:
+On macOS that replaces `/Applications/Crabbro.app` — the MyGo window is the app's executable, with the CLI and daemon beside it — and links `crabbro` onto `PATH`. On Linux it installs the CLI into `~/.local/bin` or `/usr/local/bin`. It does not trust the MITM CA or change the system proxy. After it finishes:
 
 ```sh
-chiling daemon start
-chiling mitm install-ca
+crabbro daemon start
+crabbro mitm install-ca
 ```
 
 Useful flags: `--app-dir ~/Applications`, `--prefix ~/.local/bin`, `--no-cli-link`, `--dry-run`, `--uninstall`.
@@ -32,11 +32,25 @@ Useful flags: `--app-dir ~/Applications`, `--prefix ~/.local/bin`, `--no-cli-lin
 `go install` still works if you only want the binaries on `PATH`:
 
 ```sh
-go install github.com/lidessen/chiling/cmd/chiling@latest
-go install github.com/lidessen/chiling/cmd/chilingd@latest
+go install github.com/lidessen/crabbro/cmd/crabbro@latest
+go install github.com/lidessen/crabbro/cmd/crabbrod@latest
 ```
 
-`chiling daemon start` looks for `chilingd` beside the CLI binary, then on `PATH`.
+`crabbro daemon start` looks for `crabbrod` beside the CLI binary, then on `PATH`.
+
+## Migrating from Chiling
+
+This project was renamed from Chiling on 2026-11-18; the old name remains only in git history. To carry local state over, move the config directory and update names the old version wrote into files:
+
+```sh
+mv ~/.chiling ~/.crabbro
+```
+
+- Rule pipelines: `uses: chiling.<action>` becomes `uses: crabbro.<action>`.
+- Plugin manifests: the `"chiling"` object in `package.json` becomes `"crabbro"`.
+- Environment variables: `CHILING_*` becomes `CRABBRO_*`; schema URIs move from `chiling.dev` to `crabbro.dev`.
+- MITM: the CA subject changed. Remove the old `chiling root CA` from the system trust store, then run `crabbro mitm install-ca` to install the new one.
+- HTTP headers: `X-Chiling-*` becomes `X-Crabbro-*`.
 
 ## Agent workflow
 
@@ -44,27 +58,27 @@ JSON is the default output. Add `--pretty` where a command supports it for a sho
 
 ```sh
 # 1. Record. The daemon proxies on localhost:8080.
-chiling daemon start --proxy-addr localhost:8080
-chiling record start --name login-hunt
+crabbro daemon start --proxy-addr localhost:8080
+crabbro record start --name login-hunt
 
 # Point the client under test at the proxy, then reproduce the call.
 export HTTP_PROXY=http://localhost:8080 HTTPS_PROXY=http://localhost:8080
 
 # 2. Inspect. IDs are stable (`req_1`, …). A unique prefix works.
-chiling requests search --method POST --path /v1/login
-chiling requests show req_1 --include body,headers,rule-trace
+crabbro requests search --method POST --path /v1/login
+crabbro requests show req_1 --include body,headers,rule-trace
 
 # Optional: ask a configured decision model which flow matches a sentence.
-chiling find "the login request that returns the user token"
+crabbro find "the login request that returns the user token"
 
 # 3–4. Write a rule from that capture and apply it (create enables it).
-chiling rules from req_1 --action mock --name mock-login
+crabbro rules from req_1 --action mock --name mock-login
 
 # 5. Replay the captured request through the proxy and check the outcome.
-chiling verify replay req_1 --expect-status 200 --expect-body-contains ok
+crabbro verify replay req_1 --expect-status 200 --expect-body-contains ok
 
-chiling record stop
-chiling daemon stop
+crabbro record stop
+crabbro daemon stop
 ```
 
 `rules from` scaffolds a YAML pipeline from the captured host, method, and
@@ -72,8 +86,8 @@ path. `rules draft` asks the decision API to pick or write a rule. Both are
 optional relative to hand-writing a file:
 
 ```sh
-chiling rules create ./mock-login.yaml --name mock-login --priority 100
-chiling rules test ./mock-login.yaml --fixture login-ok
+crabbro rules create ./mock-login.yaml --name mock-login --priority 100
+crabbro rules test ./mock-login.yaml --fixture login-ok
 ```
 
 ## HTTPS
@@ -82,14 +96,14 @@ MITM is off until you enable it. An empty allowlist intercepts nothing; add a
 pattern (a bare `*` is explicit).
 
 ```sh
-chiling daemon start --mitm --mitm-allow '*.example.com'
-chiling mitm status
-chiling mitm cert --output ~/.chiling/certs/rootCA.pem
-chiling mitm install-ca
+crabbro daemon start --mitm --mitm-allow '*.example.com'
+crabbro mitm status
+crabbro mitm cert --output ~/.crabbro/certs/rootCA.pem
+crabbro mitm install-ca
 ```
 
 `install-ca` prints the OS command, asks for confirmation, and installs the
-root CA (`chiling root CA`) into the system trust store on macOS or Linux.
+root CA (`crabbro root CA`) into the system trust store on macOS or Linux.
 Domains on the denylist stay opaque TCP tunnels. A failed MITM handshake is
 not downgraded to a tunnel.
 
@@ -122,26 +136,26 @@ checked against Go structs.
 
 ```sh
 # Jev (first-party TypeSafe, or a compatible deployment)
-export CHILING_DECISION_PROVIDER=jev
-export CHILING_DECISION_API_KEY="$TYPESAFE_API_KEY"   # TYPESAFE_API_KEY also works
-# export CHILING_DECISION_BASE_URL=https://api.typesafe.ai
-# export CHILING_DECISION_MODEL=jev-latest
+export CRABBRO_DECISION_PROVIDER=jev
+export CRABBRO_DECISION_API_KEY="$TYPESAFE_API_KEY"   # TYPESAFE_API_KEY also works
+# export CRABBRO_DECISION_BASE_URL=https://api.typesafe.ai
+# export CRABBRO_DECISION_MODEL=jev-latest
 
 # OpenAI or a third-party compatible endpoint
-export CHILING_DECISION_PROVIDER=openai
-export CHILING_DECISION_API_KEY="$OPENAI_API_KEY"    # OPENAI_API_KEY also works
-# export CHILING_DECISION_BASE_URL=https://api.openai.com/v1
+export CRABBRO_DECISION_PROVIDER=openai
+export CRABBRO_DECISION_API_KEY="$OPENAI_API_KEY"    # OPENAI_API_KEY also works
+# export CRABBRO_DECISION_BASE_URL=https://api.openai.com/v1
 # export OPENAI_BASE_URL=https://your-host/v1
-# export CHILING_DECISION_MODEL=gpt-4o-mini
+# export CRABBRO_DECISION_MODEL=gpt-4o-mini
 
-chilingd   # the daemon reads the environment; the key is not a CLI flag
-chiling decision status
-chiling find "the login request that returns the user token"
-chiling rules draft "mock the login response" --from req_1 --apply
+crabbrod   # the daemon reads the environment; the key is not a CLI flag
+crabbro decision status
+crabbro find "the login request that returns the user token"
+crabbro rules draft "mock the login response" --from req_1 --apply
 ```
 
 If only `TYPESAFE_API_KEY` is set, the provider defaults to `jev`. Otherwise it
-defaults to `openai`. `chiling decision status` never prints the key.
+defaults to `openai`. `crabbro decision status` never prints the key.
 
 ## CLI reference
 
@@ -149,7 +163,7 @@ Global flags, before the command:
 
 | Flag | Default | Purpose |
 |---|---|---|
-| `--uds-path` | `~/.chiling/proxy.sock` | Control API Unix socket |
+| `--uds-path` | `~/.crabbro/proxy.sock` | Control API Unix socket |
 | `--tcp-addr` | `localhost:16379` | Control API TCP fallback |
 | `--api-token` | file `api.token` next to the socket | Bearer token for TCP |
 
@@ -158,7 +172,7 @@ reads the token file itself.
 
 | Command | Purpose |
 |---|---|
-| `daemon start [--mitm] [--mitm-allow PAT] [--proxy-addr ADDR]` | Start `chilingd` in the background |
+| `daemon start [--mitm] [--mitm-allow PAT] [--proxy-addr ADDR]` | Start `crabbrod` in the background |
 | `daemon stop` | Stop the background daemon |
 | `status` | Daemon status |
 | `doctor [--fix] [--pretty]` | Setup checks |
@@ -181,30 +195,30 @@ reads the token file itself.
 `requests list` filters: `--since` (request id, RFC3339, or a duration like `5m`),
 `--limit`, `--method`, `--host`, `--path`, `--status`, `--q`, `--tag`, `--session`.
 
-`chilingd` flags: `--proxy-addr`, `--uds-path`, `--tcp-addr`, `--ring-buffer-size`,
+`crabbrod` flags: `--proxy-addr`, `--uds-path`, `--tcp-addr`, `--ring-buffer-size`,
 `--fixture-dir`, `--mitm`, `--mitm-allow`, `--mitm-deny`, `--decision-provider`,
 `--decision-base-url`, `--decision-model`, `--history`, `--history-retention`,
 `--history-max-rows`. The API key stays in the environment.
 
 ## Rule format
 
-`chiling sources list` shows apps and pages. `chiling scope pick`, `omit`, `off`, `on`, `reset`, and `bypass` narrow the current recording session. If none is recording, the first scope command opens one and says so. Omit hides rows from `requests list` (`hiddenCount`, `hiddenReason`) without stopping forwarding or rules. `requests list --all` shows the hidden rows. `requests list --type xhr --initiator <url>` and the same flags on `find` filter further. Durable lists are `~/.chiling/scope/allow.yaml` and `deny.yaml`, edited with `config draft/validate/commit/discard --scope`. An empty allow list does not narrow.
+`crabbro sources list` shows apps and pages. `crabbro scope pick`, `omit`, `off`, `on`, `reset`, and `bypass` narrow the current recording session. If none is recording, the first scope command opens one and says so. Omit hides rows from `requests list` (`hiddenCount`, `hiddenReason`) without stopping forwarding or rules. `requests list --all` shows the hidden rows. `requests list --type xhr --initiator <url>` and the same flags on `find` filter further. Durable lists are `~/.crabbro/scope/allow.yaml` and `deny.yaml`, edited with `config draft/validate/commit/discard --scope`. An empty allow list does not narrow.
 
 Every rule is a YAML document — one file per rule in `rules/`, with a
 `pipeline` of `uses` stages. There is no JavaScript rule format anymore: a
 script that does not parse as a rule document is rejected at creation, and
-`chiling rules migrate <file.js>` wraps an older script as a literal `run`
+`crabbro rules migrate <file.js>` wraps an older script as a literal `run`
 stage (`runtime: goja`) inside the YAML. The schema is
 `schemas/rule.v1.json`. The full format, including `if`, `select`, and
 observe-only `parallel`, is [docs/design/rules.md](docs/design/rules.md).
 
-Plugins are npm packages loaded by one Node host, with a worker per active plugin. `chiling plugin install ./pkg` requires `package-lock.json` and runs `npm ci --ignore-scripts`. A pipeline stage calls `uses: <plugin>.<capability>`. See [docs/design/plugins.md](docs/design/plugins.md).
+Plugins are npm packages loaded by one Node host, with a worker per active plugin. `crabbro plugin install ./pkg` requires `package-lock.json` and runs `npm ci --ignore-scripts`. A pipeline stage calls `uses: <plugin>.<capability>`. See [docs/design/plugins.md](docs/design/plugins.md).
 
 Stages run in a fresh Goja VM only when a stage is a literal `run` — the
 escape hatch inside an otherwise declarative pipeline. A `run` script has no
 filesystem, network, process, or environment access, each execution has a
 500ms timeout, and the whole result must validate or none of its actions
-apply. Everything else is a `chiling.*` builtin, compiled to Go. Enabled
+apply. Everything else is a `crabbro.*` builtin, compiled to Go. Enabled
 rules run in ascending priority, then rule id. A later rule sees request
 patches from earlier rules. The original URL is kept on the capture.
 
@@ -223,7 +237,7 @@ on:
 request:
   pipeline:
     - id: mock
-      uses: chiling.mock-response
+      uses: crabbro.mock-response
       with:
         status: 200
         headers:
@@ -233,24 +247,24 @@ request:
 
 | Stage `uses` | `with` | Effect |
 |---|---|---|
-| `chiling.tag` | `tags: string[]` | Add tags on the capture |
-| `chiling.set-request-header` | `name`, `value` | Set a request header |
-| `chiling.remove-request-header` | `name` | Remove a request header |
-| `chiling.rewrite-url` | `url` (http/https, no userinfo) | Change URL, dial host, TLS name, and Host together |
-| `chiling.mock-response` | `status`, optional `headers`, optional `body` | Skip upstream |
-| `chiling.block` | `status`, optional `body` | Skip upstream with that status |
-| `chiling.abort` | none | Reject with HTTP 403 |
-| `chiling.set-response-header` | `name`, `value` | Set a response header on the way back |
-| `chiling.remove-response-header` | `name` | Remove a response header |
-| `chiling.set-response-status` | `status` | Change the response status |
-| `chiling.rewrite-response-body` | `body`, or `find` + `replace` | Replace the body, or substitute within it. Bodies over 256 KiB are left unchanged |
-| `chiling.delay` | `milliseconds` (max 30000) | Wait before the response is written |
-| `chiling.throttle` | `bytesPerSecond` | Limit how fast the response body is copied |
-| `chiling.replace-frame` | `payload` or `payloadBase64` | Replace a WebSocket text/binary frame |
-| `chiling.drop-frame` | none | Drop a WebSocket text/binary frame |
+| `crabbro.tag` | `tags: string[]` | Add tags on the capture |
+| `crabbro.set-request-header` | `name`, `value` | Set a request header |
+| `crabbro.remove-request-header` | `name` | Remove a request header |
+| `crabbro.rewrite-url` | `url` (http/https, no userinfo) | Change URL, dial host, TLS name, and Host together |
+| `crabbro.mock-response` | `status`, optional `headers`, optional `body` | Skip upstream |
+| `crabbro.block` | `status`, optional `body` | Skip upstream with that status |
+| `crabbro.abort` | none | Reject with HTTP 403 |
+| `crabbro.set-response-header` | `name`, `value` | Set a response header on the way back |
+| `crabbro.remove-response-header` | `name` | Remove a response header |
+| `crabbro.set-response-status` | `status` | Change the response status |
+| `crabbro.rewrite-response-body` | `body`, or `find` + `replace` | Replace the body, or substitute within it. Bodies over 256 KiB are left unchanged |
+| `crabbro.delay` | `milliseconds` (max 30000) | Wait before the response is written |
+| `crabbro.throttle` | `bytesPerSecond` | Limit how fast the response body is copied |
+| `crabbro.replace-frame` | `payload` or `payloadBase64` | Replace a WebSocket text/binary frame |
+| `crabbro.drop-frame` | none | Drop a WebSocket text/binary frame |
 
-A pipeline cannot produce more than one of `chiling.mock-response`,
-`chiling.block`, and `chiling.abort`. `failureMode` on the stored rule is
+A pipeline cannot produce more than one of `crabbro.mock-response`,
+`crabbro.block`, and `crabbro.abort`. `failureMode` on the stored rule is
 `fail-open` (default) or `fail-closed`. fail-open skips a rule that errors.
 fail-closed answers 403.
 
@@ -269,7 +283,7 @@ frame:
   pipeline:
     - id: rewrite-client-text
       if: "frame.direction == 'client' && frame.opcode == 'text'"
-      uses: chiling.replace-frame
+      uses: crabbro.replace-frame
       with:
         payload: "rewritten"
 ```
@@ -281,20 +295,20 @@ stages see each data frame on its own, not a reassembled message.
 Create from a file:
 
 ```sh
-chiling rules create ./mock-login.yaml --name mock-login --priority 100
+crabbro rules create ./mock-login.yaml --name mock-login --priority 100
 ```
 
 A `.js` file is refused with a pointer at the converter:
 
 ```sh
-chiling rules migrate ./old-rule.js --id old-rule
+crabbro rules migrate ./old-rule.js --id old-rule
 ```
 
 `POST /v1/rules` body: `{"name","priority","script","failureMode"}`.
 
 ## Control API
 
-`chilingd` serves `/v1` on the Unix socket and on localhost TCP.
+`crabbrod` serves `/v1` on the Unix socket and on localhost TCP.
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -326,21 +340,21 @@ the source for recent traffic. Bodies are previews (64 KiB each, 10 MiB
 shared). Forwarding is not truncated to that cap.
 
 Completed exchanges are also written to SQLite (`history.db` next to the
-control socket, unless `--history off`). `chiling requests list` and
+control socket, unless `--history off`). `crabbro requests list` and
 `requests show` read that store, so a restart keeps them. Retention defaults
-to 7 days and 10000 rows. `chiling history status` and `chiling history prune`
+to 7 days and 10000 rows. `crabbro history status` and `crabbro history prune`
 report and apply that policy.
 
 ## The desktop UI
 
-`cmd/chiling-ui` is the native window, drawn by [MyGo](https://mygo.egoist.dev/docs/ui) from Go,
+`cmd/crabbro-ui` is the native window, drawn by [MyGo](https://mygo.egoist.dev/docs/ui) from Go,
 with no webview. It is a client of the same control API the CLI uses: `pkg/api` for the JSON
 types and `pkg/client` for the calls, including `Subscribe`. Neither package imports a UI
 toolkit. The contract, the event types, and the snapshot-then-follow pattern are in
 [docs/design/ui-api.md](docs/design/ui-api.md).
 
 ```sh
-go run ./cmd/chiling-ui
+go run ./cmd/crabbro-ui
 ```
 
 The window has four pages:
@@ -355,13 +369,13 @@ The window has four pages:
 - **Trajectory** — the timeline tail, newest first; a step's request id opens it in Requests.
 - **Daemon** — status, the recording session, history, MITM, and the scope.
 
-A goroutine keeps the state fresh: ensure the daemon (`EnsureDaemon` starts `chilingd` when
+A goroutine keeps the state fresh: ensure the daemon (`EnsureDaemon` starts `crabbrod` when
 `/v1/status` does not answer), take a snapshot, follow the event stream, and start over when the
 stream drops. The frame function only reads that state and calls client methods for clicks.
 Closing the window leaves capture, rules, and MITM running.
 
 `scripts/install.sh` builds the UI and installs it as the app's executable
-(`Contents/MacOS/chiling-ui`); when the UI does not build, the app keeps a launcher that starts
+(`Contents/MacOS/crabbro-ui`); when the UI does not build, the app keeps a launcher that starts
 the daemon. MyGo's own packaging (`mygo.json`, signing, notarization, auto-update) can replace
 that script for the app later; the script stays until then.
 
@@ -385,20 +399,20 @@ go run ./examples/ui-client
 
 | Path | Role |
 |---|---|
-| `cmd/chilingd` | Daemon |
-| `cmd/chiling` | CLI |
-| `cmd/chiling-ui` | MyGo native UI (the Chiling.app window) |
+| `cmd/crabbrod` | Daemon |
+| `cmd/crabbro` | CLI |
+| `cmd/crabbro-ui` | MyGo native UI (the Crabbro.app window) |
 | `pkg/api` | `/v1` JSON types shared by the daemon and clients |
 | `pkg/client` | Typed control-socket client (`Subscribe`, trajectory, scope, rules) |
 | `examples/ui-client` | Prints the trajectory and the live event stream |
 | `docs/design/ui-api.md` | Methods, events, pagination, and how a native view consumes them |
-| `scripts/install.sh` | Local install: `Chiling.app` on macOS, CLI on Linux |
+| `scripts/install.sh` | Local install: `Crabbro.app` on macOS, CLI on Linux |
 | `internal/proxy` | Listener, exchange pipeline, CONNECT, replay |
 | `internal/mitm` | CA and client-facing TLS |
 | `internal/rule` | YAML pipelines, Goja `run` stages, rule files |
 | `internal/plugin` | Node plugin host |
 | `sdk/plugin` | TypeScript types for plugin authors |
-| `cmd/chiling-plugin-host` | Node host entry |
+| `cmd/crabbro-plugin-host` | Node host entry |
 | `internal/decision` | Jev and OpenAI-compatible decision calls |
 | `internal/api` | `/v1` control API |
 | `internal/session` | Recording sessions and trajectory |

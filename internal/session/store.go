@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lidessen/chiling/internal/inspect"
-	"github.com/lidessen/chiling/internal/shared"
+	"github.com/lidessen/crabbro/internal/inspect"
+	"github.com/lidessen/crabbro/internal/shared"
 )
 
 // Store is an in-memory session and activity log. It is safe for concurrent use.

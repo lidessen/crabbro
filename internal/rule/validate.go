@@ -45,11 +45,11 @@ func loadSchema() (*jsonschema.Schema, error) {
 			return
 		}
 		c := jsonschema.NewCompiler()
-		if err := c.AddResource("https://chiling.dev/schemas/rule.v1.json", doc); err != nil {
+		if err := c.AddResource("https://crabbro.dev/schemas/rule.v1.json", doc); err != nil {
 			schemaErr = err
 			return
 		}
-		ruleSchema, schemaErr = c.Compile("https://chiling.dev/schemas/rule.v1.json")
+		ruleSchema, schemaErr = c.Compile("https://crabbro.dev/schemas/rule.v1.json")
 	})
 	return ruleSchema, schemaErr
 }
@@ -314,8 +314,8 @@ func walkPipeline(path string, stages []Stage, phase string, known map[string]bo
 			}
 		default:
 			out = append(out, checkAction(p, st, phase, known, false, offline, rt)...)
-			if st.Uses == "chiling.mock-response" || st.Uses == "chiling.block" || st.Uses == "chiling.abort" {
-				if terminals[st.Uses] || (st.Uses == "chiling.mock-response" && terminals["chiling.block"]) || (st.Uses == "chiling.block" && terminals["chiling.mock-response"]) || (terminals["chiling.abort"] && st.Uses != "chiling.abort") || (st.Uses == "chiling.abort" && len(terminals) > 0) {
+			if st.Uses == "crabbro.mock-response" || st.Uses == "crabbro.block" || st.Uses == "crabbro.abort" {
+				if terminals[st.Uses] || (st.Uses == "crabbro.mock-response" && terminals["crabbro.block"]) || (st.Uses == "crabbro.block" && terminals["crabbro.mock-response"]) || (terminals["crabbro.abort"] && st.Uses != "crabbro.abort") || (st.Uses == "crabbro.abort" && len(terminals) > 0) {
 					out = append(out, Diagnostic{Path: p, Message: "multiple terminal actions"})
 				}
 				terminals[st.Uses] = true
@@ -444,7 +444,7 @@ func cloneKnown(in map[string]bool) map[string]bool {
 }
 
 func isPluginUses(uses string) bool {
-	return !strings.HasPrefix(uses, "chiling.")
+	return !strings.HasPrefix(uses, "crabbro.")
 }
 
 func pluginID(uses string) string {

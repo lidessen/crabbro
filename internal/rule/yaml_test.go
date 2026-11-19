@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lidessen/chiling/internal/shared"
+	"github.com/lidessen/crabbro/internal/shared"
 )
 
 func TestYAMLSelectParallelAndRun(t *testing.T) {
@@ -34,30 +34,30 @@ request:
           - name: password
             if: pipeline.decoded.outputs.kind == "password"
             pipeline:
-              - uses: chiling.tag
+              - uses: crabbro.tag
                 with:
                   tags: ["password-login"]
           - name: sso
             if: pipeline.decoded.outputs.kind == "sso"
             pipeline:
-              - uses: chiling.set-request-header
+              - uses: crabbro.set-request-header
                 with:
                   name: X-Login-Kind
                   value: sso
         default:
           pipeline:
-            - uses: chiling.tag
+            - uses: crabbro.tag
               with:
                 tags: ["other-login"]
     - parallel:
         timeoutMs: 200
         stages:
           - id: logged
-            uses: chiling.log
+            uses: crabbro.log
             with:
               message: decoded-login
           - id: counted
-            uses: chiling.metric
+            uses: crabbro.metric
             with:
               name: login_decoded
 `
@@ -71,7 +71,7 @@ request:
 	}
 	sawLog := false
 	for _, st := range res.Stages {
-		if st.Uses == "chiling.log" && !st.Skipped {
+		if st.Uses == "crabbro.log" && !st.Skipped {
 			sawLog = true
 		}
 		if st.ID == "logged" && st.Outputs != nil {
@@ -101,7 +101,7 @@ on:
     path: /v1/login
 request:
   pipeline:
-    - uses: chiling.tag
+    - uses: crabbro.tag
       with:
         tags: ["x"]
 `
@@ -114,8 +114,8 @@ request:
 
 func TestPerFileIsolation(t *testing.T) {
 	dir := t.TempDir()
-	good := []byte("version: 1\nid: good-rule\non:\n  request:\n    path: /ok\nrequest:\n  pipeline:\n    - uses: chiling.tag\n      with:\n        tags: [a]\n")
-	bad := []byte("version: 1\nid: wrong-name\non:\n  request: {}\nrequest:\n  pipeline:\n    - uses: chiling.tag\n      with:\n        tags: [a]\n")
+	good := []byte("version: 1\nid: good-rule\non:\n  request:\n    path: /ok\nrequest:\n  pipeline:\n    - uses: crabbro.tag\n      with:\n        tags: [a]\n")
+	bad := []byte("version: 1\nid: wrong-name\non:\n  request: {}\nrequest:\n  pipeline:\n    - uses: crabbro.tag\n      with:\n        tags: [a]\n")
 	if err := os.WriteFile(filepath.Join(dir, "good-rule.yaml"), good, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestScaffoldIsYAML(t *testing.T) {
 	out := Scaffold(&shared.Request{Method: "POST", Host: "api.example.com:443", Path: "/v1/login"}, "mock", `{"ok":true}`, "application/json")
 	// The scaffold must emit a YAML rule v1 document; IsYAMLRule is gone now
 	// that the legacy JavaScript format is removed.
-	if !strings.HasPrefix(strings.TrimSpace(out), "version:") || !strings.Contains(out, "chiling.mock-response") || !strings.Contains(out, "/v1/login") {
+	if !strings.HasPrefix(strings.TrimSpace(out), "version:") || !strings.Contains(out, "crabbro.mock-response") || !strings.Contains(out, "/v1/login") {
 		t.Fatalf("scaffold = %s", out)
 	}
 	res := NewRuleEngine().Evaluate(out, &shared.Request{Method: "POST", Host: "api.example.com", Path: "/v1/login"}, "", 0)

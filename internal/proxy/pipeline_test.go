@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lidessen/chiling/internal/ring"
-	"github.com/lidessen/chiling/internal/rule"
-	"github.com/lidessen/chiling/internal/shared"
+	"github.com/lidessen/crabbro/internal/ring"
+	"github.com/lidessen/crabbro/internal/rule"
+	"github.com/lidessen/crabbro/internal/shared"
 )
 
 func TestPlainHTTPForwardsBodyBeyondCaptureLimit(t *testing.T) {
@@ -134,7 +134,7 @@ on:
 request:
   pipeline:
     - id: stage
-      uses: chiling.set-request-header
+      uses: crabbro.set-request-header
       with:
         name: X-Stage
         value: outer

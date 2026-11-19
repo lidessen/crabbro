@@ -12,28 +12,28 @@ import (
 	"testing"
 	"time"
 
-	daemon "github.com/lidessen/chiling/internal/api"
-	"github.com/lidessen/chiling/internal/fixture"
-	"github.com/lidessen/chiling/internal/inspect"
-	"github.com/lidessen/chiling/internal/proxy"
-	"github.com/lidessen/chiling/internal/ring"
-	"github.com/lidessen/chiling/internal/rule"
-	"github.com/lidessen/chiling/internal/session"
-	"github.com/lidessen/chiling/internal/shared"
-	"github.com/lidessen/chiling/pkg/api"
+	daemon "github.com/lidessen/crabbro/internal/api"
+	"github.com/lidessen/crabbro/internal/fixture"
+	"github.com/lidessen/crabbro/internal/inspect"
+	"github.com/lidessen/crabbro/internal/proxy"
+	"github.com/lidessen/crabbro/internal/ring"
+	"github.com/lidessen/crabbro/internal/rule"
+	"github.com/lidessen/crabbro/internal/session"
+	"github.com/lidessen/crabbro/internal/shared"
+	"github.com/lidessen/crabbro/pkg/api"
 )
 
 func TestPackagesDoNotImportInternal(t *testing.T) {
 	for _, pkg := range []string{
-		"github.com/lidessen/chiling/pkg/api",
-		"github.com/lidessen/chiling/pkg/client",
+		"github.com/lidessen/crabbro/pkg/api",
+		"github.com/lidessen/crabbro/pkg/client",
 	} {
 		out, err := exec.Command("go", "list", "-deps", pkg).CombinedOutput()
 		if err != nil {
 			t.Fatalf("%s: %v\n%s", pkg, err, out)
 		}
 		for _, line := range strings.Split(string(out), "\n") {
-			if strings.Contains(line, "github.com/lidessen/chiling/internal") || strings.Contains(line, "mygo") {
+			if strings.Contains(line, "github.com/lidessen/crabbro/internal") || strings.Contains(line, "mygo") {
 				t.Fatalf("%s depends on %s", pkg, line)
 			}
 		}
@@ -185,7 +185,7 @@ func TestClientAgainstDaemon(t *testing.T) {
 		t.Fatalf("start %v %+v", err, again)
 	}
 
-	created, err := srv.RuleStore.Create("demo", 10, "version: 1\nid: demo\non:\n  request:\n    method: GET\nrequest:\n  pipeline:\n    - id: noop\n      uses: chiling.tag\n      with:\n        tags: [\"demo\"]\n")
+	created, err := srv.RuleStore.Create("demo", 10, "version: 1\nid: demo\non:\n  request:\n    method: GET\nrequest:\n  pipeline:\n    - id: noop\n      uses: crabbro.tag\n      with:\n        tags: [\"demo\"]\n")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ func TestClientAgainstDaemon(t *testing.T) {
 	}
 	updated, err := c.UpdateRule(ctx, string(created.ID), api.UpdateRuleRequest{
 		Priority: ptrTo(30),
-		Script:   ptrTo("version: 1\nid: demo\non:\n  request:\n    method: GET\nrequest:\n  pipeline:\n    - id: noop\n      uses: chiling.tag\n      with:\n        tags: [\"demo\"]\n"),
+		Script:   ptrTo("version: 1\nid: demo\non:\n  request:\n    method: GET\nrequest:\n  pipeline:\n    - id: noop\n      uses: crabbro.tag\n      with:\n        tags: [\"demo\"]\n"),
 	})
 	if err != nil || updated.Priority != 30 || updated.Version != got.Version+1 {
 		t.Fatalf("update %v %+v", err, updated)

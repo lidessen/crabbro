@@ -18,7 +18,7 @@ type Class struct {
 
 // Classify reads resource type, page, and initiator from request headers.
 // Sec-Fetch-Dest: empty is xhr. A missing Sec-Fetch-Dest is unknown.
-// x-chiling-initiator and x-chiling-page are extension stamps. Callers strip
+// x-crabbro-initiator and x-crabbro-page are extension stamps. Callers strip
 // them before the request is forwarded.
 func Classify(h http.Header, rawURL string) Class {
 	if h == nil {
@@ -55,14 +55,14 @@ func Classify(h http.Header, rawURL string) Class {
 		origin = originOf(out.PageURL)
 	}
 	out.Origin = origin
-	if page := strings.TrimSpace(h.Get("X-Chiling-Page")); page != "" {
+	if page := strings.TrimSpace(h.Get("X-Crabbro-Page")); page != "" {
 		out.PageURL = page
 		out.Confidence = "extension"
 		if out.Origin == "" {
 			out.Origin = originOf(page)
 		}
 	}
-	if init := strings.TrimSpace(h.Get("X-Chiling-Initiator")); init != "" {
+	if init := strings.TrimSpace(h.Get("X-Crabbro-Initiator")); init != "" {
 		out.InitiatorURL = init
 		out.InitiatorConfidence = "extension"
 	}
@@ -119,6 +119,6 @@ func StripStamps(h http.Header) {
 	if h == nil {
 		return
 	}
-	h.Del("X-Chiling-Initiator")
-	h.Del("X-Chiling-Page")
+	h.Del("X-Crabbro-Initiator")
+	h.Del("X-Crabbro-Page")
 }

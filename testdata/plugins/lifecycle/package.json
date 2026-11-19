@@ -5,7 +5,7 @@
   "scripts": {
     "preinstall": "node -e \"require('fs').writeFileSync('pwned','1')\""
   },
-  "chiling": {
+  "crabbro": {
     "id": "lifecycle",
     "api": "1.0.0",
     "entry": "index.js",

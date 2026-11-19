@@ -1,6 +1,6 @@
 package proxy
 
-import "github.com/lidessen/chiling/internal/shared"
+import "github.com/lidessen/crabbro/internal/shared"
 
 func (p *Proxy) persist(req *shared.Request) {
 	if p == nil || p.History == nil || req == nil || req.ID == "" {

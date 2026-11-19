@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lidessen/chiling/internal/rule"
+	"github.com/lidessen/crabbro/internal/rule"
 )
 
 func TestHostFrames(t *testing.T) {
@@ -150,7 +150,7 @@ func TestMissingLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	src := t.TempDir()
-	if err := os.WriteFile(filepath.Join(src, "package.json"), []byte(`{"name":"x","version":"1.0.0","chiling":{"id":"x","api":"1.0.0","entry":"index.js"}}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(src, "package.json"), []byte(`{"name":"x","version":"1.0.0","crabbro":{"id":"x","api":"1.0.0","entry":"index.js"}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(src, "index.js"), []byte("export default {}\n"), 0o600); err != nil {

@@ -1,7 +1,7 @@
 // Package fixture provides file-based persistence for HTTP request fixtures.
 //
 // Fixtures are stored as individual JSON files under a configurable directory
-// (defaulting to ~/.chiling/fixtures/). Each fixture captures a complete HTTP
+// (defaulting to ~/.crabbro/fixtures/). Each fixture captures a complete HTTP
 // request/response exchange with bodies inlined, making fixtures self-contained
 // and portable across daemon restarts and machines.
 package fixture
@@ -70,7 +70,7 @@ type FixtureStore struct {
 
 // New creates a FixtureStore rooted at baseDir.
 //
-// If baseDir is empty, the default ~/.chiling/fixtures/ is used. The
+// If baseDir is empty, the default ~/.crabbro/fixtures/ is used. The
 // directory (and any missing parents) is created with 0755 permissions.
 func New(baseDir string) (*FixtureStore, error) {
 	if baseDir == "" {
@@ -78,7 +78,7 @@ func New(baseDir string) (*FixtureStore, error) {
 		if err != nil {
 			return nil, fmt.Errorf("fixture: cannot determine home directory: %w", err)
 		}
-		baseDir = filepath.Join(home, ".chiling", "fixtures")
+		baseDir = filepath.Join(home, ".crabbro", "fixtures")
 	}
 
 	// Expand a leading ~ to $HOME for convenience.

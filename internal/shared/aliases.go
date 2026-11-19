@@ -1,6 +1,6 @@
 package shared
 
-import "github.com/lidessen/chiling/pkg/api"
+import "github.com/lidessen/crabbro/pkg/api"
 
 // Wire types live in pkg/api. These aliases keep the daemon on one definition.
 type (

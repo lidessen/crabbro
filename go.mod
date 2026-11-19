@@ -1,4 +1,4 @@
-module github.com/lidessen/chiling
+module github.com/lidessen/crabbro
 
 go 1.27.3
 

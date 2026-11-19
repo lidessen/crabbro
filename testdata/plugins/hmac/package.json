@@ -2,7 +2,7 @@
   "name": "hmac",
   "version": "1.0.0",
   "type": "module",
-  "chiling": {
+  "crabbro": {
     "id": "hmac",
     "api": "1.0.0",
     "entry": "index.js",

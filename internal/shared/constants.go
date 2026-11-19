@@ -3,7 +3,7 @@ package shared
 import (
 	"time"
 
-	"github.com/lidessen/chiling/pkg/api"
+	"github.com/lidessen/crabbro/pkg/api"
 )
 
 // Default configuration values for the proxy daemon and CLI.

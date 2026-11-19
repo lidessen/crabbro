@@ -14,10 +14,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lidessen/chiling/internal/mitm"
-	"github.com/lidessen/chiling/internal/ring"
-	"github.com/lidessen/chiling/internal/rule"
-	"github.com/lidessen/chiling/internal/shared"
+	"github.com/lidessen/crabbro/internal/mitm"
+	"github.com/lidessen/crabbro/internal/ring"
+	"github.com/lidessen/crabbro/internal/rule"
+	"github.com/lidessen/crabbro/internal/shared"
 )
 
 // ---------------------------------------------------------------------------
@@ -747,7 +747,7 @@ on:
 request:
   pipeline:
     - id: block
-      uses: chiling.block
+      uses: crabbro.block
       with:
         status: 403
         body: blocked by rule`)
@@ -813,7 +813,7 @@ on:
 request:
   pipeline:
     - id: mock
-      uses: chiling.mock-response
+      uses: crabbro.mock-response
       with:
         status: 201
         body: mocked response body`)
@@ -879,7 +879,7 @@ on:
 request:
   pipeline:
     - id: abort
-      uses: chiling.abort`)
+      uses: crabbro.abort`)
 	if err != nil {
 		t.Fatalf("create rule: %v", err)
 	}
@@ -951,7 +951,7 @@ on:
 request:
   pipeline:
     - id: header
-      uses: chiling.set-request-header
+      uses: crabbro.set-request-header
       with:
         name: X-Custom-Test
         value: header-value`)
@@ -1012,7 +1012,7 @@ on:
 request:
   pipeline:
     - id: tag
-      uses: chiling.tag
+      uses: crabbro.tag
       with:
         tags: ["test"]`)
 	if err != nil {

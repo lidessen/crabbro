@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lidessen/chiling/internal/rule"
-	"github.com/lidessen/chiling/internal/shared"
+	"github.com/lidessen/crabbro/internal/rule"
+	"github.com/lidessen/crabbro/internal/shared"
 )
 
 func isWebSocketUpgrade(r *http.Request) bool {

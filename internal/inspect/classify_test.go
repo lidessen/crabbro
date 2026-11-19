@@ -26,7 +26,7 @@ func TestPageFromRefererAndExtensionInitiator(t *testing.T) {
 	h := http.Header{}
 	h.Set("Sec-Fetch-Dest", "empty")
 	h.Set("Referer", "https://app.example.com/dashboard")
-	h.Set("X-Chiling-Initiator", "https://app.example.com/static/app.js")
+	h.Set("X-Crabbro-Initiator", "https://app.example.com/static/app.js")
 	got := Classify(h, "https://app.example.com/v1/checkout")
 	if got.Origin != "https://app.example.com" || got.PageURL != "https://app.example.com/dashboard" {
 		t.Fatalf("page = %+v", got)
@@ -35,7 +35,7 @@ func TestPageFromRefererAndExtensionInitiator(t *testing.T) {
 		t.Fatalf("initiator = %+v", got)
 	}
 	StripStamps(h)
-	if h.Get("X-Chiling-Initiator") != "" {
+	if h.Get("X-Crabbro-Initiator") != "" {
 		t.Fatal("stamp was not stripped")
 	}
 }

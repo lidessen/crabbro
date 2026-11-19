@@ -7,7 +7,7 @@ import (
 )
 
 func ruleText(id string) string {
-	return "version: 1\nid: " + id + "\non:\n  request:\n    host: example.com\nrequest:\n  pipeline:\n    - uses: chiling.tag\n      with:\n        tags: [x]\n"
+	return "version: 1\nid: " + id + "\non:\n  request:\n    host: example.com\nrequest:\n  pipeline:\n    - uses: crabbro.tag\n      with:\n        tags: [x]\n"
 }
 
 func has(s *RuleStore, id string) bool {

@@ -11,7 +11,7 @@ import (
 
 	"golang.org/x/net/http2"
 
-	"github.com/lidessen/chiling/internal/shared"
+	"github.com/lidessen/crabbro/internal/shared"
 )
 
 // handleConnect handles an HTTP CONNECT request for tunneling.

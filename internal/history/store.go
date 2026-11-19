@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/lidessen/chiling/internal/shared"
+	"github.com/lidessen/crabbro/internal/shared"
 	_ "modernc.org/sqlite"
 )
 

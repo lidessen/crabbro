@@ -1,8 +1,8 @@
 package session
 
 import (
-	"github.com/lidessen/chiling/internal/inspect"
-	"github.com/lidessen/chiling/internal/shared"
+	"github.com/lidessen/crabbro/internal/inspect"
+	"github.com/lidessen/crabbro/internal/shared"
 )
 
 // CurrentScope returns the scope for the open recording session, or nil.

@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lidessen/chiling/pkg/api"
+	"github.com/lidessen/crabbro/pkg/api"
 )
 
 // EventFilter selects which events Subscribe delivers.

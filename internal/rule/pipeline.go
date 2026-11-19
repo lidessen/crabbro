@@ -8,35 +8,35 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lidessen/chiling/internal/shared"
+	"github.com/lidessen/crabbro/internal/shared"
 )
 
 var builtinPhase = map[string]string{
-	"chiling.tag":                    "request",
-	"chiling.set-request-header":     "request",
-	"chiling.remove-request-header":  "request",
-	"chiling.rewrite-url":            "request",
-	"chiling.mock-response":          "request",
-	"chiling.block":                  "request",
-	"chiling.abort":                  "request",
-	"chiling.set-response-header":    "response",
-	"chiling.remove-response-header": "response",
-	"chiling.set-response-status":    "response",
-	"chiling.rewrite-response-body":  "response",
-	"chiling.delay":                  "response",
-	"chiling.throttle":               "response",
-	"chiling.replace-frame":          "frame",
-	"chiling.drop-frame":             "frame",
-	"chiling.read-body":              "any",
-	"chiling.log":                    "any",
-	"chiling.metric":                 "any",
-	"chiling.notify":                 "any",
-	"chiling.tee":                    "any",
+	"crabbro.tag":                    "request",
+	"crabbro.set-request-header":     "request",
+	"crabbro.remove-request-header":  "request",
+	"crabbro.rewrite-url":            "request",
+	"crabbro.mock-response":          "request",
+	"crabbro.block":                  "request",
+	"crabbro.abort":                  "request",
+	"crabbro.set-response-header":    "response",
+	"crabbro.remove-response-header": "response",
+	"crabbro.set-response-status":    "response",
+	"crabbro.rewrite-response-body":  "response",
+	"crabbro.delay":                  "response",
+	"crabbro.throttle":               "response",
+	"crabbro.replace-frame":          "frame",
+	"crabbro.drop-frame":             "frame",
+	"crabbro.read-body":              "any",
+	"crabbro.log":                    "any",
+	"crabbro.metric":                 "any",
+	"crabbro.notify":                 "any",
+	"crabbro.tee":                    "any",
 }
 
 func builtinEffect(uses string) string {
 	switch uses {
-	case "chiling.read-body", "chiling.log", "chiling.metric", "chiling.notify", "chiling.tee":
+	case "crabbro.read-body", "crabbro.log", "crabbro.metric", "crabbro.notify", "crabbro.tee":
 		return "observe"
 	default:
 		return "mutate"
@@ -599,7 +599,7 @@ func (e *RuleEngine) runAction(out *pipeOut, st Stage, scope map[string]any, req
 			}
 		}
 		out.sawStep = true
-	case strings.HasPrefix(st.Uses, "chiling."):
+	case strings.HasPrefix(st.Uses, "crabbro."):
 		actions, outputs, effect, err := builtinCall(st.Uses, with, scope, kind)
 		if err != nil {
 			e.failStage(out, tr, "invalid action", st.ContinueOnError || inParallel)
@@ -820,13 +820,13 @@ func builtinCall(uses string, with map[string]any, scope map[string]any, phase s
 
 func observeOutputs(uses string, with map[string]any, scope map[string]any) map[string]any {
 	switch uses {
-	case "chiling.log", "chiling.notify":
+	case "crabbro.log", "crabbro.notify":
 		msg, _ := with["message"].(string)
 		return map[string]any{"message": msg}
-	case "chiling.metric":
+	case "crabbro.metric":
 		name, _ := with["name"].(string)
 		return map[string]any{"name": name}
-	case "chiling.read-body", "chiling.tee":
+	case "crabbro.read-body", "crabbro.tee":
 		body := ""
 		truncated := false
 		if req, ok := scope["request"].(map[string]any); ok {
@@ -855,35 +855,35 @@ func builtinAction(uses string, with map[string]any) (shared.RuleAction, error) 
 	}
 	var typ shared.RuleActionType
 	switch uses {
-	case "chiling.tag":
+	case "crabbro.tag":
 		typ = shared.ActionTag
-	case "chiling.set-request-header":
+	case "crabbro.set-request-header":
 		typ = shared.ActionSetRequestHeader
-	case "chiling.remove-request-header":
+	case "crabbro.remove-request-header":
 		typ = shared.ActionRemoveRequestHeader
-	case "chiling.rewrite-url":
+	case "crabbro.rewrite-url":
 		typ = shared.ActionRewriteURL
-	case "chiling.mock-response":
+	case "crabbro.mock-response":
 		typ = shared.ActionMockResponse
-	case "chiling.block":
+	case "crabbro.block":
 		typ = shared.ActionBlock
-	case "chiling.abort":
+	case "crabbro.abort":
 		typ = shared.ActionAbort
-	case "chiling.set-response-header":
+	case "crabbro.set-response-header":
 		typ = shared.ActionSetResponseHeader
-	case "chiling.remove-response-header":
+	case "crabbro.remove-response-header":
 		typ = shared.ActionRemoveResponseHeader
-	case "chiling.set-response-status":
+	case "crabbro.set-response-status":
 		typ = shared.ActionSetResponseStatus
-	case "chiling.rewrite-response-body":
+	case "crabbro.rewrite-response-body":
 		typ = shared.ActionRewriteResponseBody
-	case "chiling.delay":
+	case "crabbro.delay":
 		typ = shared.ActionDelay
-	case "chiling.throttle":
+	case "crabbro.throttle":
 		typ = shared.ActionThrottle
-	case "chiling.replace-frame":
+	case "crabbro.replace-frame":
 		typ = shared.ActionReplaceFrame
-	case "chiling.drop-frame":
+	case "crabbro.drop-frame":
 		typ = shared.ActionDropFrame
 	default:
 		return shared.RuleAction{}, fmt.Errorf("unknown builtin")

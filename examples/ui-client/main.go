@@ -16,11 +16,11 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/lidessen/chiling/pkg/client"
+	"github.com/lidessen/crabbro/pkg/client"
 )
 
 func main() {
-	ensure := flag.Bool("ensure", false, "start chilingd if it is not running")
+	ensure := flag.Bool("ensure", false, "start crabbrod if it is not running")
 	limit := flag.Int("limit", 20, "trajectory steps to print before following the stream")
 	flag.Parse()
 

@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/lidessen/chiling/internal/shared"
+	"github.com/lidessen/crabbro/internal/shared"
 )
 
 // statusWriter wraps http.ResponseWriter to capture the response status code.

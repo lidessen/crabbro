@@ -8,12 +8,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lidessen/chiling/internal/fixture"
-	"github.com/lidessen/chiling/internal/mitm"
-	"github.com/lidessen/chiling/internal/proxy"
-	"github.com/lidessen/chiling/internal/ring"
-	"github.com/lidessen/chiling/internal/rule"
-	"github.com/lidessen/chiling/internal/shared"
+	"github.com/lidessen/crabbro/internal/fixture"
+	"github.com/lidessen/crabbro/internal/mitm"
+	"github.com/lidessen/crabbro/internal/proxy"
+	"github.com/lidessen/crabbro/internal/ring"
+	"github.com/lidessen/crabbro/internal/rule"
+	"github.com/lidessen/crabbro/internal/shared"
 )
 
 // ---------------------------------------------------------------------------

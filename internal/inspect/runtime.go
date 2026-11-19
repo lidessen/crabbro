@@ -4,7 +4,7 @@ import (
 	"net"
 	"net/http"
 
-	"github.com/lidessen/chiling/internal/shared"
+	"github.com/lidessen/crabbro/internal/shared"
 )
 
 // ScopeSource is the recording session's current scope. Nil means no session.

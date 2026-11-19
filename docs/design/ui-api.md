@@ -1,12 +1,12 @@
 # UI control API
 
-The desktop UI is a client of `chilingd`. It is not a second proxy, and it does not link the daemon into the window process. Closing the window leaves capture, rules, and MITM running.
+The desktop UI is a client of `crabbrod`. It is not a second proxy, and it does not link the daemon into the window process. Closing the window leaves capture, rules, and MITM running.
 
-The wire contract is HTTP `/v1` over the owner-only Unix socket (`~/.chiling/proxy.sock`) and, as a fallback, `localhost:16379` with the bearer token in `~/.chiling/api.token`. The CLI, agents, and the UI all use that contract. JSON objects only gain fields. Renaming or removing a field is a new major version (`/v2`), not a silent change.
+The wire contract is HTTP `/v1` over the owner-only Unix socket (`~/.crabbro/proxy.sock`) and, as a fallback, `localhost:16379` with the bearer token in `~/.crabbro/api.token`. The CLI, agents, and the UI all use that contract. JSON objects only gain fields. Renaming or removing a field is a new major version (`/v2`), not a silent change.
 
 Go types live in `pkg/api`. `pkg/client` is the typed caller. Neither package imports a UI toolkit, and neither imports `internal/` (a test pins that), so the [MyGo](https://mygo.egoist.dev/docs/ui) native view depends on them and on nothing inside the daemon. The daemon keeps compiling against the same structs through aliases in `internal/shared`, `internal/inspect`, `internal/plugin`, and `internal/history`.
 
-The view is `cmd/chiling-ui`, in this module (`go` 1.27, which MyGo needs). A MyGo view is an immediate-mode function of app state, called every frame, and it may read state that another goroutine updates.
+The view is `cmd/crabbro-ui`, in this module (`go` 1.27, which MyGo needs). A MyGo view is an immediate-mode function of app state, called every frame, and it may read state that another goroutine updates.
 
 ## How the view should consume it
 
@@ -50,9 +50,9 @@ The view is `cmd/chiling-ui`, in this module (`go` 1.27, which MyGo needs). A My
 | `History` | `GET /v1/history` |
 | `CAStatus` | `GET /v1/mitm/status` |
 | `Subscribe` | `GET /v1/events` |
-| `EnsureDaemon` | starts `chilingd` when `/v1/status` does not answer |
+| `EnsureDaemon` | starts `crabbrod` when `/v1/status` does not answer |
 
-`Do` is the escape hatch the CLI uses for routes that do not have a method yet. `EnsureDaemon` starts the daemon with default flags only. `chiling daemon start` is still how you choose the proxy address and MITM.
+`Do` is the escape hatch the CLI uses for routes that do not have a method yet. `EnsureDaemon` starts the daemon with default flags only. `crabbro daemon start` is still how you choose the proxy address and MITM.
 
 `ListRequests` includes `hiddenCount` (how many exchanges the current scope removed) and `scopeActive`. Pass `RequestQuery.All` to keep hidden rows. `GetRequest` with `Include.Body` fills `body` and `responseBody` when the daemon still has the bytes.
 
@@ -116,7 +116,7 @@ Resume with `?after=4` or the `Last-Event-ID: 4` header. Events with `id` less t
 
 ## What is deferred
 
-- MyGo's own packaging (`mygo.json`, signing, notarization, auto-update). `scripts/install.sh` builds `cmd/chiling-ui` and installs it as the app's executable; a `mygo.json` bundle can replace that later.
+- MyGo's own packaging (`mygo.json`, signing, notarization, auto-update). `scripts/install.sh` builds `cmd/crabbro-ui` and installs it as the app's executable; a `mygo.json` bundle can replace that later.
 - A TypeScript client. The UI calls Go directly.
 - A TypeScript client. The UI calls Go directly.
 - Plugin inspect and invoke results stay free-form JSON because the host returns that.

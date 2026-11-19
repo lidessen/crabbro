@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lidessen/chiling/internal/ring"
-	"github.com/lidessen/chiling/internal/rule"
+	"github.com/lidessen/crabbro/internal/ring"
+	"github.com/lidessen/crabbro/internal/rule"
 )
 
 func TestYAMLSelectParallelAndRunThroughProxy(t *testing.T) {
@@ -43,29 +43,29 @@ request:
           - name: password
             if: pipeline.decoded.outputs.kind == "password"
             pipeline:
-              - uses: chiling.tag
+              - uses: crabbro.tag
                 with:
                   tags: ["password-login"]
           - name: sso
             if: pipeline.decoded.outputs.kind == "sso"
             pipeline:
-              - uses: chiling.set-request-header
+              - uses: crabbro.set-request-header
                 with:
                   name: X-Login-Kind
                   value: sso
         default:
           pipeline:
-            - uses: chiling.tag
+            - uses: crabbro.tag
               with:
                 tags: ["other-login"]
     - parallel:
         timeoutMs: 300
         stages:
           - id: logged
-            uses: chiling.log
+            uses: crabbro.log
             with:
               message: decoded-login
-          - uses: chiling.metric
+          - uses: crabbro.metric
             with:
               name: login_decoded
 `
@@ -121,15 +121,15 @@ on:
     path: /v1/profile
 response:
   pipeline:
-    - uses: chiling.rewrite-response-body
+    - uses: crabbro.rewrite-response-body
       with:
         find: secret
         replace: public
-    - uses: chiling.set-response-header
+    - uses: crabbro.set-response-header
       with:
-        name: X-Chiling
+        name: X-Crabbro
         value: role-rewritten
-    - uses: chiling.remove-response-header
+    - uses: crabbro.remove-response-header
       with:
         name: X-Upstream
 `
@@ -152,7 +152,7 @@ response:
 	if string(body) != "hello public" {
 		t.Fatalf("body = %q", body)
 	}
-	if resp.Header.Get("X-Chiling") != "role-rewritten" || resp.Header.Get("X-Upstream") != "" {
+	if resp.Header.Get("X-Crabbro") != "role-rewritten" || resp.Header.Get("X-Upstream") != "" {
 		t.Fatalf("headers = %v", resp.Header)
 	}
 }

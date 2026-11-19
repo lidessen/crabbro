@@ -13,9 +13,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lidessen/chiling/internal/inspect"
-	"github.com/lidessen/chiling/internal/rule"
-	"github.com/lidessen/chiling/internal/shared"
+	"github.com/lidessen/crabbro/internal/inspect"
+	"github.com/lidessen/crabbro/internal/rule"
+	"github.com/lidessen/crabbro/internal/shared"
 )
 
 // Exchange is one logical HTTP request/response. CONNECT passthrough does not

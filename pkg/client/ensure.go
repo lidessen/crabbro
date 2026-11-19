@@ -9,11 +9,11 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/lidessen/chiling/pkg/api"
+	"github.com/lidessen/crabbro/pkg/api"
 )
 
 // EnsureDaemon returns when /v1/status answers. If the daemon is not running
-// it starts chilingd from beside the current executable, then from PATH, with
+// it starts crabbrod from beside the current executable, then from PATH, with
 // the client's socket and TCP address. MITM and proxy-address flags are left
 // at the daemon defaults; the CLI `daemon start` command remains the place
 // for those.
@@ -39,7 +39,7 @@ func (c *Client) EnsureDaemon(ctx context.Context) error {
 	if err := os.MkdirAll(filepath.Dir(uds), 0o700); err != nil {
 		return err
 	}
-	logf, err := os.OpenFile(filepath.Join(filepath.Dir(uds), "chilingd.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	logf, err := os.OpenFile(filepath.Join(filepath.Dir(uds), "crabbrod.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return err
 	}
@@ -50,7 +50,7 @@ func (c *Client) EnsureDaemon(ctx context.Context) error {
 		logf.Close()
 		return err
 	}
-	_ = os.WriteFile(filepath.Join(filepath.Dir(uds), "chilingd.pid"), []byte(strconv.Itoa(cmd.Process.Pid)+"\n"), 0o600)
+	_ = os.WriteFile(filepath.Join(filepath.Dir(uds), "crabbrod.pid"), []byte(strconv.Itoa(cmd.Process.Pid)+"\n"), 0o600)
 	logf.Close()
 
 	deadline := time.Now().Add(5 * time.Second)
@@ -90,13 +90,13 @@ func (c *Client) ping(ctx context.Context) error {
 
 func findDaemonBin() (string, error) {
 	if self, err := os.Executable(); err == nil {
-		cand := filepath.Join(filepath.Dir(self), "chilingd")
+		cand := filepath.Join(filepath.Dir(self), "crabbrod")
 		if st, err := os.Stat(cand); err == nil && !st.IsDir() {
 			return cand, nil
 		}
 	}
-	if p, err := exec.LookPath("chilingd"); err == nil {
+	if p, err := exec.LookPath("crabbrod"); err == nil {
 		return p, nil
 	}
-	return "", fmt.Errorf("chilingd not found beside the executable or on PATH")
+	return "", fmt.Errorf("crabbrod not found beside the executable or on PATH")
 }

@@ -38,7 +38,7 @@ func TestInstallRefusesTraversingID(t *testing.T) {
 		if name == "" {
 			name = "x"
 		}
-		writePkg(t, src, `{"name":"`+name+`","version":"1.0.0","type":"module","chiling":{"id":"`+id+`","api":"1.0.0","entry":"index.js"}}`)
+		writePkg(t, src, `{"name":"`+name+`","version":"1.0.0","type":"module","crabbro":{"id":"`+id+`","api":"1.0.0","entry":"index.js"}}`)
 		m, err := NewManager(filepath.Join(root, "store"))
 		if err != nil {
 			t.Fatal(err)
@@ -56,7 +56,7 @@ func TestInstallRefusesTraversingID(t *testing.T) {
 
 func TestInstallRefusesUnknownPermission(t *testing.T) {
 	src := t.TempDir()
-	writePkg(t, src, `{"name":"p","version":"1.0.0","type":"module","chiling":{"id":"p","api":"1.0.0","entry":"index.js","permissions":["shell"]}}`)
+	writePkg(t, src, `{"name":"p","version":"1.0.0","type":"module","crabbro":{"id":"p","api":"1.0.0","entry":"index.js","permissions":["shell"]}}`)
 	m, err := NewManager(t.TempDir())
 	if err != nil {
 		t.Fatal(err)

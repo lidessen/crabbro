@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lidessen/chiling/internal/shared"
+	"github.com/lidessen/crabbro/internal/shared"
 )
 
 // slowRuntime answers every plugin call after a fixed delay.
@@ -79,7 +79,7 @@ func TestDocumentTimeoutIsTheStageDefault(t *testing.T) {
 // and never fails the rule. Run with -race: an abandoned child must not
 // write into the block's result.
 func TestParallelAbandonsSlowChildrenWithoutRacing(t *testing.T) {
-	src := "version: 1\nid: par\non:\n  request:\n    host: example.com\nrequest:\n  pipeline:\n    - parallel:\n        timeoutMs: 100\n        stages:\n          - uses: slow.wait\n          - uses: chiling.log\n            with:\n              message: hi\n"
+	src := "version: 1\nid: par\non:\n  request:\n    host: example.com\nrequest:\n  pipeline:\n    - parallel:\n        timeoutMs: 100\n        stages:\n          - uses: slow.wait\n          - uses: crabbro.log\n            with:\n              message: hi\n"
 	e := NewRuleEngine()
 	e.Runtime = &slowRuntime{delay: time.Second}
 	start := time.Now()
@@ -106,7 +106,7 @@ func TestParallelAbandonsSlowChildrenWithoutRacing(t *testing.T) {
 
 // A script is parsed and checked once, however many exchanges evaluate it.
 func TestScriptIsCompiledOnce(t *testing.T) {
-	src := "version: 1\nid: cached\non:\n  request:\n    host: example.com\nrequest:\n  pipeline:\n    - uses: chiling.tag\n      with:\n        tags: [x]\n"
+	src := "version: 1\nid: cached\non:\n  request:\n    host: example.com\nrequest:\n  pipeline:\n    - uses: crabbro.tag\n      with:\n        tags: [x]\n"
 	e := NewRuleEngine()
 	first := compileScript(src)
 	for i := 0; i < 50; i++ {

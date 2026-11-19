@@ -270,7 +270,7 @@ func readPackage(dir string) (packageMeta, error) {
 	var raw struct {
 		Name    string `json:"name"`
 		Version string `json:"version"`
-		Chiling struct {
+		Crabbro struct {
 			ID          string   `json:"id"`
 			API         string   `json:"api"`
 			Entry       string   `json:"entry"`
@@ -278,41 +278,41 @@ func readPackage(dir string) (packageMeta, error) {
 			Permissions []string `json:"permissions"`
 			Activation  []string `json:"activation"`
 			Match       Match    `json:"match"`
-		} `json:"chiling"`
+		} `json:"crabbro"`
 	}
 	if err := json.Unmarshal(b, &raw); err != nil {
 		return packageMeta{}, fmt.Errorf("package.json is not valid JSON")
 	}
-	id := raw.Chiling.ID
+	id := raw.Crabbro.ID
 	if id == "" {
 		id = raw.Name
 	}
 	if !packageIDPattern.MatchString(id) {
 		return packageMeta{}, fmt.Errorf("package id must be an npm package name")
 	}
-	for _, perm := range raw.Chiling.Permissions {
+	for _, perm := range raw.Crabbro.Permissions {
 		if !knownPermissions[perm] {
 			return packageMeta{}, fmt.Errorf("unknown permission %q", perm)
 		}
 	}
-	entry := raw.Chiling.Entry
+	entry := raw.Crabbro.Entry
 	if entry == "" || strings.Contains(entry, "..") || filepath.IsAbs(entry) {
-		return packageMeta{}, fmt.Errorf("chiling.entry is required and must be a relative path")
+		return packageMeta{}, fmt.Errorf("crabbro.entry is required and must be a relative path")
 	}
 	if _, err := os.Stat(filepath.Join(dir, entry)); err != nil {
 		return packageMeta{}, fmt.Errorf("plugin entry is missing")
 	}
-	iso := raw.Chiling.Isolation
+	iso := raw.Crabbro.Isolation
 	if iso == "" {
 		iso = "worker"
 	}
-	act := raw.Chiling.Activation
+	act := raw.Crabbro.Activation
 	if len(act) == 0 {
 		act = []string{"onRequest"}
 	}
 	return packageMeta{
-		ID: id, Name: raw.Name, Version: raw.Version, Entry: entry, API: raw.Chiling.API,
-		Isolation: iso, Permissions: raw.Chiling.Permissions, Activation: act, Match: raw.Chiling.Match,
+		ID: id, Name: raw.Name, Version: raw.Version, Entry: entry, API: raw.Crabbro.API,
+		Isolation: iso, Permissions: raw.Crabbro.Permissions, Activation: act, Match: raw.Crabbro.Match,
 	}, nil
 }
 

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lidessen/chiling/internal/shared"
+	"github.com/lidessen/crabbro/internal/shared"
 )
 
 func newTestRequest() *shared.Request {
@@ -331,8 +331,8 @@ func TestEvaluate_InvalidScript(t *testing.T) {
 	if result.Error == "" {
 		t.Error("expected non-empty error message")
 	}
-	if !strings.Contains(result.Error, "chiling rules migrate") {
-		t.Errorf("expected the not-YAML error to mention chiling rules migrate, got: %s", result.Error)
+	if !strings.Contains(result.Error, "crabbro rules migrate") {
+		t.Errorf("expected the not-YAML error to mention crabbro rules migrate, got: %s", result.Error)
 	}
 }
 
@@ -351,8 +351,8 @@ func TestEvaluate_NoEntryPoint(t *testing.T) {
 	if result.Error == "" {
 		t.Error("expected error about the script not being a YAML rule document")
 	}
-	if !strings.Contains(result.Error, "chiling rules migrate") {
-		t.Errorf("expected the not-YAML error to mention chiling rules migrate, got: %s", result.Error)
+	if !strings.Contains(result.Error, "crabbro rules migrate") {
+		t.Errorf("expected the not-YAML error to mention crabbro rules migrate, got: %s", result.Error)
 	}
 }
 

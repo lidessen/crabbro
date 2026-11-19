@@ -25,7 +25,7 @@ type DurableSnapshot struct {
 	AllowRestricts bool
 }
 
-// Durable loads ~/.chiling/scope. Drafts are not active.
+// Durable loads ~/.crabbro/scope. Drafts are not active.
 type Durable struct {
 	Dir string
 	mu  sync.Mutex
@@ -188,11 +188,11 @@ func scopeSchema() (*jsonschema.Schema, error) {
 			return
 		}
 		c := jsonschema.NewCompiler()
-		if err := c.AddResource("https://chiling.dev/schemas/scope.v1.json", doc); err != nil {
+		if err := c.AddResource("https://crabbro.dev/schemas/scope.v1.json", doc); err != nil {
 			schemaErr = err
 			return
 		}
-		schema, schemaErr = c.Compile("https://chiling.dev/schemas/scope.v1.json")
+		schema, schemaErr = c.Compile("https://crabbro.dev/schemas/scope.v1.json")
 	})
 	return schema, schemaErr
 }

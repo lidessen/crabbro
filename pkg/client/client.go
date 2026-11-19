@@ -1,4 +1,4 @@
-// Package client is a typed control-API client for chilingd.
+// Package client is a typed control-API client for crabbrod.
 //
 // It speaks HTTP over the same Unix socket or localhost TCP listener the CLI
 // uses. A future native UI imports this package and pkg/api directly. It does
@@ -20,7 +20,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lidessen/chiling/pkg/api"
+	"github.com/lidessen/crabbro/pkg/api"
 )
 
 // Options selects how the client reaches the daemon.

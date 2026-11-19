@@ -1,4 +1,4 @@
-# Chiling Network Data Plane and Middleware Design
+# Crabbro Network Data Plane and Middleware Design
 
 Status: Proposed design, not implemented
 Date: 2026-11-03
@@ -61,14 +61,14 @@ The MITM request loop uses `http.ReadRequest` and a custom response writer, dupl
 
 Crabbro demonstrates useful mechanisms, but not a complete target architecture:
 
-| Crabbro mechanism | Keep or change in chiling |
+| Crabbro mechanism | Keep or change in crabbro |
 |---|---|
 | Rules are loaded into an ordered `RuleSet` and published atomically; file changes can hot-reload the set. | Keep immutable snapshot publication. Compile and validate the whole candidate before swapping it; a bad candidate must not partially replace the active set. |
 | Middleware has a stable name and priority, and rules can modify both request and response. | Keep stable identity, priority, and declarative request/response actions. Replace its separate forward loops with onion composition so response order is structurally the reverse of request order. |
 | MITM host matching can be widened by hosts referenced in rules. | Keep MITM scope in explicit network policy. A rule match must not silently grant permission to decrypt a host. |
 | WebSocket paths are treated as a distinct duplex lifecycle. | Keep the explicit protocol boundary. Initially relay intercepted upgrades transparently; frame-level rules remain deferred. |
-| Its default proxy listener is `0.0.0.0:9090`, which is useful for LAN device capture. | Chiling defaults to loopback for a local agent proxy. Any future LAN listener should be explicit and authenticated. |
-| The proxy is built on goproxy, and rule/plugin scripts can receive broad native host capabilities. | Do not inherit these coupling and capability choices. Use standard-library HTTP lifecycle primitives and retain chiling's declarative, restricted Goja rule boundary. |
+| Its default proxy listener is `0.0.0.0:9090`, which is useful for LAN device capture. | Crabbro defaults to loopback for a local agent proxy. Any future LAN listener should be explicit and authenticated. |
+| The proxy is built on goproxy, and rule/plugin scripts can receive broad native host capabilities. | Do not inherit these coupling and capability choices. Use standard-library HTTP lifecycle primitives and retain crabbro's declarative, restricted Goja rule boundary. |
 
 This comparison is based on the current source in both repositories. It is not a claim that either repository's architecture is the design to preserve.
 
@@ -250,7 +250,7 @@ Each validated dynamic rule is compiled into one middleware wrapper. The initial
 3. If matched, evaluates the rule in an isolated Goja runtime with a timeout and bounded input.
 4. Validates the complete rule result before applying any action from that rule.
 5. Applies the ordered request patch, then calls next, or returns one synthetic/rejection outcome and skips next. A rule cannot combine conflicting terminal outcomes such as both block and mock.
-6. Applies any validated response actions while unwinding when the rule matched. Adding those action schemas is a separate implementation step; the current chiling schema only defines request-stage actions.
+6. Applies any validated response actions while unwinding when the rule matched. Adding those action schemas is a separate implementation step; the current crabbro schema only defines request-stage actions.
 7. Records rule ID, version, match, actions, duration, error, and whether a body action was skipped.
 
 Each rule sees the effective request produced by outer middleware. This intentionally replaces the earlier “all rules see one immutable request snapshot” decision. Original request data remains available for inspection and trace output.

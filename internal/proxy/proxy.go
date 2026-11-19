@@ -12,13 +12,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/lidessen/chiling/internal/history"
-	"github.com/lidessen/chiling/internal/inspect"
-	"github.com/lidessen/chiling/internal/mitm"
-	"github.com/lidessen/chiling/internal/ring"
-	"github.com/lidessen/chiling/internal/rule"
-	"github.com/lidessen/chiling/internal/session"
-	"github.com/lidessen/chiling/internal/shared"
+	"github.com/lidessen/crabbro/internal/history"
+	"github.com/lidessen/crabbro/internal/inspect"
+	"github.com/lidessen/crabbro/internal/mitm"
+	"github.com/lidessen/crabbro/internal/ring"
+	"github.com/lidessen/crabbro/internal/rule"
+	"github.com/lidessen/crabbro/internal/session"
+	"github.com/lidessen/crabbro/internal/shared"
 )
 
 // Proxy is an HTTP forward proxy that captures request/response metadata and

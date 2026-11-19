@@ -79,8 +79,8 @@ func TestGeneratedCASubjectCN(t *testing.T) {
 		t.Fatalf("GenerateCA() failed: %v", err)
 	}
 
-	if store.Cert.Subject.CommonName != "chiling root CA" {
-		t.Fatalf("Subject CN = %q, want %q", store.Cert.Subject.CommonName, "chiling root CA")
+	if store.Cert.Subject.CommonName != "crabbro root CA" {
+		t.Fatalf("Subject CN = %q, want %q", store.Cert.Subject.CommonName, "crabbro root CA")
 	}
 }
 

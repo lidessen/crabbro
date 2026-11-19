@@ -6,7 +6,7 @@ import "time"
 const APIVersion = "v1"
 
 // DefaultUDSPath is the owner-only Unix socket for the control API.
-const DefaultUDSPath = "~/.chiling/proxy.sock"
+const DefaultUDSPath = "~/.crabbro/proxy.sock"
 
 // DefaultTCPAddr is the localhost TCP fallback for the control API.
 const DefaultTCPAddr = "localhost:16379"

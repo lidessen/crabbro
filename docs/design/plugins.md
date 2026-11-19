@@ -1,4 +1,4 @@
-# Chiling Plugin Design
+# Crabbro Plugin Design
 
 Status: Implemented, with the deferrals below. Reviewed 2026-11-10: calls now run concurrently (one reader, replies matched by id), a crashed worker is replaced on the next call, installs validate the package id and permissions and scan the installed tree for native addons, and a package sees the instance's credentials only with `secrets:read`. `history:read` and `net` are declared but not implemented: the broker refuses both. Inspection scope is [inspect.md](./inspect.md) and is not built.
 Date: 2026-11-04
@@ -7,7 +7,7 @@ Scope: JS plugins distributed as npm packages.
 
 `NETWORK_PIPELINE_DESIGN.md` decision 7 kept plugin installation, manifests, host capabilities, and command registration out of the network work. This document is that follow-on. Agents author rules as YAML ([rules.md](./rules.md)). Goja remains only for an optional `run` pipeline stage.
 
-Workcells (`lidessen/workcells`, read from the attached main-branch docs) is the owner's other runtime. Chiling borrows its names where they mean the same thing: `uses`, `with`, `if`, `env`, `instance`, Tools versus `uses`, explicit `middleware`, plugin instances, `config draft/validate/commit`, `preview`, per-file isolation, and a host that performs Decision calls. It does not borrow ScriptC, just-bash, durable Runs, or one OS process per plugin instance. The host here stays one Node process and a worker per active plugin.
+Workcells (`lidessen/workcells`, read from the attached main-branch docs) is the owner's other runtime. Crabbro borrows its names where they mean the same thing: `uses`, `with`, `if`, `env`, `instance`, Tools versus `uses`, explicit `middleware`, plugin instances, `config draft/validate/commit`, `preview`, per-file isolation, and a host that performs Decision calls. It does not borrow ScriptC, just-bash, durable Runs, or one OS process per plugin instance. The host here stays one Node process and a worker per active plugin.
 
 ## 1. Decision summary
 
@@ -15,10 +15,10 @@ Workcells (`lidessen/workcells`, read from the attached main-branch docs) is the
 2. A plugin contributes three things: middleware in the proxy onion, hooks other pathways can attach to, and tools an agent calls from the CLI.
 3. Node is the plugin runtime. The daemon supervises **one** host process, not one process per plugin. The host starts lazily and exits when nothing is active.
 4. Each activated plugin runs in its own `worker_threads` worker. A timeout terminates that worker. Native code, or `isolation: process`, gets a child process. WASM is not the npm runtime.
-5. A pipeline stage is `uses: chiling.<capability>`, `uses: <plugin>.<capability>`, or a fallback `run` script. Go checks `with` against the action schema. Plugin code never receives `http.Request` or a socket.
-6. Built-in names under `chiling.*` are reserved. A plugin cannot replace `chiling.mock-response`.
+5. A pipeline stage is `uses: crabbro.<capability>`, `uses: <plugin>.<capability>`, or a fallback `run` script. Go checks `with` against the action schema. Plugin code never receives `http.Request` or a socket.
+6. Built-in names under `crabbro.*` are reserved. A plugin cannot replace `crabbro.mock-response`.
 7. Default permissions are none. `worker_threads` is not a security boundary. See section 10.
-8. Tools are `chiling plugin invoke <plugin> <instance> <tool>`. Tools and `uses` are separate catalogs. They may share one function. They do not imply each other, and they do not add top-level `chiling` verbs.
+8. Tools are `crabbro plugin invoke <plugin> <instance> <tool>`. Tools and `uses` are separate catalogs. They may share one function. They do not imply each other, and they do not add top-level `crabbro` verbs.
 9. Install, enable, and traces go through the daemon. The CLI is a client. Output is JSON. `--json` is accepted and is the default. `--pretty` is the human form.
 
 ## 2. What exists today
@@ -48,7 +48,7 @@ A hot-path rule must not grow a Node dependency. A distributed plugin must not b
 - Plugin authors write TypeScript against a types-only package and ship compiled JavaScript.
 - Hooks line up with the stages the proxy already has: request, response, WebSocket frame.
 - Anything a plugin returns is checked by the same validator as a rule, then applied by Go.
-- A runaway or crashed plugin does not take down `chilingd`, and does not take down unrelated plugins.
+- A runaway or crashed plugin does not take down `crabbrod`, and does not take down unrelated plugins.
 - Agents can list plugins, read their manifests, and call their commands from JSON.
 - A UI can show install, enable, and per-exchange plugin traces without a second control plane.
 
@@ -57,7 +57,7 @@ A hot-path rule must not grow a Node dependency. A distributed plugin must not b
 - Running anonymous untrusted code as if it were a browser origin. Installing a package is an operator decision. The permission layer stops accidents and surprise install scripts. It does not contain a hostile native addon. See section 10.
 - Replacing the YAML pathway with a plugin. One-off rewrites are built-in pipeline stages. `run` is the escape hatch, not the format.
 - Loading plugins from the network on each request.
-- A plugin store inside chiling. npm is the index.
+- A plugin store inside crabbro. npm is the index.
 - Plugin-owned MITM policy. A plugin match must not decrypt a host. That stays `NetworkPolicy`.
 - Editing history or deleting captures in the first permission set.
 - Compiling npm packages to WASM so they can run inside the Go process.
@@ -76,7 +76,7 @@ These are the arrangements that matter for a local proxy whose plugins are npm p
 | Deno | One process. Permissions are capabilities (`--allow-net`, `--allow-read`). A worker can be created with a **subset** of those permissions. | The process you started. | Kill the worker or the process. | The permission check is in the runtime, for Deno APIs. It is not a VM boundary against native code. | npm semantics are an emulation layer, not the reason Deno exists. |
 | Zed extensions | WASM components (Wasmtime, WIT) in the editor process. | An unused extension is bytes on disk. Instantiation is cheap relative to Node. | A trap fails that instance. The editor stays up. Memory can be capped per instance. | Strong for code that only uses the host ABI. | No npm. Authors compile to WASM. |
 | Envoy proxy-wasm | WASM VM inside the proxy process. SDK in Rust, Go, AssemblyScript, C++. One ABI for request and response headers and buffered bodies. | Configured filters occupy a VM. | A trap can fail the stream (fail-open or fail-closed). Some runtime bugs have still crashed Envoy. | Good for pure WASM. Not perfect against runtime bugs. | Not JavaScript npm. Body streaming and host calls are an explicit ABI. |
-| mitmproxy addons | Python in the mitmproxy process. Hooks: `request`, `response`, `websocket_message`. | Imported addons live in the process. | An exception is logged. A blocking call blocks the proxy. | None. This is the "local user script" model. | Isolation. It is the closest product analogue to chiling rules, with a much larger language surface. |
+| mitmproxy addons | Python in the mitmproxy process. Hooks: `request`, `response`, `websocket_message`. | Imported addons live in the process. | An exception is logged. A blocking call blocks the proxy. | None. This is the "local user script" model. | Isolation. It is the closest product analogue to crabbro rules, with a much larger language surface. |
 | Whistle | npm plugins loaded into the Whistle Node process. | In-process. | A bad plugin can crash Whistle. | None beyond Node modules. | Isolation. |
 | Charles, Proxyman | In-app tools and JavaScript **scripts** for rewrite, map-local, and breakpoints. Not a general npm host. | Scripts are part of the app session. | A script error fails that script. | The script API is smaller than Node. | Distribution as packages. |
 | Caddy | Go modules **compiled into** the binary (`xcaddy`). | No extra process. | A bad plugin is a bad build. | Trust is at build time. | `npm install` without a rebuild. |
@@ -89,9 +89,9 @@ What is worth copying, and what is not:
 - **Copy from Chrome MV3:** an idle plugin is not a running worker. Wake it on an event. Do not keep N runtimes warm.
 - **Copy from Grafana `go-plugin`:** the daemon supervises the host (handshake, heartbeat, restart). Use a **separate process** only when the plugin can crash native code.
 - **Copy from Envoy and Zed:** the plugin returns a patch through a narrow ABI. A failure fails that stream, not the proxy. Do not copy WASM as the v1 implementation.
-- **Copy from Vite and mitmproxy:** hooks are small and synchronous from the proxy's point of view. Chiling already has this for rules.
+- **Copy from Vite and mitmproxy:** hooks are small and synchronous from the proxy's point of view. Crabbro already has this for rules.
 - **Do not copy Caddy's compile-in model.** It rejects the npm requirement.
-- **Do not copy Obsidian or Whistle's in-process trust** for the Go daemon. A plugin must not share an address space with `chilingd`. The proxy has to keep forwarding if Node dies.
+- **Do not copy Obsidian or Whistle's in-process trust** for the Go daemon. A plugin must not share an address space with `crabbrod`. The proxy has to keep forwarding if Node dies.
 
 ## 5. Runtime
 
@@ -105,7 +105,7 @@ Three tiers. Almost every plugin is tier 1.
 | Plugins, default | npm package, pure JS, no `native` grant. | A worker inside the single Node host. |
 | Plugins, opted in | Manifest sets `"isolation": "process"`, or the install granted `native`. | A child process of the host, supervised like a Grafana plugin. One plugin, one process. |
 
-The host is a small program shipped with chiling (`cmd/chiling-plugin-host`). `chilingd` speaks to it over one Unix socket, mode `0600`. The daemon does not start the host at boot. It starts the host on the first activation event. If every worker has been idle and the host has been idle for a grace period, the daemon stops the host. Steady state with no matching traffic is zero Node processes.
+The host is a small program shipped with crabbro (`cmd/crabbro-plugin-host`). `crabbrod` speaks to it over one Unix socket, mode `0600`. The daemon does not start the host at boot. It starts the host on the first activation event. If every worker has been idle and the host has been idle for a grace period, the daemon stops the host. Steady state with no matching traffic is zero Node processes.
 
 Workers:
 
@@ -118,7 +118,7 @@ This is cheaper than one Node process per plugin once two or more plugins are ac
 
 Bun is not the v1 host. The package format does not name the runtime, so a later host can be swapped. Goja stays rules-only. Teaching Goja to load npm would fail on `import`, top-level await, and dependencies.
 
-WASM stays a documented non-goal for v1. proxy-wasm and Zed are what to copy if chiling ever wants a filter that must not be able to call Node at all. That filter would be a second kind of package, not an npm compatibility layer. Componentizing npm to WASM is not a migration path authors will accept.
+WASM stays a documented non-goal for v1. proxy-wasm and Zed are what to copy if crabbro ever wants a filter that must not be able to call Node at all. That filter would be a second kind of package, not an npm compatibility layer. Componentizing npm to WASM is not a migration path authors will accept.
 
 ### Activation
 
@@ -127,7 +127,7 @@ The manifest lists activation events. The daemon evaluates them in Go, before an
 | Event | Fires when |
 |---|---|
 | `onRequest` | A request passes the plugin's static `match` (method, host pattern, path prefix). This is the default if the manifest omits `activation`. |
-| `onCommand` | `chiling plugin invoke`, `plugin tools`, or `plugin inspect` names this package. |
+| `onCommand` | `crabbro plugin invoke`, `plugin tools`, or `plugin inspect` names this package. |
 | `onStartup` | The daemon is up and the plugin is enabled. Opt-in. `plugin inspect` warns. Idle cost stops being zero. |
 
 `onRequest` uses the same host matcher as MITM (`internal/mitm` patterns). A plugin for `api.example.com` does not wake on other hosts. Enablement without a matching request does not start Node.
@@ -180,38 +180,38 @@ The host is the only Node process that loads plugin code. Workers cannot open th
 
 ## 6. Package shape
 
-A plugin is a normal npm package. The daemon reads the `chiling` block as data. It does not execute `package.json`.
+A plugin is a normal npm package. The daemon reads the `crabbro` block as data. It does not execute `package.json`.
 
 ```json
 {
-  "name": "@example/chiling-redact",
+  "name": "@example/crabbro-redact",
   "version": "1.2.0",
   "type": "module",
   "exports": { ".": "./dist/index.js" },
-  "chiling": {
+  "crabbro": {
     "api": "1.0.0",
     "entry": "./dist/index.js",
     "activation": ["onRequest"],
     "isolation": "worker",
     "permissions": ["history:read"],
-    "configSchema": "./chiling.config.schema.json"
+    "configSchema": "./crabbro.config.schema.json"
   }
 }
 ```
 
 | Field | Required | Meaning |
 |---|---|---|
-| `chiling.api` | yes | Semver of the plugin API. The daemon loads it only when the major matches and the daemon's minor is at least the plugin's minor. |
-| `chiling.entry` | yes | JavaScript file, relative to the package root, no `..`. |
-| `chiling.activation` | no | `onRequest` (default), `onCommand`, `onStartup`. |
-| `chiling.isolation` | no | `worker` (default) or `process`. |
-| `chiling.permissions` | no | Declared capabilities. Default is empty. |
-| `chiling.configSchema` | no | JSON Schema for the plugin's config object. |
+| `crabbro.api` | yes | Semver of the plugin API. The daemon loads it only when the major matches and the daemon's minor is at least the plugin's minor. |
+| `crabbro.entry` | yes | JavaScript file, relative to the package root, no `..`. |
+| `crabbro.activation` | no | `onRequest` (default), `onCommand`, `onStartup`. |
+| `crabbro.isolation` | no | `worker` (default) or `process`. |
+| `crabbro.permissions` | no | Declared capabilities. Default is empty. |
+| `crabbro.configSchema` | no | JSON Schema for the plugin's config object. |
 
 The entry module default-exports one object:
 
 ```ts
-import type { Plugin } from "@chiling/plugin";
+import type { Plugin } from "@crabbro/plugin";
 
 const plugin: Plugin = {
   match: { hosts: ["*.example.com"], methods: ["POST"] },
@@ -239,9 +239,9 @@ const plugin: Plugin = {
 export default plugin;
 ```
 
-`@chiling/plugin` is a types-only package published from this repository when implementation starts. It contains the hook context, the action union, and the config types. It does not contain the daemon. Authors compile with `tsc`. The daemon loads the emitted `.js` and never runs the compiler.
+`@crabbro/plugin` is a types-only package published from this repository when implementation starts. It contains the hook context, the action union, and the config types. It does not contain the daemon. Authors compile with `tsc`. The daemon loads the emitted `.js` and never runs the compiler.
 
-`chiling.plugin.json` is allowed and overrides the `package.json` block when both exist. The daemon rejects a package whose entry is missing, whose `api` it does not speak, or whose schema is not valid JSON Schema draft 2020-12. Rejection happens before a worker is started.
+`crabbro.plugin.json` is allowed and overrides the `package.json` block when both exist. The daemon rejects a package whose entry is missing, whose `api` it does not speak, or whose schema is not valid JSON Schema draft 2020-12. Rejection happens before a worker is started.
 
 ## 7. API surface
 
@@ -263,7 +263,7 @@ With `history:read`, `ctx.history.list` and `ctx.history.get` call the daemon ov
 
 ### Actions a rule can call
 
-Public names follow workcells. A builtin is `chiling.<capability>`. A plugin capability is `<plugin>.<capability>`, from the `path` segments on a `uses` entry (`["headers"]` on plugin `redact` is `redact.headers`). A rule does not pass `package` and `action` as a fake action type. Each action declares `effect: "mutate"` or `effect: "observe"`. Only `observe` is legal inside `parallel`. See [rules.md](./rules.md). The handler returns built-in mutations or outputs. In v1 those mutations are built-ins, not another plugin `uses`.
+Public names follow workcells. A builtin is `crabbro.<capability>`. A plugin capability is `<plugin>.<capability>`, from the `path` segments on a `uses` entry (`["headers"]` on plugin `redact` is `redact.headers`). A rule does not pass `package` and `action` as a fake action type. Each action declares `effect: "mutate"` or `effect: "observe"`. Only `observe` is legal inside `parallel`. See [rules.md](./rules.md). The handler returns built-in mutations or outputs. In v1 those mutations are built-ins, not another plugin `uses`.
 
 The stage is:
 
@@ -283,7 +283,7 @@ These are three catalogs, as in workcells. They may share one function. They do 
 
 | Catalog | Invoked by | Creates a proxied exchange? |
 |---|---|---|
-| `tools` | `chiling plugin invoke <plugin> <instance> <tool>` | No |
+| `tools` | `crabbro plugin invoke <plugin> <instance> <tool>` | No |
 | `uses` | A pipeline stage `uses: <plugin>.<capability>` | Only as part of the request already in flight |
 | `middleware` | A stage's `middleware:` list, or `context.assemble`-style explicit selection | No, until a stage selects it |
 
@@ -291,7 +291,7 @@ Registering a plugin does not insert it into the onion. The host checks the name
 
 ```yaml
 - id: policy
-  uses: chiling.pass
+  uses: crabbro.pass
   middleware:
     - { plugin: redact, instance: local, name: strip-auth }
 ```
@@ -300,33 +300,33 @@ Always-on middleware from an earlier draft is dropped. Install must not change t
 
 ### Instances and credentials
 
-`chiling plugin instance add/configure/list/enable/disable/remove`. One package, many named instances (`local`, `primary`), each with its own non-secret config and credential refs. The host injects credentials at call time. They are not accepted in `vars`, `env`, `with`, or instance config files. `chiling plugin invoke` calls a Tool and does not create a rule run.
+`crabbro plugin instance add/configure/list/enable/disable/remove`. One package, many named instances (`local`, `primary`), each with its own non-secret config and credential refs. The host injects credentials at call time. They are not accepted in `vars`, `env`, `with`, or instance config files. `crabbro plugin invoke` calls a Tool and does not create a rule run.
 
 Plain `plugin list` and `--help` read manifests and do not start workers. Tool discovery (`plugin tools`, `plugin inspect`) does run trusted plugin code. Instances activate on demand and are reused. A call does not spawn a process.
 
 ### Install
 
-`chiling plugin install ./pkg` requires a complete `package-lock.json`. The installer runs `npm ci --ignore-scripts` and does not run lifecycle scripts or the repo's build script. Unlike workcells, it does not compile with ScriptC. The result is the JS entry the Node host loads into a worker. Help text and manifest listing still do not start that worker.
+`crabbro plugin install ./pkg` requires a complete `package-lock.json`. The installer runs `npm ci --ignore-scripts` and does not run lifecycle scripts or the repo's build script. Unlike workcells, it does not compile with ScriptC. The result is the JS entry the Node host loads into a worker. Help text and manifest listing still do not start that worker.
 
 ### Decision
 
-Workcells' Decision plugin is the model for chiling's existing Jev and OpenAI calls. The plugin exposes `decision.ask` as a Tool and as a `uses`. The host performs HTTP, holds the credential ref, and returns a validated `choice` or `noul`. The pipeline cannot set the endpoint, headers, or API key. A sink file (mode `0600`, not a symlink) binds instance, package digest, principal, endpoint, and model. Chiling keeps both Jev and an OpenAI-compatible endpoint. It does not adopt workcells' lock to `api.commandcode.ai` or Keyref. Diagnostics (`decisionDiagnostic`) carry a fixed category, `requestMayHaveBeenSent`, and optional status and duration. They never carry the credential, request headers, or upstream body. One System One or chat call per plugin call. A timeout does not prove the provider did not charge, and the host does not retry automatically.
+Workcells' Decision plugin is the model for crabbro's existing Jev and OpenAI calls. The plugin exposes `decision.ask` as a Tool and as a `uses`. The host performs HTTP, holds the credential ref, and returns a validated `choice` or `noul`. The pipeline cannot set the endpoint, headers, or API key. A sink file (mode `0600`, not a symlink) binds instance, package digest, principal, endpoint, and model. Crabbro keeps both Jev and an OpenAI-compatible endpoint. It does not adopt workcells' lock to `api.commandcode.ai` or Keyref. Diagnostics (`decisionDiagnostic`) carry a fixed category, `requestMayHaveBeenSent`, and optional status and duration. They never carry the credential, request headers, or upstream body. One System One or chat call per plugin call. A timeout does not prove the provider did not charge, and the host does not retry automatically.
 
 ### Commands
 
-Tools are not hooks. Their return value is JSON. They do not change proxy state inside the worker. A tool that wants a rule returns YAML, and the agent runs `chiling rules commit`.
+Tools are not hooks. Their return value is JSON. They do not change proxy state inside the worker. A tool that wants a rule returns YAML, and the agent runs `crabbro rules commit`.
 
 ### Config
 
-Non-secret config belongs to a named instance: `chiling plugin instance configure <plugin> <instance> --config <file>`. The host validates it against the package schema and passes a copy as `ctx.config` on each call. Credentials are refs in that file, resolved by the host at call time from `~/.chiling/secrets/` (mode `0600`). They are not fields the rule can set, and they are not written to traces, events, or history. A plugin reads a resolved value only when the instance was granted `secrets:read`. The name is recorded on the trace. The value is not.
+Non-secret config belongs to a named instance: `crabbro plugin instance configure <plugin> <instance> --config <file>`. The host validates it against the package schema and passes a copy as `ctx.config` on each call. Credentials are refs in that file, resolved by the host at call time from `~/.crabbro/secrets/` (mode `0600`). They are not fields the rule can set, and they are not written to traces, events, or history. A plugin reads a resolved value only when the instance was granted `secrets:read`. The name is recorded on the trace. The value is not.
 
 ## 8. Plugins and rules
 
 | | Rule | Plugin |
 |---|---|---|
 | Who writes it | The agent, often from `rules from` | A package author |
-| Where it lives | In-memory `RuleStore` | `~/.chiling/plugins` |
-| Runtime | Goja, per evaluation, inside `chilingd` | Worker in the Node host, or a private process if it opted into one |
+| Where it lives | In-memory `RuleStore` | `~/.crabbro/plugins` |
+| Runtime | Goja, per evaluation, inside `crabbrod` | Worker in the Node host, or a private process if it opted into one |
 | What it can do | Built-in `uses`, plugin `uses`, and a fallback `run` | Tools, `uses`, and middleware a stage names |
 | Failure | `failureMode` on the rule | `failureMode` on the install record, default `fail-open` |
 
@@ -339,13 +339,13 @@ Enabling or disabling a plugin publishes a new snapshot. An in-flight exchange k
 ## 9. Install, storage, CLI
 
 ```text
-~/.chiling/plugins/
+~/.crabbro/plugins/
   installed.json              # package, resolved version, enabled, priority, failureMode, isolation, config, granted permissions
   host.sock                   # the one RPC socket, mode 0600
   packages/
-    @example/chiling-redact/  # npm tree and its package-lock.json
+    @example/crabbro-redact/  # npm tree and its package-lock.json
   data/
-    @example/chiling-redact/  # only if fs:data was granted
+    @example/crabbro-redact/  # only if fs:data was granted
 ```
 
 There is not a socket per plugin. `installed.json` is the source of truth for enablement.
@@ -353,25 +353,25 @@ There is not a socket per plugin. `installed.json` is the source of truth for en
 Commands, JSON by default, `--pretty` for a short table:
 
 ```text
-chiling plugin install <path> [--enable]
-chiling plugin upgrade <id>
-chiling plugin uninstall <id>
-chiling plugin list
-chiling plugin inspect <id> --json
-chiling plugin tools <id>
-chiling plugin instance add <plugin> <instance> --config <file>
-chiling plugin instance configure <plugin> <instance> --config <file>
-chiling plugin instance list <plugin>
-chiling plugin instance enable <plugin> <instance>
-chiling plugin instance disable <plugin> <instance>
-chiling plugin instance remove <plugin> <instance>
-chiling plugin invoke <plugin> <instance> <tool> --arguments <json> --json
-chiling config status
-chiling config draft <file>
-chiling config validate <file> --json
-chiling config commit <file>
-chiling config discard <file>
-chiling plugin host status
+crabbro plugin install <path> [--enable]
+crabbro plugin upgrade <id>
+crabbro plugin uninstall <id>
+crabbro plugin list
+crabbro plugin inspect <id> --json
+crabbro plugin tools <id>
+crabbro plugin instance add <plugin> <instance> --config <file>
+crabbro plugin instance configure <plugin> <instance> --config <file>
+crabbro plugin instance list <plugin>
+crabbro plugin instance enable <plugin> <instance>
+crabbro plugin instance disable <plugin> <instance>
+crabbro plugin instance remove <plugin> <instance>
+crabbro plugin invoke <plugin> <instance> <tool> --arguments <json> --json
+crabbro config status
+crabbro config draft <file>
+crabbro config validate <file> --json
+crabbro config commit <file>
+crabbro config discard <file>
+crabbro plugin host status
 ```
 
 `install` requires `package-lock.json` and runs `npm ci --ignore-scripts`. It does not run lifecycle scripts. It does not start a worker. `inspect` and `tools` do run trusted plugin code for discovery. `list` and `--help` do not. `invoke` calls a Tool and does not open a proxy exchange. `uninstall` stops that plugin's worker and drops the package. If it was the last worker, the host exits.
@@ -403,7 +403,7 @@ Declared permissions:
 | Permission | Allows |
 |---|---|
 | `net` | `ctx.net.fetch(url)` through the daemon. Redirects are not followed unless listed. Private addresses need `net:private` as well. |
-| `fs:data` | Read and write `~/.chiling/plugins/data/<package>/` only, through the broker. |
+| `fs:data` | Read and write `~/.crabbro/plugins/data/<package>/` only, through the broker. |
 | `history:read` | Bounded list and get. |
 | `secrets:read` | Resolve named secrets. The name is recorded on the trace. The value is not. |
 | `scripts` | Not a grant. The installer never runs npm lifecycle scripts or the package build script, matching workcells. |
@@ -414,7 +414,7 @@ Declared permissions:
 `worker_threads` does **not** do the following. Node's own documentation treats threads as a concurrency tool, not a sandbox.
 
 - It does not hide Node built-ins. A worker can `import('node:fs')` and `import('node:net')` unless the host's loader refuses those specifiers. The permission model in Node (`--permission`) is process-wide, so it cannot grant `net` to one worker and deny it to another.
-- It does not stop a plugin from reading another plugin's files on disk. The process uid is the operator. `~/.chiling/plugins/packages` is readable. The broker is what stops the *API* from doing it. A worker that is allowed to evaluate arbitrary JS and can reach `fs` does not need the API.
+- It does not stop a plugin from reading another plugin's files on disk. The process uid is the operator. `~/.crabbro/plugins/packages` is readable. The broker is what stops the *API* from doing it. A worker that is allowed to evaluate arbitrary JS and can reach `fs` does not need the API.
 - It does not cap native memory, and `terminate()` does not unwind a stuck native call.
 - A bug in a native addon loaded in any worker can corrupt the host. That is why `native` forces a separate process.
 - SharedArrayBuffer is opt-in and should not be enabled. Do not pass `transferList` of host secrets.
@@ -427,18 +427,18 @@ So the enforcement plan is:
 4. This stops accidents and most unmodified packages that expect full Node. A package written to escape a loader can still try: this is a reduction of the surface, not a sandbox, and `isolation: process` does not change that (it is the same uid). A package that holds credentials and runs arbitrary code can send them anywhere the host can reach. Install only code you would run. It does not stop a package written to escape a loader (prototype tricks against a buggy shim, a bug in Node). Treat it the way VS Code treats the extension host: trusted-enough code the operator installed, in a process that is not the proxy.
 5. `isolation: process` is the escape hatch when that is not enough. That process is still the same OS user. It is not a container. It does mean a crash and a `kill` stay inside that plugin.
 
-`chiling.api` is semver. One major at a time, starting at `1`. Exact version pins in `installed.json`. Upgrades are an explicit `plugin upgrade`, not a floating range on daemon start.
+`crabbro.api` is semver. One major at a time, starting at `1`. Exact version pins in `installed.json`. Upgrades are an explicit `plugin upgrade`, not a floating range on daemon start.
 
 Traces use the existing `RuleTrace` shape with `phase` of `request`, `response`, `frame`, or `command`, and `ruleId` of `plugin:<package>`. Events (`plugin_invoked`) do not control forwarding.
 
 ## 11. Agents
 
-1. `chiling plugin --help` for the stable verbs.
-2. `chiling plugin list` for what is installed, whether it is idle or running, and which hooks, tools, and `uses` it exposes. This does not start a worker.
-3. `chiling plugin inspect <id> --json` for the config schema, permissions, isolation, activation events, and rule template.
-4. `chiling rules commit` with a `uses` stage, then `chiling verify replay <id>`.
-5. `chiling plugin invoke <plugin> <instance> <tool>` for work that is not a proxy mutation.
-6. `chiling plugin host status` to see whether Node is running at all.
+1. `crabbro plugin --help` for the stable verbs.
+2. `crabbro plugin list` for what is installed, whether it is idle or running, and which hooks, tools, and `uses` it exposes. This does not start a worker.
+3. `crabbro plugin inspect <id> --json` for the config schema, permissions, isolation, activation events, and rule template.
+4. `crabbro rules commit` with a `uses` stage, then `crabbro verify replay <id>`.
+5. `crabbro plugin invoke <plugin> <instance> <tool>` for work that is not a proxy mutation.
+6. `crabbro plugin host status` to see whether Node is running at all.
 
 `plugin list` does not start a worker. `plugin inspect` and `plugin tools` do, because discovery runs trusted plugin code. Help text is the `summary` plus the JSON Schema, served by the daemon so the CLI and a UI cannot drift.
 
@@ -459,8 +459,8 @@ Activity kinds on the trajectory `internal/session` already stores:
 
 ## 13. Testing for authors
 
-- `@chiling/plugin/testing` exports `runHook(plugin, fixture, phase)`. It feeds fixture JSON (the same shape as `~/.chiling/fixtures/<name>.json`) into the hook in-process. It does not start the daemon. Authors run it under `node --test`.
-- `chiling plugin install ./my-plugin` loads a checkout that already has `package-lock.json`. CI uses that with `testdata/plugins/echo`, a package that returns a `tag`, so tests do not need a registry.
+- `@crabbro/plugin/testing` exports `runHook(plugin, fixture, phase)`. It feeds fixture JSON (the same shape as `~/.crabbro/fixtures/<name>.json`) into the hook in-process. It does not start the daemon. Authors run it under `node --test`.
+- `crabbro plugin install ./my-plugin` loads a checkout that already has `package-lock.json`. CI uses that with `testdata/plugins/echo`, a package that returns a `tag`, so tests do not need a registry.
 - A daemon test installs that path, sends one request through the proxy, and asserts the trace contains `plugin:<name>` and the tag. Same shape as `TestAgentLoopRecordInspectRuleVerify`.
 - A second test installs two path plugins, makes the first one loop, and asserts the second still returns its tag and the daemon is still up. That is the regression this runtime exists to pass.
 - Manifest failures do not spawn Node.
@@ -476,9 +476,9 @@ Each phase leaves `go test ./...` green and does not change Goja rule behavior.
 2. **npm install.** `plugin install` with `npm ci --ignore-scripts`, exact pin, instances, upgrade, uninstall.
 3. **Rule dispatch and faults.** Pipeline `uses`. Frame hook. Worker timeout and poison. Host heartbeat and restart. Traces and activity kinds. The two-plugin timeout test from section 13.
 4. **Broker.** `history:read`, `secrets:read`, `net`, `fs:data`, instance config, `plugin invoke`. `native` and `isolation: process` as a child process.
-5. **Author kit.** Publish `@chiling/plugin` and the testing helper.
+5. **Author kit.** Publish `@crabbro/plugin` and the testing helper.
 
-The host, install, instances, `uses`, and the decision sink are in the tree. Still deferred: plugin `emits` chains, `chiling.pass`, plugin-to-plugin `uses`, `history:read` until a store is attached on the broker, and the traffic-inspection scope in [inspect.md](./inspect.md). `net.fetch` stays denied until a caller has `net`. `onStartup` does not keep the host warm.
+The host, install, instances, `uses`, and the decision sink are in the tree. Still deferred: plugin `emits` chains, `crabbro.pass`, plugin-to-plugin `uses`, `history:read` until a store is attached on the broker, and the traffic-inspection scope in [inspect.md](./inspect.md). `net.fetch` stays denied until a caller has `net`. `onStartup` does not keep the host warm.
 
 ## 15. Decisions
 
@@ -486,19 +486,19 @@ The host, install, instances, `uses`, and the decision sink are in the tree. Sti
 |---|---|---|
 | Who runs plugin code? | Goja for rules. One Node host for plugins. A worker per activated plugin. | Per-process isolates crashes and `kill` better, and Node's `--permission` flag could apply per plugin because it is process-wide. It costs a Node RSS and a startup per **active** plugin, and N supervisors. Idle cost can be zero either way if activation is lazy. The waste the earlier draft actually had was keeping a process per **enabled** plugin. |
 | When does a plugin get its own process? | Only if it sets `isolation: process` or is granted `native`. | Those plugins pay the cost the default path avoids. They can crash without taking the host down. |
-| WASM? | Not for npm plugins. Revisit only for a separate untrusted ABI. | WASM (Zed, Envoy) isolates better than workers and can run inside `chilingd`. It does not run npm. |
+| WASM? | Not for npm plugins. Revisit only for a separate untrusted ABI. | WASM (Zed, Envoy) isolates better than workers and can run inside `crabbrod`. It does not run npm. |
 | Bun? | Not in v1. Package format stays runtime-neutral. | Bun starts faster. Authors and `npm install` already assume Node. |
 | Shared isolate for all plugins, VS Code style? | No. Workers are the default, even though VS Code shares one isolate. | A shared isolate is less memory and simpler RPC. One tight loop or one heap blow-up stalls every plugin, which is the failure VS Code accepts and a proxy should not. |
 | Idle plugins | No worker and, after a grace period, no host. Activation events in the manifest. `onStartup` is opt-in. | Matches Chrome MV3 and VS Code activation. The first matched request pays host startup once. |
 | Timeouts | Daemon deadline, then `worker.terminate()`. Restart the host only if the heartbeat dies. | Per-process used kill as the only tool. Terminate is weaker against native code, which is why native code is not allowed in a worker. |
 | Memory | 64 MB V8 heap per worker, 512 MB RSS backstop on the host. | `resourceLimits` does not cover native RAM. The host cap is a blunt restart. |
 | Permissions | Broker in the daemon, loader in the worker that does not expose Node I/O. Document that this is not a sandbox. | A dedicated process does not sandbox the disk either, unless the OS user changes. It does limit blast radius of a crash. |
-| May a plugin override `mockResponse`? | No. `chiling.*` is reserved. A plugin `uses` path cannot shadow it. | The earlier `type: plugin` plus `package` and `action` shape is dropped. The stage is `uses`. |
+| May a plugin override `mockResponse`? | No. `crabbro.*` is reserved. A plugin `uses` path cannot shadow it. | The earlier `type: plugin` plus `package` and `action` shape is dropped. The stage is `uses`. |
 | May a plugin insert rules by itself? | No. It may ship a `ruleTemplate` the agent creates. | Unchanged. |
 | Plugin-to-plugin calls? | Not in v1. Handlers return built-in actions only. | Unchanged. Avoids cycles on one exchange. |
-| Where do CLI commands appear? | `chiling plugin invoke <plugin> <instance> <tool>`. | Tools are a catalog, not a top-level verb and not the same entry as `uses`. |
+| Where do CLI commands appear? | `crabbro plugin invoke <plugin> <instance> <tool>`. | Tools are a catalog, not a top-level verb and not the same entry as `uses`. |
 | npm lifecycle scripts | Never run. No `scripts` grant turns them on. | Workcells' installer rule. A hostile `postinstall` must not run because the operator installed a package. |
 | Native addons | Refuse unless granted, and then `isolation: process`. | Stronger than the previous draft, which left native code inside the same kind of process as ordinary plugins. |
 | History writes | Not in the first permission set. | Unchanged. |
-| Secrets | Named files under `~/.chiling/secrets`, mode `0600`, redacted in traces. | Unchanged. |
+| Secrets | Named files under `~/.crabbro/secrets`, mode `0600`, redacted in traces. | Unchanged. |
 | API version gate | Major must match. Daemon minor must be at least the plugin's minor. | Unchanged. |

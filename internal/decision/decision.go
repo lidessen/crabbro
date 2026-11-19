@@ -41,14 +41,14 @@ func (c Config) Configured() bool {
 	return strings.TrimSpace(c.APIKey) != "" && (c.Provider == "jev" || c.Provider == "openai")
 }
 
-// FromEnv loads CHILING_DECISION_* with OPENAI_* and TYPESAFE_API_KEY fallbacks.
+// FromEnv loads CRABBRO_DECISION_* with OPENAI_* and TYPESAFE_API_KEY fallbacks.
 // Provider defaults to jev when only a TypeSafe key is present, otherwise openai.
 func FromEnv() Config {
 	cfg := Config{
-		Provider: strings.ToLower(strings.TrimSpace(os.Getenv("CHILING_DECISION_PROVIDER"))),
-		BaseURL:  strings.TrimSpace(os.Getenv("CHILING_DECISION_BASE_URL")),
-		APIKey:   strings.TrimSpace(os.Getenv("CHILING_DECISION_API_KEY")),
-		Model:    strings.TrimSpace(os.Getenv("CHILING_DECISION_MODEL")),
+		Provider: strings.ToLower(strings.TrimSpace(os.Getenv("CRABBRO_DECISION_PROVIDER"))),
+		BaseURL:  strings.TrimSpace(os.Getenv("CRABBRO_DECISION_BASE_URL")),
+		APIKey:   strings.TrimSpace(os.Getenv("CRABBRO_DECISION_API_KEY")),
+		Model:    strings.TrimSpace(os.Getenv("CRABBRO_DECISION_MODEL")),
 	}
 	if cfg.Provider == "" {
 		switch {

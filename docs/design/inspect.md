@@ -4,7 +4,7 @@ Status: Implemented, except the deferred items at the end of this file.
 Date: 2026-11-04
 Scope: How an agent finds the one app or page it means to change when the proxy is seeing many of them at once.
 
-The proxy fills `Request.Attribution` on each recorded exchange. Session scope and durable allow/deny lists are loaded. A browser extension or Chrome DevTools Protocol is not connected, so tab ids and initiator scripts stay empty unless a client sends `X-Chiling-Page` or `X-Chiling-Initiator`. The proxy strips those stamps before forwarding.
+The proxy fills `Request.Attribution` on each recorded exchange. Session scope and durable allow/deny lists are loaded. A browser extension or Chrome DevTools Protocol is not connected, so tab ids and initiator scripts stay empty unless a client sends `X-Crabbro-Page` or `X-Crabbro-Initiator`. The proxy strips those stamps before forwarding.
 
 ## What the agent is doing
 
@@ -12,7 +12,7 @@ The machine is running a browser with many tabs, a few Electron or native apps, 
 
 ## What a proxy can know
 
-Chiling is a local forward proxy. For each accepted TCP connection it knows the peer address and, once the client speaks HTTP, the request line and headers. That is the whole ground truth.
+Crabbro is a local forward proxy. For each accepted TCP connection it knows the peer address and, once the client speaks HTTP, the request line and headers. That is the whole ground truth.
 
 ### Process and app
 
@@ -57,7 +57,7 @@ A pure proxy does not know which script called `fetch`. `Referer` is the documen
 
 Two optional integrations can supply it. Both are explicit, neither is required for the proxy to run, and both are later work:
 
-- A browser extension (MV3) knows `tabId`, `frameId`, and the document URL. It stamps a request header such as `x-chiling-page` and `x-chiling-initiator` that the proxy strips before the bytes go upstream. The origin must not see the stamp. The extension talks to the daemon only as a hint; the proxy remains the source of the exchange id.
+- A browser extension (MV3) knows `tabId`, `frameId`, and the document URL. It stamps a request header such as `x-crabbro-page` and `x-crabbro-initiator` that the proxy strips before the bytes go upstream. The origin must not see the stamp. The extension talks to the daemon only as a hint; the proxy remains the source of the exchange id.
 - Chrome DevTools Protocol (`Network.requestWillBeSent`) has `initiator.url`, the script line, `frameId`, and a resource `type`. Attaching requires a browser launched with a debugging port. Matching a CDP event to a proxy exchange by method, URL, and time is fuzzy when many identical requests are in flight. The extension stamp is the reliable join. CDP is the way to get the initiator script when the stamp only carries the tab.
 
 Confidence on a page or initiator is `header`, `extension`, or `cdp`. The CLI prints it. An agent must not treat `header` as a tab.
@@ -104,7 +104,7 @@ The reserved `Request.Attribution` struct is the on-exchange hook: `sourceId`, `
 
 ### Session scope
 
-Session scope is the REPL. It is attached to the open recording session in `internal/session`. It is not written to disk. `record stop` drops it. A daemon restart drops it. Closing a CLI process does not drop it, because the CLI is a client and the next command must see the same scope. "Forgotten on exit" means the recording session ended, not that one short-lived `chiling` process exited.
+Session scope is the REPL. It is attached to the open recording session in `internal/session`. It is not written to disk. `record stop` drops it. A daemon restart drops it. Closing a CLI process does not drop it, because the CLI is a client and the next command must see the same scope. "Forgotten on exit" means the recording session ended, not that one short-lived `crabbro` process exited.
 
 If the operator has not run `record start`, the first `scope` command opens an implicit recording session named `scope`. `record stop` forgets that too. There is no second, hidden scope store.
 
@@ -141,12 +141,12 @@ Unknown tokens are a validation error. The CLI does not echo a rejected token ba
 
 ### Durable allow and deny
 
-Long-term exclusion lives in `~/.chiling/scope/`, one file per list, filename equal to id:
+Long-term exclusion lives in `~/.crabbro/scope/`, one file per list, filename equal to id:
 
 ```text
-~/.chiling/scope/deny.yaml
-~/.chiling/scope/allow.yaml
-~/.chiling/scope/deny.yaml.draft
+~/.crabbro/scope/deny.yaml
+~/.crabbro/scope/allow.yaml
+~/.crabbro/scope/deny.yaml.draft
 ```
 
 ```yaml
@@ -190,26 +190,26 @@ MITM allow and deny stay the decryption policy. A host can be decrypted, recorde
 JSON is the default, as on every other command. `--pretty` is the human form. `--json` is accepted and changes nothing.
 
 ```text
-chiling sources list
-chiling sources get <id>
-chiling scope status
-chiling scope pick <expr>...
-chiling scope omit <expr>...
-chiling scope off <expr>...
-chiling scope on <expr>...
-chiling scope reset
-chiling scope bypass <expr>...      # explicit; not a view mute
-chiling requests list               # default view
-chiling requests list --all         # includes hidden rows
+crabbro sources list
+crabbro sources get <id>
+crabbro scope status
+crabbro scope pick <expr>...
+crabbro scope omit <expr>...
+crabbro scope off <expr>...
+crabbro scope on <expr>...
+crabbro scope reset
+crabbro scope bypass <expr>...      # explicit; not a view mute
+crabbro requests list               # default view
+crabbro requests list --all         # includes hidden rows
 ```
 
 Durable edits go through the config commands that rules already use:
 
 ```text
-chiling config draft ~/.chiling/scope/deny.yaml
-chiling config validate deny
-chiling config commit deny
-chiling config discard deny
+crabbro config draft ~/.crabbro/scope/deny.yaml
+crabbro config validate deny
+crabbro config commit deny
+crabbro config discard deny
 ```
 
 `sources list` counts what the current session has seen:
@@ -264,31 +264,31 @@ The control API mirrors this under `/v1/sources`, `/v1/scope`, and the existing 
 The daemon is already proxying the desktop. The agent has not picked a target.
 
 ```text
-chiling record start --name checkout-bug
-chiling sources list
+crabbro record start --name checkout-bug
+crabbro sources list
 ```
 
 The list shows Chrome (about 200 exchanges), a music app, `curl` from a health check, and an updater. The agent reads `sources get` for Chrome and sees pages for `https://mail.example`, `https://app.example.com`, and a docs site.
 
 ```text
-chiling scope off app:Spotify app:Updater pid:9021
-chiling scope pick app:Google Chrome origin:https://app.example.com
-chiling scope omit type:image type:font type:stylesheet type:media
-chiling requests list
+crabbro scope off app:Spotify app:Updater pid:9021
+crabbro scope pick app:Google Chrome origin:https://app.example.com
+crabbro scope omit type:image type:font type:stylesheet type:media
+crabbro requests list
 ```
 
 `hiddenCount` is most of the original firehose. The remaining rows are documents, scripts, XHR, and websockets for that origin. One script URL shows up only if an extension or CDP is attached; otherwise the agent groups by path and `type:xhr`.
 
 ```text
-chiling requests list --pathPrefix /v1/
-chiling scope omit initiator:https://app.example.com/static/analytics.js
-chiling requests get req_18
+crabbro requests list --pathPrefix /v1/
+crabbro scope omit initiator:https://app.example.com/static/analytics.js
+crabbro requests get req_18
 ```
 
 `req_18` is `POST /v1/checkout`. The agent drafts a rule with `on.request` for that host and path. The rule runs on the next checkout even if the agent later mutes the page, because scope did not attach itself to the rule. `rules preview --request req_18` reports the match and `inScope`. `verify replay req_18` checks the rewrite.
 
 ```text
-chiling record stop
+crabbro record stop
 ```
 
 The pick and omit lists are gone. `host:*.google-analytics.com` on the committed deny list is still hidden tomorrow.

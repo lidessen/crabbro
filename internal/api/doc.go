@@ -1,4 +1,4 @@
-// Package api implements the local control API for the chiling daemon.
+// Package api implements the local control API for the crabbro daemon.
 //
 // The control API is a plain HTTP server hosted inside the proxy daemon process,
 // accessible over a Unix domain socket (primary) and/or localhost TCP (fallback).

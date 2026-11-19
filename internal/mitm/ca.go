@@ -18,7 +18,7 @@ import (
 // Default file and directory names for the root CA.
 const (
 	// DefaultCertDir is the default directory for CA certificate and key files.
-	DefaultCertDir = "~/.chiling/certs"
+	DefaultCertDir = "~/.crabbro/certs"
 
 	// DefaultCertFile is the default filename for the PEM-encoded CA certificate.
 	DefaultCertFile = "rootCA.pem"
@@ -82,7 +82,7 @@ func GenerateCA() (*CAStore, error) {
 	template := &x509.Certificate{
 		SerialNumber: serial,
 		Subject: pkix.Name{
-			CommonName: "chiling root CA",
+			CommonName: "crabbro root CA",
 		},
 		NotBefore:             now.Add(-clockSkew),
 		NotAfter:              now.Add(CAValidity),

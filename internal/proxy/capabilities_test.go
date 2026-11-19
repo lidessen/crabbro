@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lidessen/chiling/internal/history"
-	"github.com/lidessen/chiling/internal/mitm"
-	"github.com/lidessen/chiling/internal/ring"
-	"github.com/lidessen/chiling/internal/rule"
+	"github.com/lidessen/crabbro/internal/history"
+	"github.com/lidessen/crabbro/internal/mitm"
+	"github.com/lidessen/crabbro/internal/ring"
+	"github.com/lidessen/crabbro/internal/rule"
 	"golang.org/x/net/http2"
 )
 
@@ -38,29 +38,29 @@ on:
 response:
   pipeline:
     - id: set_header
-      uses: chiling.set-response-header
+      uses: crabbro.set-response-header
       with:
-        name: X-Chiling
+        name: X-Crabbro
         value: rewritten
     - id: drop_header
-      uses: chiling.remove-response-header
+      uses: crabbro.remove-response-header
       with:
         name: X-Upstream
     - id: rewrite_body
-      uses: chiling.rewrite-response-body
+      uses: crabbro.rewrite-response-body
       with:
         find: secret
         replace: public
     - id: set_status
-      uses: chiling.set-response-status
+      uses: crabbro.set-response-status
       with:
         status: 201
     - id: slow_down
-      uses: chiling.delay
+      uses: crabbro.delay
       with:
         milliseconds: 80
     - id: throttled
-      uses: chiling.throttle
+      uses: crabbro.throttle
       with:
         bytesPerSecond: 1000000
 `
@@ -87,8 +87,8 @@ response:
 	if string(body) != "hello public" {
 		t.Fatalf("body = %q", body)
 	}
-	if resp.Header.Get("X-Chiling") != "rewritten" {
-		t.Fatalf("X-Chiling = %q", resp.Header.Get("X-Chiling"))
+	if resp.Header.Get("X-Crabbro") != "rewritten" {
+		t.Fatalf("X-Crabbro = %q", resp.Header.Get("X-Crabbro"))
 	}
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("status = %d", resp.StatusCode)
@@ -135,7 +135,7 @@ on:
 request:
   pipeline:
     - id: tag_ws
-      uses: chiling.tag
+      uses: crabbro.tag
       with:
         tags: ["ws"]
 frame:

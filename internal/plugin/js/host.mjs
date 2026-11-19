@@ -6,7 +6,7 @@ import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
 const sockPath = process.argv[2];
-const heartbeatMs = Number(process.env.CHILING_PLUGIN_HEARTBEAT_MS || 2000);
+const heartbeatMs = Number(process.env.CRABBRO_PLUGIN_HEARTBEAT_MS || 2000);
 const runtimeDir = new URL(".", import.meta.url);
 
 const workers = new Map();
@@ -70,7 +70,7 @@ function startWorker(msg) {
       env: {
         PATH: process.env.PATH || "",
         HOME: process.env.HOME || "",
-        CHILING_PLUGIN_ENTRY: msg.entry,
+        CRABBRO_PLUGIN_ENTRY: msg.entry,
       },
     });
     const slot = { child, packageName: msg.package, lastUsed: Date.now(), poisoned: false, buf: Buffer.alloc(0) };
@@ -218,7 +218,7 @@ function onDaemon(msg) {
 // The daemon proves itself in its first frame. Until then a connection is
 // not the one replies go to, and a wrong token closes it: whoever connects
 // last must not be able to take the plugin traffic over.
-const token = process.env.CHILING_PLUGIN_TOKEN || "";
+const token = process.env.CRABBRO_PLUGIN_TOKEN || "";
 
 const server = net.createServer((conn) => {
   let authed = token === "";

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/lidessen/chiling/internal/mitm"
+	"github.com/lidessen/crabbro/internal/mitm"
 	"golang.org/x/net/idna"
 )
 

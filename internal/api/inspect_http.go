@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lidessen/chiling/internal/shared"
+	"github.com/lidessen/crabbro/internal/shared"
 )
 
 func (s *Server) scopeActive() bool {

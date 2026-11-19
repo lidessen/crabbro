@@ -1,5 +1,5 @@
 // Package mitm provides HTTPS man-in-the-middle certificate management and TLS
-// interception for the chiling proxy daemon.
+// interception for the crabbro proxy daemon.
 //
 // The package supports:
 //
@@ -15,7 +15,7 @@
 // files using SavePEM and LoadPEM.
 //
 // The root CA is generated once on first MITM-enabled launch and reused on
-// subsequent starts. The cert directory (~/.chiling/certs/) is created with
+// subsequent starts. The cert directory (~/.crabbro/certs/) is created with
 // 0700 permissions on first use.
 //
 // # Certificate Attributes
@@ -24,6 +24,6 @@
 //   - Validity: 10 years (with 24h clock skew tolerance)
 //   - BasicConstraints: CA: true
 //   - KeyUsage: CertSign, DigitalSignature
-//   - Subject CN: "chiling root CA"
+//   - Subject CN: "crabbro root CA"
 //   - IsCA: true
 package mitm

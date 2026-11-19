@@ -7,8 +7,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/lidessen/chiling/internal/rule"
-	"github.com/lidessen/chiling/internal/shared"
+	"github.com/lidessen/crabbro/internal/rule"
+	"github.com/lidessen/crabbro/internal/shared"
 )
 
 type oaMessage struct {
@@ -111,7 +111,7 @@ func (c *Client) draftOpenAI(ctx context.Context, description string, flow *Flow
 	}
 	var parsed DraftResult
 	model, err := c.complete(ctx, "draft_rule", schema,
-		"Write a chiling JavaScript rule. The default export is function rule(ctx) and returns {match, actions}. Each action is {type, params}. Use only mockResponse, block, setRequestHeader, rewriteURL, or tag.",
+		"Write a crabbro JavaScript rule. The default export is function rule(ctx) and returns {match, actions}. Each action is {type, params}. Use only mockResponse, block, setRequestHeader, rewriteURL, or tag.",
 		string(state), &parsed)
 	if err != nil {
 		return DraftResult{}, err

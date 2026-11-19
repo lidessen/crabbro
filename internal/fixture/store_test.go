@@ -13,12 +13,12 @@ func TestNew_DefaultDir(t *testing.T) {
 		t.Fatalf("New() with empty dir: %v", err)
 	}
 	home, _ := os.UserHomeDir()
-	want := filepath.Join(home, ".chiling", "fixtures")
+	want := filepath.Join(home, ".crabbro", "fixtures")
 	if s.BaseDir() != want {
 		t.Errorf("BaseDir = %q, want %q", s.BaseDir(), want)
 	}
 	// Cleanup
-	os.RemoveAll(filepath.Join(home, ".chiling", "fixtures"))
+	os.RemoveAll(filepath.Join(home, ".crabbro", "fixtures"))
 }
 
 func TestNew_CustomDir(t *testing.T) {

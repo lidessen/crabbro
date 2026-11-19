@@ -3,7 +3,7 @@ package rule
 import (
 	"testing"
 
-	"github.com/lidessen/chiling/internal/shared"
+	"github.com/lidessen/crabbro/internal/shared"
 )
 
 func TestValidateOutput_NoMatch(t *testing.T) {

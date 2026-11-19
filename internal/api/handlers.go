@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lidessen/chiling/internal/fixture"
-	"github.com/lidessen/chiling/internal/shared"
+	"github.com/lidessen/crabbro/internal/fixture"
+	"github.com/lidessen/crabbro/internal/shared"
 )
 
 // handleStatus responds to GET /v1/status.

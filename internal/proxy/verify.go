@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lidessen/chiling/internal/shared"
+	"github.com/lidessen/crabbro/internal/shared"
 )
 
 // Replay sends a captured request back through this proxy and returns the
@@ -39,7 +39,7 @@ func (p *Proxy) Replay(requestID string, expectStatus int, expectBody string) (s
 		}
 		out.Header.Set(k, v)
 	}
-	out.Header.Set("X-Chiling-Replay", token)
+	out.Header.Set("X-Crabbro-Replay", token)
 
 	proxyURL, err := url.Parse("http://" + p.Addr())
 	if err != nil {
@@ -64,7 +64,7 @@ func (p *Proxy) Replay(requestID string, expectStatus int, expectBody string) (s
 
 	var found *shared.Request
 	for _, cand := range p.RingBuffer.List(0) {
-		if cand.RequestHeaders["X-Chiling-Replay"] == token || headerListHas(cand, token) {
+		if cand.RequestHeaders["X-Crabbro-Replay"] == token || headerListHas(cand, token) {
 			found = cand
 		}
 	}
@@ -96,7 +96,7 @@ func (p *Proxy) Replay(requestID string, expectStatus int, expectBody string) (s
 
 func headerListHas(req *shared.Request, token string) bool {
 	for _, h := range req.RequestHeaderList {
-		if strings.EqualFold(h.Name, "X-Chiling-Replay") {
+		if strings.EqualFold(h.Name, "X-Crabbro-Replay") {
 			for _, v := range h.Values {
 				if v == token {
 					return true

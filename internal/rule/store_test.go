@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lidessen/chiling/internal/shared"
+	"github.com/lidessen/crabbro/internal/shared"
 )
 
 func TestNewRuleStore(t *testing.T) {
@@ -243,8 +243,8 @@ func TestCreate_RejectsLegacyJavaScript(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when the script is legacy JavaScript")
 	}
-	if !strings.Contains(err.Error(), "chiling rules migrate") {
-		t.Errorf("error should point to chiling rules migrate, got: %s", err.Error())
+	if !strings.Contains(err.Error(), "crabbro rules migrate") {
+		t.Errorf("error should point to crabbro rules migrate, got: %s", err.Error())
 	}
 	if s.Count() != 0 {
 		t.Errorf("expected no rule to be stored, got %d", s.Count())
@@ -263,8 +263,8 @@ func TestUpdate_RejectsLegacyJavaScript(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when the script is legacy JavaScript")
 	}
-	if !strings.Contains(err.Error(), "chiling rules migrate") {
-		t.Errorf("error should point to chiling rules migrate, got: %s", err.Error())
+	if !strings.Contains(err.Error(), "crabbro rules migrate") {
+		t.Errorf("error should point to crabbro rules migrate, got: %s", err.Error())
 	}
 
 	// The rejected script must not replace the stored one.

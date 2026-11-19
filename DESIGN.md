@@ -1,4 +1,4 @@
-# Chiling Design
+# Crabbro Design
 
 > Current network data plane, middleware, and rule execution proposal: [NETWORK_PIPELINE_DESIGN.md](./NETWORK_PIPELINE_DESIGN.md). The proposal is not implemented yet. The milestone sections below are retained as historical decision records; use the status notes here and the current source for as-built behavior.
 
@@ -38,9 +38,9 @@ the owner of the proxy runtime.
 
 The system has three surfaces:
 
-1. `chilingd`: a Go daemon that owns proxying, capture, rule execution,
+1. `crabbrod`: a Go daemon that owns proxying, capture, rule execution,
    storage, and the local control API.
-2. `chiling`: a CLI designed for agents first, with JSON and NDJSON output
+2. `crabbro`: a CLI designed for agents first, with JSON and NDJSON output
    as the default shape.
 3. Desktop UI: a human-facing client for live requests, request details, rule
    browsing, and enable/disable controls.
@@ -66,7 +66,7 @@ current package map or the proposed network ownership model; see
                  └─────────┬──────────┘
                            │
 ┌──────────────┐   ┌───────▼────────┐   ┌────────────────┐
-│ chiling  │   │  chilingd  │   │   Rule Store   │
+│ crabbro  │   │  crabbrod  │   │   Rule Store   │
 │ CLI          ├──►│  Go daemon     ├──►│ JS + metadata  │
 └──────────────┘   └───────┬────────┘   └────────────────┘
                            │
@@ -85,7 +85,7 @@ SQLite remains a possible future history store; it is not in the current impleme
 
 ## Daemon
 
-`chilingd` is responsible for:
+`crabbrod` is responsible for:
 
 - Listening as a local HTTP proxy.
 - Supporting HTTP proxy requests and HTTPS `CONNECT`.
@@ -123,26 +123,26 @@ The CLI is agent-first. Commands should default to machine-readable output.
 Examples of commands currently available:
 
 ```sh
-chiling status
-chiling doctor --pretty
-chiling listen
-chiling requests list --since req_abc --limit 50
-chiling requests get <request-id> --include headers,body,rule-trace
-chiling rules list
-chiling rules create ./rule.js --name mock-chat --priority 100
-chiling rules enable <rule-id>
-chiling rules test ./rule.js --fixture <fixture-name>
-chiling mitm status
+crabbro status
+crabbro doctor --pretty
+crabbro listen
+crabbro requests list --since req_abc --limit 50
+crabbro requests get <request-id> --include headers,body,rule-trace
+crabbro rules list
+crabbro rules create ./rule.js --name mock-chat --priority 100
+crabbro rules enable <rule-id>
+crabbro rules test ./rule.js --fixture <fixture-name>
+crabbro mitm status
 ```
 
 Human-readable output can exist, but it should be explicit:
 
 ```sh
-chiling requests list --pretty
-chiling status --pretty
+crabbro requests list --pretty
+crabbro status --pretty
 ```
 
-`chiling listen` consumes the daemon's SSE stream and prints each event as one
+`crabbro listen` consumes the daemon's SSE stream and prints each event as one
 JSON line. It is a best-effort live feed; it does not provide replay or durable
 event history.
 
@@ -293,7 +293,7 @@ Current storage is in-memory for traffic and rules, with fixture files on disk:
 
 - Request summaries and rule definitions use an in-memory ring/map and are lost when the daemon exits.
 - Request and response body previews use a bounded in-memory LRU cache.
-- Rule fixtures are stored as JSON files under `~/.chiling/fixtures/`.
+- Rule fixtures are stored as JSON files under `~/.crabbro/fixtures/`.
 
 SQLite persistence and retention policy are future design work, not current
 storage behavior.
@@ -321,7 +321,7 @@ the rule editor and table-heavy UX strongly benefit from a web stack.
 Build the smallest useful agent-facing proxy:
 
 1. Initialize a Go module.
-2. Implement `chilingd` as a local HTTP proxy.
+2. Implement `crabbrod` as a local HTTP proxy.
 3. Support HTTP requests and HTTPS `CONNECT` passthrough.
 4. Capture request metadata into an in-memory ring buffer.
 5. Expose a local control API for:
@@ -329,7 +329,7 @@ Build the smallest useful agent-facing proxy:
    - live events
    - request list
    - request detail
-6. Implement `chiling` CLI commands:
+6. Implement `crabbro` CLI commands:
    - `status`
    - `listen`
    - `requests list`
@@ -392,20 +392,20 @@ record; later sections supersede individual decisions where marked.
 
 ### Go Module Path
 
-`github.com/lidessen/chiling`.
+`github.com/lidessen/crabbro`.
 
 ### Binary Layout
 
 Two separate `main` packages in one Go module:
-- `cmd/chilingd/` — the daemon binary.
-- `cmd/chiling/` — the CLI client binary (communicates with the daemon over
+- `cmd/crabbrod/` — the daemon binary.
+- `cmd/crabbro/` — the CLI client binary (communicates with the daemon over
   the control API).
 
 ### Default Ports and Paths
 
 | Setting | Default | Configurable |
 |---|---|---|
-| Control API UDS | `~/.chiling/proxy.sock` | `--uds-path` |
+| Control API UDS | `~/.crabbro/proxy.sock` | `--uds-path` |
 | Control API TCP | `localhost:16379` | `--tcp-addr` |
 | Proxy listener | `localhost:8080` | `--proxy-addr` |
 | Ring buffer capacity | 1024 entries | `--ring-buffer-size` |
@@ -555,9 +555,9 @@ agent-facing proxy loop.
 
 ### CLI `listen` Semantics
 
-`chiling listen` subscribes to live events from a running daemon (SSE
+`crabbro listen` subscribes to live events from a running daemon (SSE
 stream). It does NOT start the daemon. Starting the daemon is always via
-`chilingd`.
+`crabbrod`.
 
 ### Pagination (Original Contract; Current Time Filtering Is Missing)
 
@@ -715,7 +715,7 @@ Response:
 
 #### Fixture Storage
 
-Fixtures are saved as JSON files under `~/.chiling/fixtures/<name>.json`:
+Fixtures are saved as JSON files under `~/.crabbro/fixtures/<name>.json`:
 
 ```jsonc
 {
@@ -752,19 +752,19 @@ Fixture API:
 
 #### CLI Extensions
 
-New commands under the existing `chiling` binary:
+New commands under the existing `crabbro` binary:
 
 ```
-chiling rules list [--json|--pretty]
-chiling rules create <file> [--name <name>] [--priority <n>]
-chiling rules get <id> [--json|--pretty]
-chiling rules enable <id>
-chiling rules disable <id>
-chiling rules delete <id>
-chiling rules test <rule-file> --fixture <name> [--json|--pretty]
-chiling rules fixture save <request-id> <name>
-chiling rules fixture list [--json|--pretty]
-chiling rules fixture delete <name>
+crabbro rules list [--json|--pretty]
+crabbro rules create <file> [--name <name>] [--priority <n>]
+crabbro rules get <id> [--json|--pretty]
+crabbro rules enable <id>
+crabbro rules disable <id>
+crabbro rules delete <id>
+crabbro rules test <rule-file> --fixture <name> [--json|--pretty]
+crabbro rules fixture save <request-id> <name>
+crabbro rules fixture list [--json|--pretty]
+crabbro rules fixture delete <name>
 ```
 
 The `rules test` command reads the JS file from disk, resolves the fixture
@@ -800,7 +800,7 @@ When a request arrives at the proxy:
   violations, script errors, timeout enforcement, and output size limits.
 - **API integration tests**: Test rule CRUD endpoints, fixture save/list/get/delete,
   and the `rules/test` endpoint against mock fixtures.
-- **CLI smoke**: Run `chiling rules test` against a running daemon with a fixture.
+- **CLI smoke**: Run `crabbro rules test` against a running daemon with a fixture.
 - **Goja sandbox verification**: Explicit tests that FS/network/process calls in
   rule scripts are blocked.
 
@@ -863,18 +863,18 @@ A new Go package `internal/mitm` with:
 
 - Root CA generated using Go's `crypto/rand`, `crypto/rsa` (2048-bit), and
   `crypto/x509` — **no external dependencies**.
-- CA certificate stored as PEM at `~/.chiling/certs/rootCA.pem`.
-- CA private key stored as PEM at `~/.chiling/certs/rootCA-key.pem`.
+- CA certificate stored as PEM at `~/.crabbro/certs/rootCA.pem`.
+- CA private key stored as PEM at `~/.crabbro/certs/rootCA-key.pem`.
 - CA is generated **once** on first `--mitm` launch. On subsequent starts the
   existing files are loaded (the key is reused so host certs signed in a prior
   session are still valid if cached — though in MVP the host cert cache is
   in-memory only, so this is for future persistence).
-- Cert directory `~/.chiling/certs/` created with `0700` on first start.
+- Cert directory `~/.crabbro/certs/` created with `0700` on first start.
 - CA cert attributes:
   - Validity: 10 years from generation.
   - `BasicConstraints`: `CA: true`.
   - `KeyUsage`: `CertSign`, `DigitalSignature`.
-  - Subject `CN`: `"chiling root CA"`.
+  - Subject `CN`: `"crabbro root CA"`.
   - `IsCA`: `true`.
 
 #### Per-Host Certificate Generation
@@ -895,10 +895,10 @@ A new Go package `internal/mitm` with:
 
 #### Certificate Installation (CLI)
 
-The `chiling mitm install-ca` command copies the root CA into the OS trust store.
+The `crabbro mitm install-ca` command copies the root CA into the OS trust store.
 
-- **macOS**: `security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ~/.chiling/certs/rootCA.pem`
-- **Linux**: copy to `/usr/local/share/ca-certificates/chiling-root.crt` then
+- **macOS**: `security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ~/.crabbro/certs/rootCA.pem`
+- **Linux**: copy to `/usr/local/share/ca-certificates/crabbro-root.crt` then
   `update-ca-certificates`
 - **Behavior**: The command prints the exact command(s) it will run, then runs
   them with `sudo` if needed. Failure is reported (non-fatal — the user can
@@ -1008,7 +1008,7 @@ type DomainMatcher struct {
 #### Configuration and Lifecycle
 
 - MITM is **disabled by default** (opt-in).
-- **Startup flags** on `chilingd`:
+- **Startup flags** on `crabbrod`:
   - `--mitm`: Enable MITM on startup.
   - `--mitm-allow <patterns>`: Comma-separated allowlist patterns.
   - `--mitm-deny <patterns>`: Comma-separated denylist patterns.
@@ -1058,17 +1058,17 @@ Intercepted bool `json:"intercepted,omitempty"`
 #### CLI Commands
 
 ```text
-chiling mitm status [--json|--pretty]
-chiling mitm enable
-chiling mitm disable
-chiling mitm cert [--output <file>]
-chiling mitm install-ca
-chiling mitm allow list
-chiling mitm allow add <pattern>
-chiling mitm allow remove <pattern>
-chiling mitm deny list
-chiling mitm deny add <pattern>
-chiling mitm deny remove <pattern>
+crabbro mitm status [--json|--pretty]
+crabbro mitm enable
+crabbro mitm disable
+crabbro mitm cert [--output <file>]
+crabbro mitm install-ca
+crabbro mitm allow list
+crabbro mitm allow add <pattern>
+crabbro mitm allow remove <pattern>
+crabbro mitm deny list
+crabbro mitm deny add <pattern>
+crabbro mitm deny remove <pattern>
 ```
 
 All MITM commands communicate with the daemon's control API (same as `status`,
@@ -1130,14 +1130,14 @@ The preferred approach is **direct field assignment** for MITM proxy wiring and
   existing entry). Detect already-installed state and report it.
 - **Uninstall removes wrong cert**: If the cert file path used at uninstall time
   differs from the one installed, removal could fail silently. *Mitigation:*
-  Always use the same `~/.chiling/certs/rootCA.pem` path; verify that the
+  Always use the same `~/.crabbro/certs/rootCA.pem` path; verify that the
   certificate being removed matches the stored PEM fingerprint.
 
 #### Decision: MITM Proxy Wiring
 
-**Approach: Direct public-field assignment in `chilingd/main.go`**
+**Approach: Direct public-field assignment in `crabbrod/main.go`**
 
-- Add **two lines** after `proxy.New()` in `chilingd/main.go`:
+- Add **two lines** after `proxy.New()` in `crabbrod/main.go`:
   ```go
   pxy.MITMHandler = mitmHandler
   pxy.MITMEnabled = *mitmEnabled
@@ -1148,7 +1148,7 @@ The preferred approach is **direct field assignment** for MITM proxy wiring and
 - No changes to `proxy.New()` signature, no new setter methods.
 - **MitMHandler must be non-nil** when MITM is used at runtime. Since the handler
   is nil when neither `--mitm` nor `--mitm-allow`/`--mitm-deny` is set, `install-ca`
-  must also create/load the CA (the `chiling mitm install-ca` CLI command will
+  must also create/load the CA (the `crabbro mitm install-ca` CLI command will
   ensure the CA files exist).
 
 | Pros | Why alternatives rejected |
@@ -1161,26 +1161,26 @@ The preferred approach is **direct field assignment** for MITM proxy wiring and
 
 **Approach: OS-native command execution with explicit consent**
 
-- **Install**: `chiling mitm install-ca`
-  1. Verify CA file exists at `~/.chiling/certs/rootCA.pem`. If not, download it
+- **Install**: `crabbro mitm install-ca`
+  1. Verify CA file exists at `~/.crabbro/certs/rootCA.pem`. If not, download it
      from the daemon API (`GET /v1/mitm/cert`) or print instructions to generate
      it by starting the daemon with `--mitm`.
   2. Print the exact command(s) that will be executed and a warning about
      modifying the system trust store.
   3. Ask the user for explicit confirmation (Y/n prompt).
   4. Execute the OS-specific command:
-     - **macOS**: `security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ~/.chiling/certs/rootCA.pem`
-     - **Linux**: `sudo cp ~/.chiling/certs/rootCA.pem /usr/local/share/ca-certificates/chiling-root.crt && sudo update-ca-certificates`
+     - **macOS**: `security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ~/.crabbro/certs/rootCA.pem`
+     - **Linux**: `sudo cp ~/.crabbro/certs/rootCA.pem /usr/local/share/ca-certificates/crabbro-root.crt && sudo update-ca-certificates`
   5. On success, call `POST /v1/mitm/cert-installed` on the daemon API (best-effort)
      to update the `mitmCertInstalled` status flag.
   6. On failure, print the manual command the user can run.
 
-- **Uninstall**: `chiling mitm uninstall-ca`
+- **Uninstall**: `crabbro mitm uninstall-ca`
   1. Print the command(s) that will be executed and a warning.
   2. Ask for explicit confirmation.
   3. Execute:
-     - **macOS**: `security remove-trusted-cert -d ~/.chiling/certs/rootCA.pem`
-     - **Linux**: `sudo rm /usr/local/share/ca-certificates/chiling-root.crt && sudo update-ca-certificates`
+     - **macOS**: `security remove-trusted-cert -d ~/.crabbro/certs/rootCA.pem`
+     - **Linux**: `sudo rm /usr/local/share/ca-certificates/crabbro-root.crt && sudo update-ca-certificates`
   4. On success, call `POST /v1/mitm/cert-installed` with `false` (best-effort).
 
 - **API extension**: Add a new API endpoint:
@@ -1198,12 +1198,12 @@ The preferred approach is **direct field assignment** for MITM proxy wiring and
 
 #### Decision: Uno Doctor Command
 
-**Approach: `chiling doctor` — diagnostic and status overview**
+**Approach: `crabbro doctor` — diagnostic and status overview**
 
 A single command an operator runs to check if the system is set up correctly:
 
 ```
-chiling doctor [--fix]
+crabbro doctor [--fix]
 ```
 
 Output (JSON by default, `--pretty` for human-readable):
@@ -1220,29 +1220,29 @@ Output (JSON by default, `--pretty` for human-readable):
   "rulesCount": 3,
   "requestsCaptured": 42,
   "issues": [
-    "MITM CA certificate is not installed in the system trust store. Run 'chiling mitm install-ca' to install it."
+    "MITM CA certificate is not installed in the system trust store. Run 'crabbro mitm install-ca' to install it."
   ]
 }
 ```
 
 - **Detects daemon status**: Try UDS, fall back to TCP. If unreachable, report
-  and show `chilingd` start command.
-- **Checks CA file existence**: Verify `~/.chiling/certs/rootCA.pem` exists.
+  and show `crabbrod` start command.
+- **Checks CA file existence**: Verify `~/.crabbro/certs/rootCA.pem` exists.
 - **Checks CA install status**: Query daemon via `GET /v1/status`. If daemon is
-  unreachable, check trust store directly (macOS: `security find-certificate -c "chiling root CA" -p`).
+  unreachable, check trust store directly (macOS: `security find-certificate -c "crabbro root CA" -p`).
 - **`--fix` flag**: Attempts auto-remediation for fixable issues (start daemon,
   install CA, enable MITM). Each fix step shows the action and asks confirmation.
 - **JSON output**: Agent-consumable. Use `--pretty` for human operators.
 
 | Pros | Why alternatives rejected |
 |---|---|
-| Single entry point for troubleshooting | Integrating into `chiling status --pretty` (Option B) overloads the status command |
+| Single entry point for troubleshooting | Integrating into `crabbro status --pretty` (Option B) overloads the status command |
 | Agent-friendly JSON + human pretty | Skipping entirely (Option C) leaves operators without diagnostic tools |
 | `--fix` can automate common issues | |
 
 #### Decision: Updated CLI Help
 
-The usage text in `cmd/chiling/main.go` is updated to include the new commands:
+The usage text in `cmd/crabbro/main.go` is updated to include the new commands:
 
 ```text
   mitm install-ca             Install the root CA into the system trust store
@@ -1263,7 +1263,7 @@ No other API changes. The existing `GET /v1/mitm/cert` already serves the CA PEM
 
 | Layer | Scope |
 |---|---|
-| **Wiring test** | Unit test verifying that setting `Proxy.MITMHandler` + `Proxy.MITMEnabled` in `chilingd/main.go` produces a proxy that intercepts CONNECT requests |
+| **Wiring test** | Unit test verifying that setting `Proxy.MITMHandler` + `Proxy.MITMEnabled` in `crabbrod/main.go` produces a proxy that intercepts CONNECT requests |
 | **CA install unit** | `cmdMITMInstallCA` calls the correct OS command; handles already-installed state; error response formatting |
 | **CA uninstall unit** | `cmdMITMUninstallCA` calls the correct OS command; handles already-removed state |
 | **Doctor unit** | Test daemon-reachable and daemon-unreachable paths; test with and without MITM; test `--fix` flag |

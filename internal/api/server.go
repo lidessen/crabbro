@@ -14,17 +14,17 @@ import (
 
 	"crypto/subtle"
 
-	"github.com/lidessen/chiling/internal/decision"
-	"github.com/lidessen/chiling/internal/fixture"
-	"github.com/lidessen/chiling/internal/history"
-	"github.com/lidessen/chiling/internal/inspect"
-	"github.com/lidessen/chiling/internal/mitm"
-	"github.com/lidessen/chiling/internal/plugin"
-	"github.com/lidessen/chiling/internal/proxy"
-	"github.com/lidessen/chiling/internal/ring"
-	"github.com/lidessen/chiling/internal/rule"
-	"github.com/lidessen/chiling/internal/session"
-	"github.com/lidessen/chiling/internal/shared"
+	"github.com/lidessen/crabbro/internal/decision"
+	"github.com/lidessen/crabbro/internal/fixture"
+	"github.com/lidessen/crabbro/internal/history"
+	"github.com/lidessen/crabbro/internal/inspect"
+	"github.com/lidessen/crabbro/internal/mitm"
+	"github.com/lidessen/crabbro/internal/plugin"
+	"github.com/lidessen/crabbro/internal/proxy"
+	"github.com/lidessen/crabbro/internal/ring"
+	"github.com/lidessen/crabbro/internal/rule"
+	"github.com/lidessen/crabbro/internal/session"
+	"github.com/lidessen/crabbro/internal/shared"
 )
 
 // Server is the control API server, accessible over UDS and/or TCP.

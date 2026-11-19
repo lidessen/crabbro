@@ -11,8 +11,8 @@ import (
 )
 
 func TestFromEnvUnconfigured(t *testing.T) {
-	t.Setenv("CHILING_DECISION_API_KEY", "")
-	t.Setenv("CHILING_DECISION_PROVIDER", "")
+	t.Setenv("CRABBRO_DECISION_API_KEY", "")
+	t.Setenv("CRABBRO_DECISION_PROVIDER", "")
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("TYPESAFE_API_KEY", "")
 	cfg := FromEnv()
@@ -163,7 +163,7 @@ func TestDraftJevScaffoldsScript(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Action != "mockResponse" || !strings.Contains(got.Script, "chiling.mock-response") {
+	if got.Action != "mockResponse" || !strings.Contains(got.Script, "crabbro.mock-response") {
 		t.Fatalf("draft = %#v", got)
 	}
 	if !strings.Contains(got.Script, "/v1/login") {

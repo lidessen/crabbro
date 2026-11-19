@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lidessen/chiling/internal/shared"
+	"github.com/lidessen/crabbro/internal/shared"
 )
 
 func TestEventHubReplayAndLiveOnly(t *testing.T) {

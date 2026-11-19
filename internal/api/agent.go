@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lidessen/chiling/internal/decision"
-	"github.com/lidessen/chiling/internal/history"
-	"github.com/lidessen/chiling/internal/shared"
+	"github.com/lidessen/crabbro/internal/decision"
+	"github.com/lidessen/crabbro/internal/history"
+	"github.com/lidessen/crabbro/internal/shared"
 )
 
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {

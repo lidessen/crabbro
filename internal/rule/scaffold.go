@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/lidessen/chiling/internal/shared"
+	"github.com/lidessen/crabbro/internal/shared"
 	"gopkg.in/yaml.v3"
 )
 
@@ -48,27 +48,27 @@ func scaffold(req *shared.Request, action, responseBody, contentType, note strin
 	stage := Stage{}
 	switch action {
 	case "block":
-		stage.Uses = "chiling.block"
+		stage.Uses = "crabbro.block"
 		stage.With = map[string]any{"status": 403, "body": "blocked"}
 	case "header", "setRequestHeader":
-		stage.Uses = "chiling.set-request-header"
-		stage.With = map[string]any{"name": "X-Chiling", "value": "1"}
+		stage.Uses = "crabbro.set-request-header"
+		stage.With = map[string]any{"name": "X-Crabbro", "value": "1"}
 	case "rewrite", "rewriteURL":
 		target := req.URL
 		if target == "" {
 			target = "https://example.test/rewritten"
 		}
-		stage.Uses = "chiling.rewrite-url"
+		stage.Uses = "crabbro.rewrite-url"
 		stage.With = map[string]any{"url": target}
 	case "tag":
-		stage.Uses = "chiling.tag"
+		stage.Uses = "crabbro.tag"
 		stage.With = map[string]any{"tags": []any{"from-capture"}}
 	default:
 		body := responseBody
 		if body == "" {
 			body = `{"ok":true}`
 		}
-		stage.Uses = "chiling.mock-response"
+		stage.Uses = "crabbro.mock-response"
 		stage.With = map[string]any{
 			"status":  statusOr(req.Status, 200),
 			"headers": map[string]any{"content-type": contentType},

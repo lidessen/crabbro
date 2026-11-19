@@ -22,9 +22,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lidessen/chiling/internal/decision"
-	"github.com/lidessen/chiling/internal/rule"
-	"github.com/lidessen/chiling/internal/shared"
+	"github.com/lidessen/crabbro/internal/decision"
+	"github.com/lidessen/crabbro/internal/rule"
+	"github.com/lidessen/crabbro/internal/shared"
 )
 
 //go:embed js/*.mjs
@@ -67,7 +67,7 @@ func ExecHost(sock string) error {
 	if err != nil {
 		return ErrNoNode
 	}
-	dir, err := os.MkdirTemp("", "chiling-host-")
+	dir, err := os.MkdirTemp("", "crabbro-host-")
 	if err != nil {
 		return err
 	}
@@ -381,7 +381,7 @@ func (m *Manager) ensureHost() error {
 	// The socket lives in a directory only this user can enter (MkdirTemp
 	// makes it 0700), so its own mode and the moment it is changed do not
 	// matter, on any platform.
-	sockDir, err := os.MkdirTemp("", "chiling-host-")
+	sockDir, err := os.MkdirTemp("", "crabbro-host-")
 	if err != nil {
 		return err
 	}
@@ -398,8 +398,8 @@ func (m *Manager) ensureHost() error {
 	cmd.Env = []string{
 		"PATH=" + os.Getenv("PATH"),
 		"HOME=" + os.Getenv("HOME"),
-		"CHILING_PLUGIN_HEARTBEAT_MS=" + strconv.Itoa(int(m.Heartbeat/time.Millisecond)),
-		"CHILING_PLUGIN_TOKEN=" + token,
+		"CRABBRO_PLUGIN_HEARTBEAT_MS=" + strconv.Itoa(int(m.Heartbeat/time.Millisecond)),
+		"CRABBRO_PLUGIN_TOKEN=" + token,
 	}
 	cmd.Dir = dir
 	if err := cmd.Start(); err != nil {

@@ -1,6 +1,6 @@
 package plugin
 
-import "github.com/lidessen/chiling/pkg/api"
+import "github.com/lidessen/crabbro/pkg/api"
 
 // PackageRecord and Match are the wire records for an installed plugin.
 // Credentials are not stored on the package.

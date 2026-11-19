@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lidessen/chiling/internal/shared"
+	"github.com/lidessen/crabbro/internal/shared"
 )
 
 // Dir is the rules directory. Drafts use a .draft suffix and are not loaded

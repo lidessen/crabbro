@@ -1,8 +1,8 @@
-// Package chiling (end-to-end test) validates the full MITM + operator workflow.
+// Package crabbro (end-to-end test) validates the full MITM + operator workflow.
 //
 //go:build e2e
 
-package chiling
+package crabbro
 
 import (
 	"encoding/json"
@@ -36,16 +36,16 @@ func TestMITMWorkflowE2E(t *testing.T) {
 	proxyAddr := findFreePort(t)
 
 	// Build the daemon binary.
-	daemonBin := filepath.Join(daemonDir, "chilingd")
-	buildCmd := exec.Command("go", "build", "-o", daemonBin, "./cmd/chilingd/")
+	daemonBin := filepath.Join(daemonDir, "crabbrod")
+	buildCmd := exec.Command("go", "build", "-o", daemonBin, "./cmd/crabbrod/")
 	buildOutput, err := buildCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("building daemon: %v\n%s", err, buildOutput)
 	}
 
 	// Build the CLI binary.
-	cliBin := filepath.Join(daemonDir, "chiling")
-	buildCmd = exec.Command("go", "build", "-o", cliBin, "./cmd/chiling/")
+	cliBin := filepath.Join(daemonDir, "crabbro")
+	buildCmd = exec.Command("go", "build", "-o", cliBin, "./cmd/crabbro/")
 	buildOutput, err = buildCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("building CLI: %v\n%s", err, buildOutput)

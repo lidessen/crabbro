@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/lidessen/chiling/internal/rule"
-	"github.com/lidessen/chiling/internal/shared"
+	"github.com/lidessen/crabbro/internal/rule"
+	"github.com/lidessen/crabbro/internal/shared"
 )
 
 func (s *Server) handleRulesPreview(w http.ResponseWriter, r *http.Request) {

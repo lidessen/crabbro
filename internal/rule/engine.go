@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/dop251/goja"
-	"github.com/lidessen/chiling/internal/shared"
+	"github.com/lidessen/crabbro/internal/shared"
 )
 
 // RuleEngine executes JavaScript rules in isolated Goja VMs.
@@ -163,9 +163,9 @@ func (e *RuleEngine) dispatch(script string, req *shared.Request, body string, p
 
 // notYAMLMessage says a script that does not parse as a rule document is
 // not legacy JavaScript anymore: rules are YAML, and old scripts go
-// through chiling rules migrate.
+// through crabbro rules migrate.
 func notYAMLMessage(err error) string {
-	return "rule scripts must be YAML rule v1 documents (legacy JavaScript is not supported; convert it with chiling rules migrate): " + err.Error()
+	return "rule scripts must be YAML rule v1 documents (legacy JavaScript is not supported; convert it with crabbro rules migrate): " + err.Error()
 }
 
 // callScript runs a Goja script and returns the raw result. The script text

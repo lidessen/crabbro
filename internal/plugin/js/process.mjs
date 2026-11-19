@@ -13,7 +13,7 @@ function send(obj) {
   process.stdout.write(Buffer.concat([head, body]));
 }
 
-const entry = process.env.CHILING_PLUGIN_ENTRY;
+const entry = process.env.CRABBRO_PLUGIN_ENTRY;
 const loaded = await import(pathToFileURL(entry).href);
 const plugin = loaded.default || loaded;
 send({ type: "ready" });

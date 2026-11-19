@@ -7,14 +7,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lidessen/chiling/internal/inspect"
-	"github.com/lidessen/chiling/internal/ring"
-	"github.com/lidessen/chiling/internal/rule"
+	"github.com/lidessen/crabbro/internal/inspect"
+	"github.com/lidessen/crabbro/internal/ring"
+	"github.com/lidessen/crabbro/internal/rule"
 )
 
 func TestScopeHidesNoiseAndKeepsTheTarget(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Chiling-Initiator") != "" {
+		if r.Header.Get("X-Crabbro-Initiator") != "" {
 			t.Errorf("initiator stamp was forwarded")
 		}
 		io.WriteString(w, "ok")
@@ -30,7 +30,7 @@ on:
 request:
   pipeline:
     - id: ran
-      uses: chiling.tag
+      uses: crabbro.tag
       with:
         tags: ["ran"]
 `
@@ -79,7 +79,7 @@ request:
 		"Sec-Fetch-Dest":      "empty",
 		"Sec-Fetch-Mode":      "cors",
 		"Referer":             u + "/pay",
-		"X-Chiling-Initiator": "https://app.example/static/pay.js",
+		"X-Crabbro-Initiator": "https://app.example/static/pay.js",
 	})
 
 	var target *struct {

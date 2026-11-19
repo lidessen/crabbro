@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://chiling.dev/schemas/scope.v1.json",
-  "title": "Chiling scope list",
+  "$id": "https://crabbro.dev/schemas/scope.v1.json",
+  "title": "Crabbro scope list",
   "type": "object",
   "additionalProperties": false,
   "required": ["version", "id", "entries"],

@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lidessen/chiling/internal/plugin"
-	"github.com/lidessen/chiling/internal/ring"
-	"github.com/lidessen/chiling/internal/rule"
+	"github.com/lidessen/crabbro/internal/plugin"
+	"github.com/lidessen/crabbro/internal/ring"
+	"github.com/lidessen/crabbro/internal/rule"
 )
 
 func TestPluginUsesSignsThroughProxy(t *testing.T) {
@@ -63,7 +63,7 @@ request:
       instance: primary
       with:
         algorithm: sha256
-    - uses: chiling.set-request-header
+    - uses: crabbro.set-request-header
       if: pipeline.signed.outputs.ok == true
       with:
         name: X-Signature

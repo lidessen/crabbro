@@ -1,8 +1,8 @@
 {
-  "name": "@chiling/plugin",
+  "name": "@crabbro/plugin",
   "version": "1.0.0",
   "private": true,
-  "description": "Types for a Chiling plugin. The daemon loads the compiled JavaScript and does not run tsc.",
+  "description": "Types for a Crabbro plugin. The daemon loads the compiled JavaScript and does not run tsc.",
   "types": "index.d.ts",
   "exports": {
     ".": { "types": "./index.d.ts" },
