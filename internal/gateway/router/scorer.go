@@ -92,45 +92,95 @@ func (r *Router) now() time.Time {
 	return time.Now().UTC()
 }
 
-// MatchRoute finds the highest-priority enabled route matching (profile, protocol, model).
-func (r *Router) MatchRoute(snap *config.Snapshot, profile, proto, model string) *config.Route {
-	if snap == nil {
-		return nil
+const (
+	ResolutionOverride = "override"
+	ResolutionExplicit = "explicit"
+	ResolutionDirect   = "direct"
+	ResolutionFallback = "fallback"
+)
+
+// ResolveRoute resolves overrides, explicit matches, direct addresses, and fallback routes.
+func (r *Router) ResolveRoute(snap *config.Snapshot, sig Signals) (*config.Route, string, error) {
+	if sig.RouteOverride != "" {
+		if snap != nil {
+			for _, rt := range snap.Routes {
+				if rt.IsEnabled() && rt.ID == sig.RouteOverride {
+					return rt, ResolutionOverride, nil
+				}
+			}
+		}
+		return nil, "", fmt.Errorf("route override %q not found or disabled", sig.RouteOverride)
 	}
-	for _, rt := range snap.Routes {
-		if !rt.IsEnabled() {
-			continue
+	if snap != nil {
+		routes := append([]*config.Route(nil), snap.Routes...)
+		sort.SliceStable(routes, func(i, j int) bool {
+			if routes[i].Priority != routes[j].Priority {
+				return routes[i].Priority < routes[j].Priority
+			}
+			return routes[i].ID < routes[j].ID
+		})
+		matches := func(rt *config.Route) bool {
+			return rt.IsEnabled() && matchListOrEmpty(rt.Match.Profiles, sig.Profile) && (len(rt.Match.Protocols) == 0 || containsStr(rt.Match.Protocols, sig.Protocol))
 		}
-		if !matchListOrEmpty(rt.Match.Profiles, profile) {
-			continue
+		for _, rt := range routes {
+			if matches(rt) {
+				for _, pat := range rt.Match.Models {
+					if pat != "*" && matchModelAny([]string{pat}, sig.RequestedModel) {
+						return rt, ResolutionExplicit, nil
+					}
+				}
+			}
 		}
-		if len(rt.Match.Protocols) > 0 && !containsStr(rt.Match.Protocols, proto) {
-			continue
+		if id, raw, ok := strings.Cut(sig.RequestedModel, "/"); ok {
+			if p := snap.AllPlans[id]; p != nil {
+				if !p.IsEnabled() {
+					return nil, "", fmt.Errorf("direct plan %q is disabled", id)
+				}
+				if !p.DirectEnabled() {
+					return nil, "", fmt.Errorf("direct addressing is disabled on plan %q", id)
+				}
+				if !p.AllowsDirectProfile(sig.Profile) {
+					return nil, "", fmt.Errorf("direct access to plan %q is not allowed on profile %q", id, sig.Profile)
+				}
+				key := raw
+				ms := p.Models[key]
+				if ms == nil {
+					key = NormalizeModelName(raw)
+					ms = p.Models[key]
+				}
+				if ms == nil {
+					norm := NormalizeModelName(raw)
+					for k, v := range p.Models {
+						if v != nil && strings.EqualFold(k, norm) {
+							if ms != nil {
+								return nil, "", fmt.Errorf("ambiguous case-insensitive model %q on plan %q", raw, id)
+							}
+							key, ms = k, v
+						}
+					}
+				}
+				if raw == "" || ms == nil {
+					return nil, "", fmt.Errorf("model %q is not declared on plan %q", raw, id)
+				}
+				yes := true
+				return &config.Route{ID: "direct:" + p.ID, Family: sig.Family, Policy: config.RoutePolicy{Preset: config.PresetStrictFailover, PreferNativeProtocol: &yes, AllowCrossProtocol: &yes, MaxAttempts: 1}, Targets: []config.Target{{Plan: p.ID, Model: key, Priority: 10}}}, ResolutionDirect, nil
+			}
 		}
-		if len(rt.Match.Models) > 0 && !matchModelAny(rt.Match.Models, model) {
-			continue
+		for _, rt := range routes {
+			if matches(rt) && (len(rt.Match.Models) == 0 || containsStr(rt.Match.Models, "*")) {
+				return rt, ResolutionFallback, nil
+			}
 		}
-		return rt
 	}
-	return nil
+	return nil, "", fmt.Errorf("no enabled gateway route matches profile=%q protocol=%q model=%q", sig.Profile, sig.Protocol, sig.RequestedModel)
 }
 
 // Select runs the 4-stage routing pipeline and returns an ordered failover candidate list.
 func (r *Router) Select(ctx context.Context, snap *config.Snapshot, sig Signals) (*Selection, error) {
 	now := r.now()
-	var rt *config.Route
-	if sig.RouteOverride != "" && snap != nil {
-		for _, cand := range snap.Routes {
-			if cand.ID == sig.RouteOverride && cand.IsEnabled() {
-				rt = cand
-				break
-			}
-		}
-	} else {
-		rt = r.MatchRoute(snap, sig.Profile, sig.Protocol, sig.RequestedModel)
-	}
-	if rt == nil {
-		return nil, fmt.Errorf("no enabled gateway route matches profile=%q protocol=%q model=%q", sig.Profile, sig.Protocol, sig.RequestedModel)
+	rt, resolution, err := r.ResolveRoute(snap, sig)
+	if err != nil {
+		return nil, err
 	}
 
 	// Stage 1 refinement: distinguish ColdStart vs NewUserTurn with SessionCacheStore.
@@ -184,6 +234,10 @@ func (r *Router) Select(ctx context.Context, snap *config.Snapshot, sig Signals)
 		}
 	}
 	if len(eligible) == 0 {
+		selectionErr := fmt.Errorf("no eligible targets for route %q", rt.ID)
+		if resolution == ResolutionDirect && len(evaluated) > 0 {
+			selectionErr = fmt.Errorf("no eligible targets for route %q: %s", rt.ID, evaluated[0].RejectReason)
+		}
 		return &Selection{
 			Route:            rt,
 			Signals:          sig,
@@ -192,8 +246,8 @@ func (r *Router) Select(ctx context.Context, snap *config.Snapshot, sig Signals)
 			CacheWarmAgeSec:  warmAgeSec,
 			CacheGravityMax:  maxGravity,
 			AllEvaluated:     evaluated,
-			Decision:         buildRouteDecision(rt, sig, demandTier, semanticUsed, warmAgeSec, maxGravity, evaluated),
-		}, fmt.Errorf("no eligible targets for route %q", rt.ID)
+			Decision:         buildRouteDecision(rt, resolution, sig, demandTier, semanticUsed, warmAgeSec, maxGravity, evaluated),
+		}, selectionErr
 	}
 
 	// Stage 4: Sort descending by unified Total score, then target priority, then plan/model.
@@ -231,7 +285,7 @@ func (r *Router) Select(ctx context.Context, snap *config.Snapshot, sig Signals)
 		CacheGravityMax:  maxGravity,
 		Candidates:       eligible,
 		AllEvaluated:     orderedAll,
-		Decision:         buildRouteDecision(rt, sig, demandTier, semanticUsed, warmAgeSec, maxGravity, orderedAll),
+		Decision:         buildRouteDecision(rt, resolution, sig, demandTier, semanticUsed, warmAgeSec, maxGravity, orderedAll),
 	}, nil
 }
 
@@ -414,7 +468,7 @@ func (r *Router) evalTargets(snap *config.Snapshot, rt *config.Route, sig Signal
 		}
 		cand.ModelSpec = ms
 
-		epProto, ep, rej := chooseEndpoint(rt, plan, tgt, sig.Protocol)
+		epProto, ep, rej := chooseEndpoint(rt, plan, tgt, ms, sig.Protocol)
 		if rej != "" {
 			cand.RejectReason = rej
 			out = append(out, cand)
@@ -523,15 +577,19 @@ func (r *Router) evalTargets(snap *config.Snapshot, rt *config.Route, sig Signal
 	return out
 }
 
-func chooseEndpoint(rt *config.Route, plan *config.Plan, tgt config.Target, ingressProto string) (string, *config.EndpointSpec, string) {
+func chooseEndpoint(rt *config.Route, plan *config.Plan, tgt config.Target, ms *config.ModelSpec, ingressProto string) (string, *config.EndpointSpec, string) {
 	fam := rt.EffectiveFamily()
+	allowed := func(p string) bool { return ms == nil || len(ms.Endpoints) == 0 || containsStr(ms.Endpoints, p) }
 	if tgt.EndpointProtocol != "" {
+		if !allowed(tgt.EndpointProtocol) {
+			return "", nil, "endpoint protocol not allowed for model"
+		}
 		ep := plan.Endpoints[tgt.EndpointProtocol]
 		if ep == nil {
 			return "", nil, "target endpointProtocol not found"
 		}
 		if fam == config.FamilyGenerative && config.ProtocolFamily(tgt.EndpointProtocol) == config.FamilyDecision {
-			return "", nil, "generative route cannot use typesafe-jev"
+			return "", nil, "generative route cannot target decision-family endpoint"
 		}
 		if fam == config.FamilyDecision && config.ProtocolFamily(tgt.EndpointProtocol) != config.FamilyDecision && !rt.Policy.AllowEmulation {
 			return "", nil, "decision emulation disabled"
@@ -543,7 +601,7 @@ func chooseEndpoint(rt *config.Route, plan *config.Plan, tgt config.Target, ingr
 	}
 
 	// Prefer native matching protocol if present on the plan.
-	if ep := plan.Endpoints[ingressProto]; ep != nil {
+	if ep := plan.Endpoints[ingressProto]; ep != nil && allowed(ingressProto) && config.ProtocolFamily(ingressProto) == fam {
 		return ingressProto, ep, ""
 	}
 	if fam == config.FamilyDecision {
@@ -551,15 +609,15 @@ func chooseEndpoint(rt *config.Route, plan *config.Plan, tgt config.Target, ingr
 			return "", nil, "cross-protocol bridging disabled"
 		}
 		for _, p := range []string{config.ProtocolTypeSafeJev, config.ProtocolOpenAIDecisions} {
-			if ep := plan.Endpoints[p]; ep != nil {
+			if ep := plan.Endpoints[p]; ep != nil && allowed(p) {
 				return p, ep, ""
 			}
 		}
 		if !rt.Policy.AllowEmulation {
-			return "", nil, "no native typesafe-jev endpoint and allowEmulation=false"
+			return "", nil, "no compatible endpoint configured for model"
 		}
 		for _, p := range []string{config.ProtocolGemini, config.ProtocolOpenAIChat, config.ProtocolOpenAIResponses, config.ProtocolAnthropic} {
-			if ep := plan.Endpoints[p]; ep != nil {
+			if ep := plan.Endpoints[p]; ep != nil && allowed(p) {
 				return p, ep, ""
 			}
 		}
@@ -571,11 +629,11 @@ func chooseEndpoint(rt *config.Route, plan *config.Plan, tgt config.Target, ingr
 	}
 	// Deterministic fallback priority across generative protocols.
 	for _, p := range []string{config.ProtocolAnthropic, config.ProtocolOpenAIChat, config.ProtocolOpenAIResponses, config.ProtocolGemini} {
-		if ep := plan.Endpoints[p]; ep != nil {
+		if ep := plan.Endpoints[p]; ep != nil && allowed(p) {
 			return p, ep, ""
 		}
 	}
-	return "", nil, "no generative endpoint configured"
+	return "", nil, "no compatible endpoint configured for model"
 }
 
 func checkCapabilities(sig Signals, ms *config.ModelSpec) string {
@@ -884,7 +942,7 @@ func effectiveWeights(p config.RoutePolicy) objectiveWeights {
 	return w
 }
 
-func buildRouteDecision(rt *config.Route, sig Signals, demandTier string, semanticUsed bool, warmAgeSec int64, maxGravity float64, cands []Candidate) *shared.RouteDecision {
+func buildRouteDecision(rt *config.Route, resolution string, sig Signals, demandTier string, semanticUsed bool, warmAgeSec int64, maxGravity float64, cands []Candidate) *shared.RouteDecision {
 	items := make([]shared.CandidateDecision, 0, len(cands))
 	for _, c := range cands {
 		planID := c.Target.Plan
@@ -903,6 +961,7 @@ func buildRouteDecision(rt *config.Route, sig Signals, demandTier string, semant
 	}
 	return &shared.RouteDecision{
 		RouteID:          rt.ID,
+		Resolution:       resolution,
 		TurnPhase:        sig.TurnPhase,
 		SessionKey:       sig.SessionKey,
 		DemandTier:       demandTier,
@@ -922,7 +981,7 @@ func matchListOrEmpty(patterns []string, val string) bool {
 
 func matchModelAny(patterns []string, model string) bool {
 	for _, pat := range patterns {
-		if pat == "*" || pat == model || wildcardMatch(pat, model) {
+		if pat == "*" || pat == model || wildcardMatch(pat, model) || wildcardMatch(pat, NormalizeModelName(model)) {
 			return true
 		}
 	}

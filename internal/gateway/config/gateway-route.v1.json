@@ -24,7 +24,7 @@
         },
         "protocols": {
           "type": "array",
-          "maxItems": 5,
+          "maxItems": 6,
           "items": { "$ref": "#/$defs/protocol" }
         },
         "models": {

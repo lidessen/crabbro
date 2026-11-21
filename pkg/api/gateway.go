@@ -40,6 +40,7 @@ type CandidateDecision struct {
 
 // RouteDecision captures the explainable routing outcome for a gateway exchange.
 type RouteDecision struct {
+	Resolution       string              `json:"resolution,omitempty"`
 	RouteID          string              `json:"routeId"`
 	TurnPhase        string              `json:"turnPhase"`
 	SessionKey       string              `json:"sessionKey,omitempty"`
@@ -126,21 +127,23 @@ type GatewayWindowUsage struct {
 
 // GatewayPlanStatus is a redacted view of one configured plan and its live state.
 type GatewayPlanStatus struct {
-	ID            string               `json:"id"`
-	Enabled       bool                 `json:"enabled"`
-	Description   string               `json:"description,omitempty"`
-	Credential    string               `json:"credential"`
-	HasSecret     bool                 `json:"hasSecret"`
-	Endpoints     []string             `json:"endpoints"`
-	Models        []string             `json:"models"`
-	Healthy       bool                 `json:"healthy"`
-	CooldownUntil *time.Time           `json:"cooldownUntil,omitempty"`
-	CooldownScope string               `json:"cooldownScope,omitempty"`
-	LastError     string               `json:"lastError,omitempty"`
-	InFlight      int                  `json:"inFlight"`
-	ErrorEWMA     float64              `json:"errorEwma,omitempty"`
-	LatencyEWMAMs float64              `json:"latencyEwmaMs,omitempty"`
-	Windows       []GatewayWindowUsage `json:"windows,omitempty"`
+	DirectEnabled  bool                 `json:"directEnabled"`
+	DirectProfiles []string             `json:"directProfiles,omitempty"`
+	ID             string               `json:"id"`
+	Enabled        bool                 `json:"enabled"`
+	Description    string               `json:"description,omitempty"`
+	Credential     string               `json:"credential"`
+	HasSecret      bool                 `json:"hasSecret"`
+	Endpoints      []string             `json:"endpoints"`
+	Models         []string             `json:"models"`
+	Healthy        bool                 `json:"healthy"`
+	CooldownUntil  *time.Time           `json:"cooldownUntil,omitempty"`
+	CooldownScope  string               `json:"cooldownScope,omitempty"`
+	LastError      string               `json:"lastError,omitempty"`
+	InFlight       int                  `json:"inFlight"`
+	ErrorEWMA      float64              `json:"errorEwma,omitempty"`
+	LatencyEWMAMs  float64              `json:"latencyEwmaMs,omitempty"`
+	Windows        []GatewayWindowUsage `json:"windows,omitempty"`
 }
 
 // GatewayPlanListResponse is returned by GET /v1/gateway/plans.

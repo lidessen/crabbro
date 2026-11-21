@@ -4,7 +4,7 @@ Start with [README.md](README.md) for CLI/gateway usage and [PROJECT-MAP.md](PRO
 
 ## Architecture & Invariants
 
-- **Two peer data planes**: `internal/proxy` (`:8080`, forward HTTP/MITM/WS + YAML rule pipelines) and `internal/gateway` (`:8081`, 5 wire codecs + Fast/IR paths + `Quality x Cache x Quota` router) share core components (`internal/secret`, `ExchangeSink`, `usage.db`, `internal/decision`, atomic config lifecycle) without mixing proxy response rewrites into gateway SSE streams.
+- **Two peer data planes**: `internal/proxy` (`:8080`, forward HTTP/MITM/WS + YAML rule pipelines) and `internal/gateway` (`:8081`, 6 wire codecs + Fast/IR paths + `Quality x Cache x Quota` router) share core components (`internal/secret`, `ExchangeSink`, `usage.db`, `internal/decision`, atomic config lifecycle) without mixing proxy response rewrites into gateway SSE streams.
 - **Zero-leak secrets**: Secrets live mode `0600` in `~/.crabbro/secrets/` (`internal/secret`) and are scrubbed from headers, bodies, SSE events, history, and query parameters. Never write plaintext credentials into YAML files, logs, tests, or Workcells records.
 - **Never mutate external agent configs**: `crabbrod` never edits `~/.claude/settings.json`, `~/.codex/config.toml`, or other third-party CLI configuration files.
 - **Client packages stay UI-free**: `pkg/api` and `pkg/client` hold `/v1` wire types and control-socket transport only; neither may import a UI toolkit.

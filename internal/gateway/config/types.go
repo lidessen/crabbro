@@ -103,6 +103,7 @@ type Plan struct {
 	Version     int                      `yaml:"version" json:"version"`
 	ID          string                   `yaml:"id" json:"id"`
 	Enabled     *bool                    `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	Direct      *DirectSpec              `yaml:"direct,omitempty" json:"direct,omitempty"`
 	Description string                   `yaml:"description,omitempty" json:"description,omitempty"`
 	Credential  string                   `yaml:"credential" json:"credential"`
 	ProxyURL    string                   `yaml:"proxyUrl,omitempty" json:"proxyUrl,omitempty"`
@@ -116,6 +117,33 @@ type Plan struct {
 // IsEnabled reports whether the plan is active (defaults to true when omitted).
 func (p *Plan) IsEnabled() bool {
 	return p != nil && (p.Enabled == nil || *p.Enabled)
+}
+
+// DirectSpec controls direct plan addressing.
+type DirectSpec struct {
+	Enabled  *bool    `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	Profiles []string `yaml:"profiles,omitempty" json:"profiles,omitempty"`
+}
+
+// DirectEnabled reports whether direct addressing is available.
+func (p *Plan) DirectEnabled() bool {
+	return p.IsEnabled() && (p.Direct == nil || p.Direct.Enabled == nil || *p.Direct.Enabled)
+}
+
+// AllowsDirectProfile reports whether profile may directly address this plan.
+func (p *Plan) AllowsDirectProfile(profile string) bool {
+	if p == nil {
+		return false
+	}
+	if p.Direct == nil || len(p.Direct.Profiles) == 0 {
+		return true
+	}
+	for _, v := range p.Direct.Profiles {
+		if v == profile {
+			return true
+		}
+	}
+	return false
 }
 
 // TimeoutSpec configures upstream time budgets for a plan.
@@ -205,6 +233,7 @@ type EndpointSpec struct {
 
 // ModelSpec describes a model offered on a plan.
 type ModelSpec struct {
+	Endpoints       []string       `yaml:"endpoints,omitempty" json:"endpoints,omitempty"`
 	Tier            string         `yaml:"tier,omitempty" json:"tier,omitempty"`
 	CodingScore     *float64       `yaml:"codingScore,omitempty" json:"codingScore,omitempty"`
 	ContextWindow   int            `yaml:"contextWindow,omitempty" json:"contextWindow,omitempty"`

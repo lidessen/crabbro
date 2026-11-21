@@ -98,6 +98,16 @@ func ValidatePlanBytes(filename, expectedID string, data []byte) (*Plan, []share
 			diags = append(diags, shared.Diagnostic{File: filename, Path: "$.endpoints." + proto + ".baseUrl", Message: "invalid endpoint baseUrl"})
 		}
 	}
+	for model, ms := range plan.Models {
+		if ms == nil {
+			continue
+		}
+		for i, proto := range ms.Endpoints {
+			if plan.Endpoints[proto] == nil {
+				diags = append(diags, shared.Diagnostic{File: filename, Path: fmt.Sprintf("$.models.%s.endpoints[%d]", model, i), Message: fmt.Sprintf("endpoint %q is not configured on plan", proto)})
+			}
+		}
+	}
 	for i, w := range plan.Limits.Windows {
 		d, err := ParseDuration(w.Duration)
 		if err != nil || d <= 0 {
@@ -157,7 +167,7 @@ func ValidateRouteBytes(filename, expectedID string, data []byte) (*Route, []sha
 			diags = append(diags, shared.Diagnostic{
 				File:    filename,
 				Path:    fmt.Sprintf("$.targets[%d].endpointProtocol", i),
-				Message: "generative route cannot target typesafe-jev endpoint",
+				Message: "generative route cannot target decision-family endpoint",
 			})
 		}
 		if fam == FamilyDecision && tgt.EndpointProtocol != "" && ProtocolFamily(tgt.EndpointProtocol) != FamilyDecision && !route.Policy.AllowEmulation {
@@ -194,7 +204,8 @@ func ValidateCrossFile(plans map[string]*Plan, routes map[string]*Route) []share
 				})
 				continue
 			}
-			if _, ok := plan.Models[tgt.Model]; !ok {
+			ms, ok := plan.Models[tgt.Model]
+			if !ok || ms == nil {
 				diags = append(diags, shared.Diagnostic{
 					File:    file,
 					Path:    fmt.Sprintf("$.targets[%d].model", i),
@@ -202,6 +213,9 @@ func ValidateCrossFile(plans map[string]*Plan, routes map[string]*Route) []share
 				})
 			}
 			if tgt.EndpointProtocol != "" {
+				if ms != nil && len(ms.Endpoints) > 0 && !containsProtocol(ms.Endpoints, tgt.EndpointProtocol) {
+					diags = append(diags, shared.Diagnostic{File: file, Path: fmt.Sprintf("$.targets[%d].endpointProtocol", i), Message: "endpoint protocol not allowed for model"})
+				}
 				if _, ok := plan.Endpoints[tgt.EndpointProtocol]; !ok {
 					diags = append(diags, shared.Diagnostic{
 						File:    file,
@@ -212,6 +226,9 @@ func ValidateCrossFile(plans map[string]*Plan, routes map[string]*Route) []share
 			} else {
 				hasCompatible := false
 				for epProto := range plan.Endpoints {
+					if ms != nil && len(ms.Endpoints) > 0 && !containsProtocol(ms.Endpoints, epProto) {
+						continue
+					}
 					if fam == FamilyGenerative && ProtocolFamily(epProto) == FamilyGenerative {
 						hasCompatible = true
 						break
@@ -290,4 +307,13 @@ func schemaDiags(file string, err error) []shared.Diagnostic {
 		out = append(out, shared.Diagnostic{File: file, Path: "$", Message: "schema validation failed"})
 	}
 	return out
+}
+
+func containsProtocol(list []string, value string) bool {
+	for _, p := range list {
+		if p == value {
+			return true
+		}
+	}
+	return false
 }

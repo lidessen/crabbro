@@ -115,7 +115,7 @@ func deriveSessionKey(profile, proto, hint, sysPrefix, firstUser string) string 
 
 func inferTierFromModel(model string) string {
 	// Strip "gemini" before checking for "mini" so "gemini-*-pro" does not match as mini.
-	m := strings.ReplaceAll(strings.ToLower(model), "gemini", "")
+	m := strings.ReplaceAll(strings.ToLower(NormalizeModelName(model)), "gemini", "")
 	switch {
 	case strings.Contains(m, "haiku"), strings.Contains(m, "mini"), strings.Contains(m, "flash"), strings.Contains(m, "lite"), strings.Contains(m, "nano"):
 		return config.TierFast

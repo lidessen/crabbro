@@ -228,3 +228,120 @@ func TestNonLoopbackRequiresToken(t *testing.T) {
 		t.Fatal("expected non-loopback listener without token to be rejected")
 	}
 }
+
+func TestDirectAddressHTTPAndModels(t *testing.T) {
+	dir := t.TempDir()
+	sec := secret.New(filepath.Join(dir, "secrets"))
+	if err := sec.Set("key", "test-value"); err != nil {
+		t.Fatal(err)
+	}
+	var gotBody string
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		b, _ := io.ReadAll(req.Body)
+		gotBody = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"id":"msg","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":5,"output_tokens":2}}`)
+	}))
+	defer up.Close()
+	rb := ring.NewRequestBuffer(32)
+	sink := capture.NewDefaultSink(rb, capture.NewBodyCache(1<<20, 64*1024), capture.NewEventHub(), session.New(32), nil)
+	gw, err := New(Options{ListenAddr: "127.0.0.1:0", RootDir: filepath.Join(dir, "gateway")}, sec, sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gw.Stop()
+	plan := fmt.Sprintf(`version: 1
+id: plan-one
+credential: key
+endpoints:
+  anthropic: {baseUrl: %q}
+models:
+  m-one: {}
+`, up.URL)
+	restricted := fmt.Sprintf(`version: 1
+id: restricted
+credential: key
+direct: {profiles: [work]}
+endpoints:
+  anthropic: {baseUrl: %q}
+models:
+  m-two: {}
+`, up.URL)
+	disabled := fmt.Sprintf(`version: 1
+id: disabled
+credential: key
+direct: {enabled: false}
+endpoints:
+  anthropic: {baseUrl: %q}
+models:
+  m-three: {}
+`, up.URL)
+	for id, body := range map[string]string{"plan-one": plan, "restricted": restricted, "disabled": disabled} {
+		if err := gw.Config.Draft(config.KindPlan, id, []byte(body)); err != nil {
+			t.Fatal(err)
+		}
+		if err := gw.Config.Commit(config.KindPlan, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	route := `version: 1
+id: fallback
+match: {models: ["*"]}
+targets:
+  - {plan: plan-one, model: m-one}
+`
+	if err := gw.Config.Draft(config.KindRoute, "fallback", []byte(route)); err != nil {
+		t.Fatal(err)
+	}
+	if err := gw.Config.Commit(config.KindRoute, "fallback"); err != nil {
+		t.Fatal(err)
+	}
+	if err := gw.Start(); err != nil {
+		t.Fatal(err)
+	}
+	post := func(model string) (*http.Response, string) {
+		t.Helper()
+		resp, err := http.Post("http://"+gw.Addr()+"/v1/messages", "application/json", strings.NewReader(fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"hi"}]}`, model)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return resp, string(b)
+	}
+	resp, body := post("plan-one/m-one[1m]")
+	if resp.StatusCode != 200 || resp.Header.Get("X-Crabbro-Route") != "direct:plan-one" || resp.Header.Get("X-Crabbro-Plan") != "plan-one" || !strings.Contains(gotBody, `"model":"m-one"`) {
+		t.Fatalf("status=%d headers=%v body=%s upstream=%s", resp.StatusCode, resp.Header, body, gotBody)
+	}
+	captured := rb.List(0)
+	if len(captured) == 0 {
+		t.Fatal("missing trace")
+	}
+	trace := captured[len(captured)-1].Gateway
+	if trace == nil || trace.RequestedModel != "plan-one/m-one[1m]" || trace.ChosenModel != "m-one" || trace.RouteDecision == nil || trace.RouteDecision.Resolution != "direct" {
+		t.Fatalf("trace=%+v", trace)
+	}
+	usage, err := gw.Usage("1h", "plan-one")
+	if err != nil || usage.Totals.InputTokens != 5 {
+		t.Fatalf("usage=%+v err=%v", usage, err)
+	}
+	resp, body = post("plan-one/missing")
+	if resp.StatusCode != http.StatusBadGateway || !strings.Contains(body, "not declared") {
+		t.Fatalf("status=%d body=%s", resp.StatusCode, body)
+	}
+	for _, tc := range []struct {
+		path          string
+		hasRestricted bool
+	}{{"/v1/models", false}, {"/p/work/v1/models", true}} {
+		resp, err := http.Get("http://" + gw.Addr() + tc.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		s := string(b)
+		if !strings.Contains(s, `"plan-one/m-one"`) || strings.Contains(s, `"disabled/m-three"`) || strings.Contains(s, `"restricted/m-two"`) != tc.hasRestricted || !strings.Contains(s, `"crabbro_kind":"direct"`) {
+			t.Fatalf("%s: %s", tc.path, s)
+		}
+	}
+}

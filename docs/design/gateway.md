@@ -60,7 +60,7 @@ Today `crabbrod` couples capture stores (`RingBuffer`, `BodyCache`, `EventHub`, 
 │  ┌───────────────────────────────┐  ┌────────────────────────────────┐  │
 │  │ Forward Proxy (:8080)         │  │ LLM & Decision Gateway (:8081) │  │
 │  │ • HTTP / CONNECT / MITM / WS  │  │ • Origin-form + /p/{profile}/  │  │
-│  │ • YAML pipeline + plugins     │  │ • 5 Codecs + Fast/IR paths     │  │
+│  │ • YAML pipeline + plugins     │  │ • 6 Codecs + Fast/IR paths     │  │
 │  │ • 64K preview / 256K rewrite  │  │ • Unified Router + Peek Retry  │  │
 │  └──────────────┬────────────────┘  └───────────────┬────────────────┘  │
 │                 │                                   │                   │
@@ -183,7 +183,7 @@ Profiles scope requests without touching external client config files:
 | `gemini` | `POST /v1beta/models/{m}:generateContent`<br>`POST /v1beta/models/{m}:streamGenerateContent` | Generative | `x-goog-api-key`, `Authorization: Bearer ...`, or `?key=` (stripped immediately) |
 | `typesafe-jev` | `POST /v1/systemone` | Decision | `Authorization: Bearer ...` |
 
-Shared metadata endpoint: `GET /v1/models` (and `GET /p/{profile}/v1/models`) returns the virtual model IDs declared by enabled routes matching that profile.
+Shared metadata endpoint: `GET /v1/models` (and `GET /p/{profile}/v1/models`) returns enabled route IDs and literal model aliases, plus permitted direct `<plan>/<model>` addresses. Entries are sorted and deduplicated, and include `crabbro_kind` and `family`; direct entries use the plan ID as `owned_by`.
 
 ### 5.2 Semantic family routing matrix
 
@@ -205,7 +205,7 @@ When `ingressProtocol == upstreamEndpoint.Protocol` and the client's requested p
 
 ### 5.4 Bridge Path (`GenIR` and `DecisionIR`)
 
-Cross-protocol requests translate through canonical in-memory Go IR types (`internal/gateway/ir`), yielding `O(N)` codec implementations (4 Generative codecs + 1 Decision codec) instead of `N×N` pair adapters.
+Cross-protocol requests translate through canonical in-memory Go IR types (`internal/gateway/ir`), yielding `O(N)` codec implementations (4 Generative codecs + 2 Decision codecs) instead of `N×N` pair adapters.
 
 ```go
 type TokenUsage struct {
@@ -723,3 +723,9 @@ Using only `pkg/api` and `pkg/client` (no `internal/` imports):
 - Add `pkg/client` typed gateway and secret methods.
 - Extend `cmd/crabbro-ui` Requests detail view and add the Gateway tab.
 - **Exit criteria:** `cmd/crabbro-ui` screenshot tests and full `go test ./...` green.
+
+### Direct plan addressing
+
+Route resolution considers, in order: an explicit route override, matching non-catch-all route patterns, a direct `<plan>/<model>` address, and finally catch-all routes. A known plan fails closed when disabled, direct access is disabled or restricted, the model is undeclared or ambiguous, or no compatible endpoint is available. Direct requests use the ordinary candidate filtering and scoring pipeline. The route decision records the selected tier in `resolution`.
+
+`direct.enabled` defaults to true; `direct.profiles` restricts direct access when nonempty. A model may declare `endpoints` to restrict the plan protocols that serve it; omission inherits all plan endpoints. Literal model names are resolved first. Recognized trailing context annotations such as `[1m]` and reasoning qualifiers such as `:high` are then stripped iteratively, followed by a unique case-insensitive lookup. Traces retain the original request while upstream calls use the canonical model key.

@@ -116,7 +116,7 @@ implemented.
 
 ## LLM & Decision Gateway
 
-`crabbrod` embeds an API-key LLM & Decision Gateway on `127.0.0.1:8081` (`--gateway-addr`, or `off` to disable) alongside the forward HTTP proxy. It exposes five wire protocols (with optional `/p/{profile}` path scoping):
+`crabbrod` embeds an API-key LLM & Decision Gateway on `127.0.0.1:8081` (`--gateway-addr`, or `off` to disable) alongside the forward HTTP proxy. It exposes six wire protocols (with optional `/p/{profile}` path scoping):
 
 - **Generative (`family: generative`)**:
   - `openai-chat`: `POST /v1/chat/completions`
@@ -125,6 +125,7 @@ implemented.
   - `gemini`: `POST /v1beta/models/{model}:generateContent`, `:streamGenerateContent`
 - **Decision (`family: decision`)**:
   - `typesafe-jev`: `POST /v1/systemone` (`noul`, `choice`, `score` — routed natively to TypeSafe backends or emulated with `allowEmulation: true` over `openai-chat`, `openai-responses`, `gemini`, or `anthropic` via structured output)
+  - `openai-decisions`: `POST /v1/decisions`
 - **Model listing**: `GET /v1/models`
 
 Credentials live mode `0600` in `~/.crabbro/secrets/` and are referenced by name from YAML plans and routes under `~/.crabbro/gateway/plans/*.yaml` and `~/.crabbro/gateway/routes/*.yaml` (validated with Draft 2020-12 schemas and staged/committed via `crabbro config`):

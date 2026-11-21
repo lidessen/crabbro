@@ -10,6 +10,10 @@
     "version": { "const": 1 },
     "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
     "enabled": { "type": "boolean" },
+    "direct": { "type": "object", "additionalProperties": false, "properties": {
+      "enabled": { "type": "boolean" },
+      "profiles": { "type": "array", "maxItems": 32, "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" } }
+    } },
     "description": { "type": "string", "maxLength": 1024 },
     "credential": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$" },
     "proxyUrl": { "type": "string", "format": "uri", "pattern": "^(https?|socks5h?)://" },
@@ -48,7 +52,8 @@
             ],
             "properties": {
               "name": { "type": "string", "minLength": 1, "maxLength": 64 },
-              "duration": { "$ref": "#/$defs/duration" },
+              "protocol": { "enum": ["openai-chat", "openai-responses", "anthropic", "gemini", "typesafe-jev", "openai-decisions"] },
+    "duration": { "$ref": "#/$defs/duration" },
               "maxTokens": { "type": "integer", "minimum": 1 },
               "maxRequests": { "type": "integer", "minimum": 1 },
               "resetSchedule": { "type": "string", "minLength": 1, "maxLength": 64 },
@@ -80,6 +85,7 @@
     }
   },
   "$defs": {
+    "protocol": { "enum": ["openai-chat", "openai-responses", "anthropic", "gemini", "typesafe-jev", "openai-decisions"] },
     "duration": {
       "type": "string",
       "pattern": "^[0-9]+(ms|s|m|h|d)$"
@@ -104,6 +110,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "endpoints": { "type": "array", "maxItems": 6, "uniqueItems": true, "items": { "$ref": "#/$defs/protocol" } },
         "tier": { "enum": ["fast", "strong", "frontier"] },
         "codingScore": { "type": "number", "minimum": 0, "maximum": 1 },
         "contextWindow": { "type": "integer", "minimum": 1024 },

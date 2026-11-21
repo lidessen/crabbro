@@ -198,7 +198,7 @@ func (g *Gateway) Addr() string {
 	return g.ListenAddr
 }
 
-// ServeHTTP handles incoming gateway requests across all 5 protocols and /p/{profile}/...
+// ServeHTTP handles incoming gateway requests across all 6 protocols and /p/{profile}/...
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if g.Token != "" && !g.checkAuth(r) {
 		writeJSONError(w, http.StatusUnauthorized, "unauthorized", "invalid gateway token")
@@ -250,17 +250,15 @@ func (g *Gateway) checkAuth(r *http.Request) bool {
 }
 
 func (g *Gateway) serveModels(w http.ResponseWriter, snap *config.Snapshot, profile string) {
-	seen := map[string]struct{}{}
-	var ids []string
-	add := func(id string) {
-		if id == "" || strings.Contains(id, "*") || strings.Contains(id, "?") {
+	items := map[string]map[string]any{}
+	add := func(id, owner, kind, family string) {
+		if id == "" || strings.ContainsAny(id, "*?") {
 			return
 		}
-		if _, ok := seen[id]; ok {
+		if _, ok := items[id]; ok {
 			return
 		}
-		seen[id] = struct{}{}
-		ids = append(ids, id)
+		items[id] = map[string]any{"id": id, "object": "model", "owned_by": owner, "crabbro_kind": kind, "family": family}
 	}
 	if snap != nil {
 		for _, rt := range snap.Routes {
@@ -268,28 +266,69 @@ func (g *Gateway) serveModels(w http.ResponseWriter, snap *config.Snapshot, prof
 				continue
 			}
 			if len(rt.Match.Profiles) > 0 {
-				matched := false
+				found := false
 				for _, p := range rt.Match.Profiles {
 					if p == profile {
-						matched = true
+						found = true
 						break
 					}
 				}
-				if !matched {
+				if !found {
 					continue
 				}
 			}
-			add(rt.ID)
+			add(rt.ID, "crabbro", "route", rt.EffectiveFamily())
 			for _, m := range rt.Match.Models {
-				add(m)
+				add(m, "crabbro", "route", rt.EffectiveFamily())
 			}
 		}
+		for _, plan := range snap.AllPlans {
+			if !plan.DirectEnabled() || !plan.AllowsDirectProfile(profile) {
+				continue
+			}
+			for model, ms := range plan.Models {
+				if ms == nil {
+					continue
+				}
+				family := ""
+				for proto, ep := range plan.Endpoints {
+					if ep == nil {
+						continue
+					}
+					allowed := len(ms.Endpoints) == 0
+					for _, p := range ms.Endpoints {
+						if p == proto {
+							allowed = true
+							break
+						}
+					}
+					if !allowed {
+						continue
+					}
+					if config.ProtocolFamily(proto) == config.FamilyGenerative {
+						family = config.FamilyGenerative
+						break
+					}
+					if config.ProtocolFamily(proto) == config.FamilyDecision {
+						family = config.FamilyDecision
+					}
+				}
+				if family != "" {
+					add(plan.ID+"/"+model, plan.ID, "direct", family)
+				}
+			}
+		}
+	}
+	ids := make([]string, 0, len(items))
+	for id := range items {
+		ids = append(ids, id)
 	}
 	sort.Strings(ids)
 	data := make([]map[string]any, 0, len(ids))
 	for _, id := range ids {
-		data = append(data, map[string]any{"id": id, "object": "model", "owned_by": "crabbro"})
+		data = append(data, items[id])
 	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"object": "list", "data": data})
 }
@@ -397,6 +436,13 @@ func (g *Gateway) Plans() shared.GatewayPlanListResponse {
 		out = append(out, shared.GatewayPlanStatus{
 			ID:            p.ID,
 			Enabled:       p.IsEnabled(),
+			DirectEnabled: p.DirectEnabled(),
+			DirectProfiles: func() []string {
+				if p.Direct == nil {
+					return nil
+				}
+				return p.Direct.Profiles
+			}(),
 			Description:   p.Description,
 			Credential:    p.Credential,
 			HasSecret:     hasSec,

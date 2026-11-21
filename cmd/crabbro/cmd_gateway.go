@@ -51,6 +51,14 @@ func cmdGateway(cfg *clientConfig, args []string) error {
 				if p.HasSecret {
 					sec = "set"
 				}
+				direct := "off"
+				if p.DirectEnabled {
+					direct = "on"
+				}
+				if len(p.DirectProfiles) > 0 {
+					direct += " (profiles: " + strings.Join(p.DirectProfiles, ",") + ")"
+				}
+				fmt.Printf("  direct: %s\n", direct)
 				fmt.Printf("%-18s enabled=%t secret=%-7s health=%-24s endpoints=%s models=%s\n",
 					p.ID, p.Enabled, sec, health, strings.Join(p.Endpoints, ","), strings.Join(p.Models, ","))
 				for _, w := range p.Windows {
@@ -163,6 +171,7 @@ func cmdGateway(cfg *clientConfig, args []string) error {
 		}
 		fmt.Printf("matched=%t route=%s family=%s chosen=%s err=%s\n", out.Matched, out.RouteID, out.Family, out.Chosen, out.Error)
 		if out.Decision != nil {
+			fmt.Printf("  resolution=%s\n", out.Decision.Resolution)
 			for _, c := range out.Decision.Candidates {
 				fmt.Printf("  %-18s model=%-22s proto=%-16s eligible=%t total=%.3f (Q=%.2f C=%.2f U=%.2f P=%.2f H=%.2f) %s\n",
 					c.Plan, c.Model, c.Protocol, c.Eligible, c.Scores.Total,
