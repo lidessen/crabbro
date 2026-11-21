@@ -87,6 +87,9 @@ func TestGatewayUIViewsRenderLightAndDark(t *testing.T) {
 				{Plan: "glm-coding", Model: "glm-4.7", Requests: 14, TotalTokens: 16700, CacheHitRatio: 0.5, AvgTTFTMs: 180},
 			},
 		},
+		// The range the snapshot asked for: it agrees with the default
+		// selected 24h, so the card shows one range's own numbers.
+		gwUsageAsked: "24h",
 		gwSecrets: []api.SecretSummary{
 			{Name: "glm_key", UpdatedAt: now, SizeBytes: 42},
 		},

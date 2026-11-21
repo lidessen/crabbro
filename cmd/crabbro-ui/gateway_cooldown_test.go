@@ -14,10 +14,26 @@ import (
 // tester that drew it, for text assertions on the frame it holds.
 func gwFrame(t *testing.T, st store) *ui.Tester {
 	t.Helper()
+	return gwFrameApp(t, newAppForTest(st, 1))
+}
+
+// newAppForTest builds an app holding st with the usage range selected by
+// winIdx, the range mirrored as the sync goroutine would have it after a
+// frame. The selected range is view state, so it is set on the app, not the
+// store.
+func newAppForTest(st store, winIdx int) *app {
 	a := newApp(nil, context.Background())
 	a.st = st
-	tt := ui.NewTester(a.view, 1280, 820)
 	a.page = pageGateway
+	a.gwUsageWinIdx = winIdx
+	a.mirrorView()
+	return a
+}
+
+// gwFrameApp draws one gateway page frame for a.
+func gwFrameApp(t *testing.T, a *app) *ui.Tester {
+	t.Helper()
+	tt := ui.NewTester(a.view, 1280, 820)
 	tt.Frame()
 	return tt
 }
@@ -124,8 +140,9 @@ func TestGatewayPlansCardNotesUnreportedModelCooldowns(t *testing.T) {
 }
 
 // A gateway that is off answers with no plans: the card must call that
-// unavailable, not repeat the staging hint meant for a gateway that is on.
-// Only a fresh status answer may say the gateway is off.
+// unavailable, not claim an empty plan set. Only a fresh status answer may
+// say the gateway is off, and an empty list on a gateway that is on still
+// proves nothing about the config.
 func TestGatewayPlansCardDistinguishesOffFromNoneConfigured(t *testing.T) {
 	off := store{
 		conn:          connConnected,
@@ -135,8 +152,8 @@ func TestGatewayPlansCardDistinguishesOffFromNoneConfigured(t *testing.T) {
 		// The off gateway answers the plans request with an empty list.
 		gwPlans: []api.GatewayPlanStatus{},
 	}
-	if tt := gwFrame(t, off); !tt.HasText("Plans unavailable: the gateway is off") || tt.HasText("No plans loaded yet") {
-		t.Error("a disabled gateway should say plan state is unavailable, not that no plans are loaded")
+	if tt := gwFrame(t, off); !tt.HasText("Plans unavailable: the gateway is off") || tt.HasText("No plans reported in this answer") {
+		t.Error("a disabled gateway should say plan state is unavailable, not comment on whether plans are configured")
 	}
 
 	none := store{
@@ -146,7 +163,14 @@ func TestGatewayPlansCardDistinguishesOffFromNoneConfigured(t *testing.T) {
 		gwStatus:      api.GatewayStatusResponse{Enabled: true},
 		gwPlans:       []api.GatewayPlanStatus{},
 	}
-	if tt := gwFrame(t, none); !tt.HasText("No plans loaded yet") || tt.HasText("Plans unavailable") {
-		t.Error("an enabled gateway with zero plans should keep the staging hint")
+	tt := gwFrame(t, none)
+	if !tt.HasText("No plans reported in this answer") || tt.HasText("Plans unavailable") {
+		t.Error("an enabled gateway with an empty answer should report the empty answer, not that the gateway is off")
+	}
+	if !tt.HasText("does not prove none are configured") {
+		t.Error("an empty plan answer must not be read as an empty plan config")
+	}
+	if !tt.HasText("~/.crabbro/gateway/plans/") {
+		t.Error("the card should still name where plans live, without asserting that directory is empty")
 	}
 }

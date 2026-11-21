@@ -53,18 +53,21 @@ const (
 )
 
 // gwAnswers is one round of the five gateway endpoint answers, each
-// paired with whether that endpoint answered at all.
+// paired with whether that endpoint answered at all. usageWindow is the
+// range that round asked usage for: without it the response's own window
+// is all that says which range the numbers describe.
 type gwAnswers struct {
-	status    api.GatewayStatusResponse
-	statusOK  bool
-	plans     []api.GatewayPlanStatus
-	plansOK   bool
-	routes    []api.GatewayRouteStatus
-	routesOK  bool
-	usage     api.GatewayUsageResponse
-	usageOK   bool
-	secrets   []api.SecretSummary
-	secretsOK bool
+	status      api.GatewayStatusResponse
+	statusOK    bool
+	plans       []api.GatewayPlanStatus
+	plansOK     bool
+	routes      []api.GatewayRouteStatus
+	routesOK    bool
+	usage       api.GatewayUsageResponse
+	usageOK     bool
+	usageWindow string
+	secrets     []api.SecretSummary
+	secretsOK   bool
 }
 
 // gwNext moves one card's fetch state across a round: an answer is fresh,
@@ -100,6 +103,10 @@ func (st *store) applyGateway(ans gwAnswers) {
 	st.gwUsageFetch = gwNext(st.gwUsageFetch, ans.usageOK)
 	if ans.usageOK {
 		st.gwUsage = ans.usage
+		// Keep the range that was asked for beside the answer: the selected
+		// range may move on before this answer, and a stale answer keeps the
+		// range it was fetched for, not the range asked for now.
+		st.gwUsageAsked = ans.usageWindow
 	}
 	st.gwSecretsFetch = gwNext(st.gwSecretsFetch, ans.secretsOK)
 	if ans.secretsOK {
@@ -133,14 +140,18 @@ type store struct {
 	history   api.HistoryStatus
 	lastEvent int64
 
-	gwStatus       api.GatewayStatusResponse
-	gwStatusFetch  gwFetch
-	gwPlans        []api.GatewayPlanStatus
-	gwPlansFetch   gwFetch
-	gwRoutes       []api.GatewayRouteStatus
-	gwRoutesFetch  gwFetch
-	gwUsage        api.GatewayUsageResponse
-	gwUsageFetch   gwFetch
+	gwStatus      api.GatewayStatusResponse
+	gwStatusFetch gwFetch
+	gwPlans       []api.GatewayPlanStatus
+	gwPlansFetch  gwFetch
+	gwRoutes      []api.GatewayRouteStatus
+	gwRoutesFetch gwFetch
+	gwUsage       api.GatewayUsageResponse
+	gwUsageFetch  gwFetch
+	// gwUsageAsked is the range the kept usage answer was requested with,
+	// "" before any answer. The view reads the selected range itself; the
+	// two together say whether these numbers cover that range.
+	gwUsageAsked   string
 	gwSecrets      []api.SecretSummary
 	gwSecretsFetch gwFetch
 }
@@ -433,7 +444,10 @@ func (a *app) snapshot(ctx context.Context, query string) error {
 	gwSt, gwStErr := a.c.GatewayStatus(ctx)
 	gwPlans, gwPlansErr := a.c.ListGatewayPlans(ctx)
 	gwRoutes, gwRoutesErr := a.c.ListGatewayRoutes(ctx)
-	gwUsage, gwUsageErr := a.c.GatewayUsage(ctx, a.currentUsageWindow(), "")
+	// Take the range once, and keep it with the answer: reading it again
+	// after the fetch could pair one range's numbers with another's label.
+	usageWindow := a.currentUsageWindow()
+	gwUsage, gwUsageErr := a.c.GatewayUsage(ctx, usageWindow, "")
 	gwSecrets, gwSecretsErr := a.c.ListSecrets(ctx)
 
 	a.mu.Lock()
@@ -452,16 +466,17 @@ func (a *app) snapshot(ctx context.Context, query string) error {
 	a.st.traj = reverseActivity(traj.Items)
 	a.st.traceReqs = traceReqs
 	a.st.applyGateway(gwAnswers{
-		status:    gwSt,
-		statusOK:  gwStErr == nil,
-		plans:     gwPlans,
-		plansOK:   gwPlansErr == nil,
-		routes:    gwRoutes,
-		routesOK:  gwRoutesErr == nil,
-		usage:     gwUsage,
-		usageOK:   gwUsageErr == nil,
-		secrets:   gwSecrets,
-		secretsOK: gwSecretsErr == nil,
+		status:      gwSt,
+		statusOK:    gwStErr == nil,
+		plans:       gwPlans,
+		plansOK:     gwPlansErr == nil,
+		routes:      gwRoutes,
+		routesOK:    gwRoutesErr == nil,
+		usage:       gwUsage,
+		usageOK:     gwUsageErr == nil,
+		usageWindow: usageWindow,
+		secrets:     gwSecrets,
+		secretsOK:   gwSecretsErr == nil,
 	})
 	a.mu.Unlock()
 	a.invalidate()
@@ -544,7 +559,10 @@ func (a *app) refreshNow(ctx context.Context) {
 	gwSt, gwStErr := a.c.GatewayStatus(ctx)
 	gwPlans, gwPlansErr := a.c.ListGatewayPlans(ctx)
 	gwRoutes, gwRoutesErr := a.c.ListGatewayRoutes(ctx)
-	gwUsage, gwUsageErr := a.c.GatewayUsage(ctx, a.currentUsageWindow(), "")
+	// Take the range once, and keep it with the answer: reading it again
+	// after the fetch could pair one range's numbers with another's label.
+	usageWindow := a.currentUsageWindow()
+	gwUsage, gwUsageErr := a.c.GatewayUsage(ctx, usageWindow, "")
 	gwSecrets, gwSecretsErr := a.c.ListSecrets(ctx)
 
 	a.mu.Lock()
@@ -575,16 +593,17 @@ func (a *app) refreshNow(ctx context.Context) {
 		a.st.traceReqs = traceReqs
 	}
 	a.st.applyGateway(gwAnswers{
-		status:    gwSt,
-		statusOK:  gwStErr == nil,
-		plans:     gwPlans,
-		plansOK:   gwPlansErr == nil,
-		routes:    gwRoutes,
-		routesOK:  gwRoutesErr == nil,
-		usage:     gwUsage,
-		usageOK:   gwUsageErr == nil,
-		secrets:   gwSecrets,
-		secretsOK: gwSecretsErr == nil,
+		status:      gwSt,
+		statusOK:    gwStErr == nil,
+		plans:       gwPlans,
+		plansOK:     gwPlansErr == nil,
+		routes:      gwRoutes,
+		routesOK:    gwRoutesErr == nil,
+		usage:       gwUsage,
+		usageOK:     gwUsageErr == nil,
+		usageWindow: usageWindow,
+		secrets:     gwSecrets,
+		secretsOK:   gwSecretsErr == nil,
 	})
 	a.mu.Unlock()
 

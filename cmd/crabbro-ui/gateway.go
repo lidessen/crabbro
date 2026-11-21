@@ -126,6 +126,44 @@ func gwOffNow(st store) bool {
 	return st.gwStatusFetch == gwFresh && !st.gwStatus.Enabled
 }
 
+// gwEmptyNote is an empty list answer that may not be read as "none
+// configured": the gateway being off is one cause, and the answer cannot
+// rule out entries it simply does not include. The directory is named as
+// where to look, never as a place known to be empty.
+func gwEmptyNote(c *ui.Context, p *palette, what, dir string) {
+	ui.Text(c, fmt.Sprintf("No %s reported in this answer; that alone does not prove none are configured. Look under %s.", what, dir)).
+		FontSize(13).TextColor(p.muted).FillWidth()
+	gwOffCaveat(c, p)
+}
+
+// gwOffCaveat says the empty-answer case that the answer itself hides: a
+// disabled gateway answers these endpoints with an empty list, so an empty
+// list is also what a config with entries can look like from here.
+func gwOffCaveat(c *ui.Context, p *palette) {
+	ui.Text(c, "A gateway started with --gateway-addr=off answers empty here too, so this does not rule out a config that has entries.").
+		FontSize(11.5).TextColor(p.faint).FillWidth()
+}
+
+// gwOffNote is an answer whose emptiness is explained by a fresh off status:
+// the endpoint reports nothing because the gateway is off, which is not the
+// same as there being nothing to report.
+func gwOffNote(c *ui.Context, p *palette, what string) {
+	ui.Text(c, fmt.Sprintf("No %s reported: the gateway is off, and this endpoint answers empty rather than listing a config. Whether any are configured is not known from here.", what)).
+		FontSize(13).TextColor(p.muted).FillWidth()
+}
+
+// gwOffUsageNote is the usage ledger's off case: an off gateway answers the
+// usage endpoint empty whatever usage.db holds, so the empty answer is a
+// placeholder and no absence of recorded usage may be inferred from it.
+func gwOffUsageNote(c *ui.Context, p *palette, reported string) {
+	ui.Text(c, "No usage reported: the gateway is off, and this endpoint answers empty whatever the ledger holds. Whether any usage is recorded is not known from here.").
+		FontSize(13).TextColor(p.muted).FillWidth()
+	if reported == "" {
+		ui.Text(c, "The off answer did not name the range it covers.").
+			FontSize(11.5).TextColor(p.faint).FillWidth()
+	}
+}
+
 func (a *app) gwPlansCard(c *ui.Context, p *palette, st store) {
 	plans := st.gwPlans
 	a.gwCard(c, p, "plans", "Plans & Quotas", iconSliders, func() {
@@ -148,20 +186,25 @@ func (a *app) gwPlansCard(c *ui.Context, p *palette, st store) {
 			gwStaleNote(c, p, "plans")
 		}
 		if len(plans) == 0 {
-			// A gateway freshly known to be off answers with no plans at
-			// all: say the state is unavailable, not that none are
-			// configured. A status that is itself kept or missing cannot
-			// say which it is.
+			// What an empty answer proves depends on the status answer, which
+			// is a different fetch: only a fresh off status may explain it as
+			// the gateway being off, and no empty list proves none configured.
 			switch {
 			case gwOffNow(st):
 				ui.Text(c, "Plans unavailable: the gateway is off, so plan and quota state is not reported.").
 					FontSize(13).TextColor(p.muted).FillWidth()
 			case st.gwStatusFetch != gwFresh:
+				// A kept or missing status cannot explain the empty list as
+				// the gateway being off: say that, then give the same empty
+				// answer caveat rather than asserting an empty plan set.
 				ui.Text(c, "No plans reported. The gateway's own on/off state is stale or unknown here, so this is neither confirmed as a disabled gateway nor as an empty plan set.").
 					FontSize(13).TextColor(p.muted).FillWidth()
+				gwEmptyNote(c, p, "plans", "~/.crabbro/gateway/plans/")
 			default:
-				ui.Text(c, "No plans loaded yet. Stage YAML plans under ~/.crabbro/gateway/plans/ and run crabbro config commit.").
-					FontSize(13).TextColor(p.muted).FillWidth()
+				// Fresh or kept, an empty list alongside a gateway on is an
+				// observation, not a verdict on the config: a disabled plan
+				// may simply be absent from the answer.
+				gwEmptyNote(c, p, "plans", "~/.crabbro/gateway/plans/")
 			}
 			return
 		}
@@ -295,7 +338,14 @@ func (a *app) gwRoutesCard(c *ui.Context, p *palette, st store) {
 			gwStaleNote(c, p, "routes")
 		}
 		if len(routes) == 0 {
-			ui.Text(c, "No routes configured under ~/.crabbro/gateway/routes/.").FontSize(13).TextColor(p.muted).FillWidth()
+			// An off gateway answers the routes endpoint with an empty list
+			// whatever the config holds: only a fresh off status explains
+			// that, and no empty answer asserts an empty config.
+			if gwOffNow(st) {
+				gwOffNote(c, p, "routes")
+			} else {
+				gwEmptyNote(c, p, "routes", "~/.crabbro/gateway/routes/")
+			}
 			return
 		}
 		for i, rt := range routes {
@@ -335,8 +385,38 @@ func (a *app) gwRoutesCard(c *ui.Context, p *palette, st store) {
 	})
 }
 
+// gwUsageWindowFact is what the usage card can say about the range its kept
+// numbers describe: whether that range is the one selected, and which the
+// answer itself named. The selected range is view state and the answered
+// range is store state, so both are passed rather than read again here.
+type gwUsageWindowFact struct {
+	selected string
+	asked    string
+	reported string
+}
+
+// match says the answered range is the selected one: the range asked for and
+// the range the answer named agree with the selection. An unnamed reported
+// range does not count as agreement, because the response cannot confirm it.
+func (w gwUsageWindowFact) match() bool {
+	return w.selected == w.asked && w.asked == w.reported
+}
+
+// described is the range to name when saying what the numbers cover: the
+// range the answer named, else the one it was requested with.
+func (w gwUsageWindowFact) described() string {
+	if w.reported != "" {
+		return w.reported
+	}
+	return w.asked
+}
+
 func (a *app) gwUsageCard(c *ui.Context, p *palette, st store) {
 	usage := st.gwUsage
+	selected := windowForIndex(a.gwUsageWinIdx)
+	win := gwUsageWindowFact{selected: selected, asked: st.gwUsageAsked, reported: usage.Window}
+	// Only an answered fetch leaves a range to describe at all.
+	mismatch := st.gwUsageFetch != gwUnknown && !win.match()
 	a.gwCard(c, p, "usage", "Usage Ledger", iconClock, func() {
 		prev := a.gwUsageWinIdx
 		a.words(c, "gw-usage-win", &a.gwUsageWinIdx, "1h", "24h", "7d")
@@ -356,6 +436,16 @@ func (a *app) gwUsageCard(c *ui.Context, p *palette, st store) {
 		if st.gwUsageFetch == gwStale {
 			gwStaleNote(c, p, "usage")
 		}
+		if mismatch {
+			// The numbers and the selected range are not the same window.
+			// Name both rather than let one range's totals wear another's
+			// label; the new range's own answer has not arrived.
+			ui.Text(c, fmt.Sprintf("Range mismatch: %s is selected, but these numbers are the last %s answer. They are not totals for the selected range.",
+				selected, win.described())).
+				FontSize(11.5).Font(mono()).TextColor(p.warning()).FillWidth()
+		} else {
+			a.fact(c, p, "Range", fmt.Sprintf("%s (as answered)", selected))
+		}
 		tot := usage.Totals
 		a.fact(c, p, "Totals", fmt.Sprintf("%d reqs (%d err) · %d tokens (%d in / %d out / %d cache read)",
 			tot.Requests, tot.Errors, tot.TotalTokens, tot.InputTokens, tot.OutputTokens, tot.CacheReadTokens))
@@ -364,7 +454,21 @@ func (a *app) gwUsageCard(c *ui.Context, p *palette, st store) {
 				tot.CacheHitRatio*100, tot.AvgTTFTMs, tot.AvgDurationMs))
 		}
 		if len(usage.Buckets) == 0 {
-			ui.Text(c, "No gateway usage recorded in this window.").FontSize(13).TextColor(p.muted).FillWidth()
+			// Zero buckets is what the endpoint answered. With the gateway
+			// off that is a placeholder, and even on it proves no usage in
+			// the answered range only — not none recorded anywhere, and not
+			// none in the selected range while the ranges differ.
+			switch {
+			case gwOffNow(st):
+				gwOffUsageNote(c, p, usage.Window)
+			case mismatch:
+				ui.Text(c, fmt.Sprintf("No usage buckets in the %s answer; whether the selected %s range has any is not known yet.",
+					win.described(), selected)).FontSize(13).TextColor(p.muted).FillWidth()
+			default:
+				ui.Text(c, fmt.Sprintf("No gateway usage buckets in the answered %s range; zero buckets does not prove no usage was recorded elsewhere.",
+					win.described())).FontSize(13).TextColor(p.muted).FillWidth()
+				gwOffCaveat(c, p)
+			}
 			return
 		}
 		hairline(c, p)

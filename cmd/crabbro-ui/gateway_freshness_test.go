@@ -24,8 +24,8 @@ func TestGatewayStatusIsUnknownUntilAnswered(t *testing.T) {
 	if tt.HasText("not cooling") {
 		t.Error("an unanswered status leaves no plan counts to show")
 	}
-	if tt.HasText("No plans loaded yet") || tt.HasText("Plans unavailable") {
-		t.Error("an unanswered plans request must not read as off or as an empty plan set")
+	if tt.HasText("No plans reported in this answer") || tt.HasText("Plans unavailable") {
+		t.Error("an unanswered plans request must not read as off or as an empty plan answer")
 	}
 	if !tt.HasText("Plans unknown") {
 		t.Error("the plans card should say its state is unknown")
