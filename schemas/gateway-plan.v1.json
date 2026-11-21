@@ -52,8 +52,7 @@
             ],
             "properties": {
               "name": { "type": "string", "minLength": 1, "maxLength": 64 },
-              "protocol": { "enum": ["openai-chat", "openai-responses", "anthropic", "gemini", "typesafe-jev", "openai-decisions"] },
-    "duration": { "$ref": "#/$defs/duration" },
+              "duration": { "$ref": "#/$defs/duration" },
               "maxTokens": { "type": "integer", "minimum": 1 },
               "maxRequests": { "type": "integer", "minimum": 1 },
               "resetSchedule": { "type": "string", "minLength": 1, "maxLength": 64 },

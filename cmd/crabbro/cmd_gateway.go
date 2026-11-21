@@ -58,9 +58,9 @@ func cmdGateway(cfg *clientConfig, args []string) error {
 				if len(p.DirectProfiles) > 0 {
 					direct += " (profiles: " + strings.Join(p.DirectProfiles, ",") + ")"
 				}
-				fmt.Printf("  direct: %s\n", direct)
 				fmt.Printf("%-18s enabled=%t secret=%-7s health=%-24s endpoints=%s models=%s\n",
 					p.ID, p.Enabled, sec, health, strings.Join(p.Endpoints, ","), strings.Join(p.Models, ","))
+				fmt.Printf("  direct: %s\n", direct)
 				for _, w := range p.Windows {
 					fmt.Printf("  window %-8s (%s %s) tokens=%d/%d reqs=%d/%d rem=%.0f%% surplus=%+.2f src=%s\n",
 						w.Name, w.Duration, w.Mode, w.UsedTokens, w.MaxTokens, w.UsedRequests, w.MaxRequests,
@@ -131,7 +131,7 @@ func cmdGateway(cfg *clientConfig, args []string) error {
 	case "preview":
 		fs := flag.NewFlagSet("gw preview", flag.ContinueOnError)
 		profile := fs.String("profile", "", "Profile name")
-		proto := fs.String("protocol", "anthropic", "Ingress protocol (openai-chat|openai-responses|anthropic|gemini|typesafe-jev)")
+		proto := fs.String("protocol", "anthropic", "Ingress protocol (openai-chat|openai-responses|anthropic|gemini|typesafe-jev|openai-decisions)")
 		model := fs.String("model", "", "Requested model name")
 		tokens := fs.Int("tokens", 0, "Estimated input tokens")
 		turnPhase := fs.String("turn-phase", "", "Turn phase override")
