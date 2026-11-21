@@ -35,6 +35,78 @@ const listRefreshDebounce = 150 * time.Millisecond
 // trajKeep is how many trajectory steps the feed keeps in memory.
 const trajKeep = 400
 
+// gwFetch says how fresh one gateway card's data is. The sync goroutine
+// refetches the five gateway endpoints together, but each answers on its
+// own, so a card whose fetch failed keeps its last-good data as stale
+// beside a card whose fetch answered.
+type gwFetch int
+
+const (
+	// gwUnknown: no successful answer yet. Nothing may be asserted — not
+	// even that the gateway is off, which a zero value would read as.
+	gwUnknown gwFetch = iota
+	// gwFresh: the latest fetch answered.
+	gwFresh
+	// gwStale: the latest fetch failed; the last-good answer is kept and
+	// shown as stale, never as current.
+	gwStale
+)
+
+// gwAnswers is one round of the five gateway endpoint answers, each
+// paired with whether that endpoint answered at all.
+type gwAnswers struct {
+	status    api.GatewayStatusResponse
+	statusOK  bool
+	plans     []api.GatewayPlanStatus
+	plansOK   bool
+	routes    []api.GatewayRouteStatus
+	routesOK  bool
+	usage     api.GatewayUsageResponse
+	usageOK   bool
+	secrets   []api.SecretSummary
+	secretsOK bool
+}
+
+// gwNext moves one card's fetch state across a round: an answer is fresh,
+// a failed round keeps the last-good answer as stale, and only a card that
+// has never answered stays unknown.
+func gwNext(prev gwFetch, ok bool) gwFetch {
+	if ok {
+		return gwFresh
+	}
+	if prev == gwUnknown {
+		return gwUnknown
+	}
+	return gwStale
+}
+
+// applyGateway writes one round of gateway answers into the store. A
+// failed endpoint keeps its last-good data, marked stale, so a kept answer
+// never passes for a current one, and an endpoint that has never answered
+// leaves nothing to assert.
+func (st *store) applyGateway(ans gwAnswers) {
+	st.gwStatusFetch = gwNext(st.gwStatusFetch, ans.statusOK)
+	if ans.statusOK {
+		st.gwStatus = ans.status
+	}
+	st.gwPlansFetch = gwNext(st.gwPlansFetch, ans.plansOK)
+	if ans.plansOK {
+		st.gwPlans = ans.plans
+	}
+	st.gwRoutesFetch = gwNext(st.gwRoutesFetch, ans.routesOK)
+	if ans.routesOK {
+		st.gwRoutes = ans.routes
+	}
+	st.gwUsageFetch = gwNext(st.gwUsageFetch, ans.usageOK)
+	if ans.usageOK {
+		st.gwUsage = ans.usage
+	}
+	st.gwSecretsFetch = gwNext(st.gwSecretsFetch, ans.secretsOK)
+	if ans.secretsOK {
+		st.gwSecrets = ans.secrets
+	}
+}
+
 // store is the state the view reads. The sync goroutine writes it under mu;
 // the frame function reads it under mu. Neither holds it across a network
 // call, and slices are replaced, never edited in place.
@@ -61,11 +133,16 @@ type store struct {
 	history   api.HistoryStatus
 	lastEvent int64
 
-	gwStatus  api.GatewayStatusResponse
-	gwPlans   []api.GatewayPlanStatus
-	gwRoutes  []api.GatewayRouteStatus
-	gwUsage   api.GatewayUsageResponse
-	gwSecrets []api.SecretSummary
+	gwStatus       api.GatewayStatusResponse
+	gwStatusFetch  gwFetch
+	gwPlans        []api.GatewayPlanStatus
+	gwPlansFetch   gwFetch
+	gwRoutes       []api.GatewayRouteStatus
+	gwRoutesFetch  gwFetch
+	gwUsage        api.GatewayUsageResponse
+	gwUsageFetch   gwFetch
+	gwSecrets      []api.SecretSummary
+	gwSecretsFetch gwFetch
 }
 
 // app is the state of the Crabbro window: the client of the daemon, the
@@ -103,12 +180,12 @@ type app struct {
 	ruleShownID      string
 	ruleEditMode     int // 0 overview, 1 code
 	scriptDraft      string
-	section       int // the daemon pane's segmented choice
-	sessionName   string
-	reqKindIdx    int // 0: all, 1: proxy, 2: gateway
-	gwUsageWinIdx int // 0: 1h, 1: 24h, 2: 7d
-	gwSecretName  string
-	gwSecretVal   string
+	section          int // the daemon pane's segmented choice
+	sessionName      string
+	reqKindIdx       int // 0: all, 1: proxy, 2: gateway
+	gwUsageWinIdx    int // 0: 1h, 1: 24h, 2: 7d
+	gwSecretName     string
+	gwSecretVal      string
 
 	// mirror* are the view thread's search, hidden switch and page as of the
 	// last frame, under mu: the sync goroutine reads these, never the fields
@@ -118,11 +195,11 @@ type app struct {
 	mirrorPage     string
 	mirrorKind     string
 	mirrorUsageWin string
-	trajAt       time.Time
-	notes        []string
-	busy         string // what an action is doing, shown in the status bar
-	win          *mygo.Window
-	pal          *palette // the frame's look, set as each frame begins
+	trajAt         time.Time
+	notes          []string
+	busy           string // what an action is doing, shown in the status bar
+	win            *mygo.Window
+	pal            *palette // the frame's look, set as each frame begins
 }
 
 var hoverFade = ui.ElementTransition{Colors: true, Duration: 150 * time.Millisecond}
@@ -374,21 +451,18 @@ func (a *app) snapshot(ctx context.Context, query string) error {
 	a.st.history = hist
 	a.st.traj = reverseActivity(traj.Items)
 	a.st.traceReqs = traceReqs
-	if gwStErr == nil {
-		a.st.gwStatus = gwSt
-	}
-	if gwPlansErr == nil {
-		a.st.gwPlans = gwPlans
-	}
-	if gwRoutesErr == nil {
-		a.st.gwRoutes = gwRoutes
-	}
-	if gwUsageErr == nil {
-		a.st.gwUsage = gwUsage
-	}
-	if gwSecretsErr == nil {
-		a.st.gwSecrets = gwSecrets
-	}
+	a.st.applyGateway(gwAnswers{
+		status:    gwSt,
+		statusOK:  gwStErr == nil,
+		plans:     gwPlans,
+		plansOK:   gwPlansErr == nil,
+		routes:    gwRoutes,
+		routesOK:  gwRoutesErr == nil,
+		usage:     gwUsage,
+		usageOK:   gwUsageErr == nil,
+		secrets:   gwSecrets,
+		secretsOK: gwSecretsErr == nil,
+	})
 	a.mu.Unlock()
 	a.invalidate()
 	return nil
@@ -500,21 +574,18 @@ func (a *app) refreshNow(ctx context.Context) {
 	if traceErr == nil {
 		a.st.traceReqs = traceReqs
 	}
-	if gwStErr == nil {
-		a.st.gwStatus = gwSt
-	}
-	if gwPlansErr == nil {
-		a.st.gwPlans = gwPlans
-	}
-	if gwRoutesErr == nil {
-		a.st.gwRoutes = gwRoutes
-	}
-	if gwUsageErr == nil {
-		a.st.gwUsage = gwUsage
-	}
-	if gwSecretsErr == nil {
-		a.st.gwSecrets = gwSecrets
-	}
+	a.st.applyGateway(gwAnswers{
+		status:    gwSt,
+		statusOK:  gwStErr == nil,
+		plans:     gwPlans,
+		plansOK:   gwPlansErr == nil,
+		routes:    gwRoutes,
+		routesOK:  gwRoutesErr == nil,
+		usage:     gwUsage,
+		usageOK:   gwUsageErr == nil,
+		secrets:   gwSecrets,
+		secretsOK: gwSecretsErr == nil,
+	})
 	a.mu.Unlock()
 
 	a.refreshDetail(ctx)

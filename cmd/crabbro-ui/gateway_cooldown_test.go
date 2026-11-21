@@ -23,10 +23,13 @@ func gwFrame(t *testing.T, st store) *ui.Tester {
 }
 
 // gwPlanStore is two plans on an enabled gateway: one out of cooldown that
-// still carries its persistent last cooldown reason, and one cooling.
+// still carries its persistent last cooldown reason, and one cooling. The
+// store reads as one after a successful snapshot: every endpoint answered.
 func gwPlanStore(until time.Time) store {
 	return store{
-		conn: connConnected,
+		conn:          connConnected,
+		gwStatusFetch: gwFresh,
+		gwPlansFetch:  gwFresh,
 		gwStatus: api.GatewayStatusResponse{
 			Enabled:      true,
 			ListenAddr:   "127.0.0.1:8081",
@@ -122,16 +125,26 @@ func TestGatewayPlansCardNotesUnreportedModelCooldowns(t *testing.T) {
 
 // A gateway that is off answers with no plans: the card must call that
 // unavailable, not repeat the staging hint meant for a gateway that is on.
+// Only a fresh status answer may say the gateway is off.
 func TestGatewayPlansCardDistinguishesOffFromNoneConfigured(t *testing.T) {
-	off := store{conn: connConnected, gwStatus: api.GatewayStatusResponse{Enabled: false}}
+	off := store{
+		conn:          connConnected,
+		gwStatusFetch: gwFresh,
+		gwPlansFetch:  gwFresh,
+		gwStatus:      api.GatewayStatusResponse{Enabled: false},
+		// The off gateway answers the plans request with an empty list.
+		gwPlans: []api.GatewayPlanStatus{},
+	}
 	if tt := gwFrame(t, off); !tt.HasText("Plans unavailable: the gateway is off") || tt.HasText("No plans loaded yet") {
 		t.Error("a disabled gateway should say plan state is unavailable, not that no plans are loaded")
 	}
 
 	none := store{
-		conn:     connConnected,
-		gwStatus: api.GatewayStatusResponse{Enabled: true},
-		gwPlans:  []api.GatewayPlanStatus{},
+		conn:          connConnected,
+		gwStatusFetch: gwFresh,
+		gwPlansFetch:  gwFresh,
+		gwStatus:      api.GatewayStatusResponse{Enabled: true},
+		gwPlans:       []api.GatewayPlanStatus{},
 	}
 	if tt := gwFrame(t, none); !tt.HasText("No plans loaded yet") || tt.HasText("Plans unavailable") {
 		t.Error("an enabled gateway with zero plans should keep the staging hint")

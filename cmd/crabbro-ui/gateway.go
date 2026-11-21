@@ -16,9 +16,9 @@ func (a *app) gatewayPage(c *ui.Context, p *palette) {
 		ui.Column(c).FillWidth().MaxWidth(960).AlignSelf(ui.Center).Padding(20, 24, 32).Gap(12).Children(func() {
 			a.gwStatusCard(c, p, st)
 			a.gwPlansCard(c, p, st)
-			a.gwRoutesCard(c, p, st.gwRoutes)
-			a.gwUsageCard(c, p, st.gwUsage)
-			a.gwSecretsCard(c, p, st.gwSecrets)
+			a.gwRoutesCard(c, p, st)
+			a.gwUsageCard(c, p, st)
+			a.gwSecretsCard(c, p, st)
 		})
 	})
 }
@@ -39,18 +39,35 @@ func (a *app) gwCard(c *ui.Context, p *palette, key, title string, icon *ui.SVG,
 }
 
 func (a *app) gwStatusCard(c *ui.Context, p *palette, st store) {
-	tone, state := p.faint, "Disabled"
-	if st.gwStatus.Enabled {
-		tone, state = p.added, "Enabled"
+	// Without an answered status request there is no Enabled or Disabled to
+	// assert: the zero value must not read as off. Only an answer may say.
+	state, tone := "Unknown", p.faint
+	answered := st.gwStatusFetch != gwUnknown
+	if answered {
+		state = "Disabled"
+		if st.gwStatus.Enabled {
+			state, tone = "Enabled", p.added
+		}
 	}
 	a.gwCard(c, p, "status", "Gateway", iconServer, func() {
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 			badge(c, p, tone, state)
-			if st.gwStatus.Enabled {
+			if st.gwStatusFetch == gwStale {
+				gwStaleTag(c, p)
+			}
+			if answered && st.gwStatus.Enabled {
 				a.quietButton(c, "gw-reload", "Reload", iconReplay).Clicked(func() { a.actReloadGateway() })
 			}
 		})
 	}, func() {
+		if !answered {
+			ui.Text(c, "Gateway state unknown: crabbrod has not answered the status request, so neither on nor off is asserted.").
+				FontSize(13).TextColor(p.muted).FillWidth()
+			return
+		}
+		if st.gwStatusFetch == gwStale {
+			gwStaleNote(c, p, "status")
+		}
 		if !st.gwStatus.Enabled {
 			ui.Text(c, "Start crabbrod without --gateway-addr=off to enable the multi-protocol gateway.").
 				FontSize(13).TextColor(p.muted).FillWidth()
@@ -58,11 +75,9 @@ func (a *app) gwStatusCard(c *ui.Context, p *palette, st store) {
 		}
 		a.fact(c, p, "Listen addr", st.gwStatus.ListenAddr)
 		a.fact(c, p, "Generation", fmt.Sprintf("v%d", st.gwStatus.SnapshotGeneration))
-		// HealthyPlans counts plans outside plan-level cooldown, not
-		// providers that are fine: say that, not "healthy".
-		a.fact(c, p, "Plans", fmt.Sprintf("%d configured (%d not cooling, %d cooling)",
-			st.gwStatus.PlanCount, st.gwStatus.HealthyPlans, st.gwStatus.CoolingPlans))
-		a.fact(c, p, "Routes", fmt.Sprint(st.gwStatus.RouteCount))
+		a.fact(c, p, "Plans", gwPlanCounts(st.gwStatus))
+		// RouteCount counts every parsed route, enabled and disabled alike.
+		a.fact(c, p, "Routes", fmt.Sprintf("%d configured", st.gwStatus.RouteCount))
 		if len(st.gwStatus.Diagnostics) > 0 {
 			hairline(c, p)
 			caption(c, p, "Diagnostics")
@@ -74,28 +89,87 @@ func (a *app) gwStatusCard(c *ui.Context, p *palette, st store) {
 	})
 }
 
+// gwPlanCounts says the plan counts for what each counts: PlanCount counts
+// every configured plan, while not-cooling/cooling cover enabled plans
+// only, so the plans a config has disabled are said apart, not folded into
+// the counts as though they were active.
+func gwPlanCounts(st api.GatewayStatusResponse) string {
+	enabled := st.HealthyPlans + st.CoolingPlans
+	counts := fmt.Sprintf("%d configured · %d enabled (%d not cooling, %d cooling)",
+		st.PlanCount, enabled, st.HealthyPlans, st.CoolingPlans)
+	// Only a count that can exist is said: a disagreement is not clamped
+	// into sense.
+	if disabled := st.PlanCount - enabled; disabled > 0 {
+		counts += fmt.Sprintf(" · %d disabled", disabled)
+	}
+	return counts
+}
+
+// gwStaleTag marks a card whose badge or count is the last successful
+// answer rather than the latest one.
+func gwStaleTag(c *ui.Context, p *palette) {
+	ui.Text(c, "stale").FontSize(11).FontWeight(500).Font(mono()).TextColor(p.warning()).
+		Padding(2, 7).Radius(6).Background(p.warning().Alpha(p.wash())).SingleLine().Shrink(0)
+}
+
+// gwStaleNote says a card shows kept data: the latest what request failed,
+// so this is the last successful answer and nothing newer is asserted.
+func gwStaleNote(c *ui.Context, p *palette, what string) {
+	ui.Text(c, fmt.Sprintf("Stale: the latest %s request failed; this is the last successful answer.", what)).
+		FontSize(11.5).Font(mono()).TextColor(p.warning()).FillWidth()
+}
+
+// gwOffNow says the status card's answer is fresh and says the gateway is
+// off. Only that may read a missing plan list as "unavailable because the
+// gateway is off"; a kept or missing status says nothing.
+func gwOffNow(st store) bool {
+	return st.gwStatusFetch == gwFresh && !st.gwStatus.Enabled
+}
+
 func (a *app) gwPlansCard(c *ui.Context, p *palette, st store) {
 	plans := st.gwPlans
 	a.gwCard(c, p, "plans", "Plans & Quotas", iconSliders, func() {
+		if st.gwPlansFetch == gwUnknown {
+			// No answer yet: no count to assert either, not even zero.
+			tag(c, p, "plans unknown")
+			return
+		}
 		tag(c, p, fmt.Sprintf("%d plans", len(plans)))
+		if st.gwPlansFetch == gwStale {
+			gwStaleTag(c, p)
+		}
 	}, func() {
+		if st.gwPlansFetch == gwUnknown {
+			ui.Text(c, "Plans unknown: crabbrod has not answered the plans request, so no plan is asserted configured or absent.").
+				FontSize(13).TextColor(p.muted).FillWidth()
+			return
+		}
+		if st.gwPlansFetch == gwStale {
+			gwStaleNote(c, p, "plans")
+		}
 		if len(plans) == 0 {
-			// A gateway that is off answers with no plans at all: say the
-			// state is unavailable, not that none are configured.
-			if !st.gwStatus.Enabled {
+			// A gateway freshly known to be off answers with no plans at
+			// all: say the state is unavailable, not that none are
+			// configured. A status that is itself kept or missing cannot
+			// say which it is.
+			switch {
+			case gwOffNow(st):
 				ui.Text(c, "Plans unavailable: the gateway is off, so plan and quota state is not reported.").
 					FontSize(13).TextColor(p.muted).FillWidth()
-				return
+			case st.gwStatusFetch != gwFresh:
+				ui.Text(c, "No plans reported. The gateway's own on/off state is stale or unknown here, so this is neither confirmed as a disabled gateway nor as an empty plan set.").
+					FontSize(13).TextColor(p.muted).FillWidth()
+			default:
+				ui.Text(c, "No plans loaded yet. Stage YAML plans under ~/.crabbro/gateway/plans/ and run crabbro config commit.").
+					FontSize(13).TextColor(p.muted).FillWidth()
 			}
-			ui.Text(c, "No plans loaded yet. Stage YAML plans under ~/.crabbro/gateway/plans/ and run crabbro config commit.").
-				FontSize(13).TextColor(p.muted).FillWidth()
 			return
 		}
 		for i, pl := range plans {
 			if i > 0 {
 				hairline(c, p)
 			}
-			ui.Column(c.Key("gw-plan:"+pl.ID)).FillWidth().Gap(6).Children(func() {
+			ui.Column(c.Key("gw-plan:" + pl.ID)).FillWidth().Gap(6).Children(func() {
 				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 					ui.Text(c, pl.ID).FontSize(13).FontWeight(600).Font(mono()).TextColor(p.text).SingleLine()
 					if !pl.Enabled {
@@ -105,16 +179,24 @@ func (a *app) gwPlansCard(c *ui.Context, p *palette, st store) {
 						// reports no provider or per-model verdict here.
 						stateDot(c, p, p.added, "Plan not cooling")
 					} else {
-						lbl := "Plan cooling"
-						if pl.CooldownUntil != nil {
+						lbl, col := "Plan cooling", p.removed
+						if pl.CooldownUntil == nil || pl.CooldownUntil.IsZero() {
+							lbl = "Plan cooling (time not reported)"
+						} else {
 							rem := time.Until(*pl.CooldownUntil).Truncate(time.Second)
 							if rem > 0 {
 								lbl = fmt.Sprintf("Plan cooling (%s left)", rem)
+							} else {
+								// The window this answer describes has
+								// already closed: the answer is older than
+								// its own cooldown. Say that; do not assert
+								// the cooldown is still active.
+								col = p.warning()
+								lbl = fmt.Sprintf("Cooldown ended %s ago (as last reported); plan state not refreshed",
+									(-rem).Truncate(time.Second))
 							}
-						} else {
-							lbl = "Plan cooling (time not reported)"
 						}
-						stateDot(c, p, p.removed, lbl)
+						stateDot(c, p, col, lbl)
 					}
 					if pl.HasSecret {
 						tag(c, p, "secret:"+pl.Credential)
@@ -192,10 +274,26 @@ func (a *app) gwWindowBar(c *ui.Context, p *palette, key string, w api.GatewayWi
 	})
 }
 
-func (a *app) gwRoutesCard(c *ui.Context, p *palette, routes []api.GatewayRouteStatus) {
+func (a *app) gwRoutesCard(c *ui.Context, p *palette, st store) {
+	routes := st.gwRoutes
 	a.gwCard(c, p, "routes", "Routes", iconRule, func() {
+		if st.gwRoutesFetch == gwUnknown {
+			tag(c, p, "routes unknown")
+			return
+		}
 		tag(c, p, fmt.Sprintf("%d routes", len(routes)))
+		if st.gwRoutesFetch == gwStale {
+			gwStaleTag(c, p)
+		}
 	}, func() {
+		if st.gwRoutesFetch == gwUnknown {
+			ui.Text(c, "Routes unknown: crabbrod has not answered the routes request.").
+				FontSize(13).TextColor(p.muted).FillWidth()
+			return
+		}
+		if st.gwRoutesFetch == gwStale {
+			gwStaleNote(c, p, "routes")
+		}
 		if len(routes) == 0 {
 			ui.Text(c, "No routes configured under ~/.crabbro/gateway/routes/.").FontSize(13).TextColor(p.muted).FillWidth()
 			return
@@ -204,7 +302,7 @@ func (a *app) gwRoutesCard(c *ui.Context, p *palette, routes []api.GatewayRouteS
 			if i > 0 {
 				hairline(c, p)
 			}
-			ui.Column(c.Key("gw-route:"+rt.ID)).FillWidth().Gap(5).Children(func() {
+			ui.Column(c.Key("gw-route:" + rt.ID)).FillWidth().Gap(5).Children(func() {
 				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 					ui.Text(c, rt.ID).FontSize(13).FontWeight(600).Font(mono()).TextColor(p.text).SingleLine()
 					tag(c, p, rt.Family)
@@ -237,7 +335,8 @@ func (a *app) gwRoutesCard(c *ui.Context, p *palette, routes []api.GatewayRouteS
 	})
 }
 
-func (a *app) gwUsageCard(c *ui.Context, p *palette, usage api.GatewayUsageResponse) {
+func (a *app) gwUsageCard(c *ui.Context, p *palette, st store) {
+	usage := st.gwUsage
 	a.gwCard(c, p, "usage", "Usage Ledger", iconClock, func() {
 		prev := a.gwUsageWinIdx
 		a.words(c, "gw-usage-win", &a.gwUsageWinIdx, "1h", "24h", "7d")
@@ -245,7 +344,18 @@ func (a *app) gwUsageCard(c *ui.Context, p *palette, usage api.GatewayUsageRespo
 			a.mirrorView()
 			a.nudge(a.search)
 		}
+		if st.gwUsageFetch == gwStale {
+			gwStaleTag(c, p)
+		}
 	}, func() {
+		if st.gwUsageFetch == gwUnknown {
+			ui.Text(c, "Usage unknown: crabbrod has not answered the usage request.").
+				FontSize(13).TextColor(p.muted).FillWidth()
+			return
+		}
+		if st.gwUsageFetch == gwStale {
+			gwStaleNote(c, p, "usage")
+		}
 		tot := usage.Totals
 		a.fact(c, p, "Totals", fmt.Sprintf("%d reqs (%d err) · %d tokens (%d in / %d out / %d cache read)",
 			tot.Requests, tot.Errors, tot.TotalTokens, tot.InputTokens, tot.OutputTokens, tot.CacheReadTokens))
@@ -269,23 +379,39 @@ func (a *app) gwUsageCard(c *ui.Context, p *palette, usage api.GatewayUsageRespo
 	})
 }
 
-func (a *app) gwSecretsCard(c *ui.Context, p *palette, secrets []api.SecretSummary) {
+func (a *app) gwSecretsCard(c *ui.Context, p *palette, st store) {
+	secrets := st.gwSecrets
 	a.gwCard(c, p, "secrets", "Credentials", iconLock, func() {
-		tag(c, p, fmt.Sprintf("%d stored", len(secrets)))
-	}, func() {
-		for _, sec := range secrets {
-			s := sec
-			ui.Row(c.Key("gw-sec:"+s.Name)).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, s.Name).FontSize(12.5).Font(mono()).TextColor(p.text).SingleLine().Grow(1).MinWidth(60)
-				ui.Text(c, fmt.Sprintf("%d B · %s", s.SizeBytes, s.UpdatedAt.Local().Format("2006-01-02 15:04"))).
-					FontSize(11).Font(mono()).TextColor(p.faint).SingleLine()
-				a.ghostButton(c, "gw-sec-del:"+s.Name, "", iconTrash).Clicked(func() {
-					a.actDeleteSecret(s.Name)
-				})
-			})
+		if st.gwSecretsFetch == gwUnknown {
+			tag(c, p, "secrets unknown")
+			return
 		}
-		if len(secrets) == 0 {
-			ui.Text(c, "No secrets stored yet under ~/.crabbro/secrets/.").FontSize(13).TextColor(p.muted).FillWidth()
+		tag(c, p, fmt.Sprintf("%d stored", len(secrets)))
+		if st.gwSecretsFetch == gwStale {
+			gwStaleTag(c, p)
+		}
+	}, func() {
+		if st.gwSecretsFetch == gwUnknown {
+			ui.Text(c, "Credentials unknown: crabbrod has not answered the secrets request, so none is asserted stored or absent.").
+				FontSize(13).TextColor(p.muted).FillWidth()
+		} else {
+			if st.gwSecretsFetch == gwStale {
+				gwStaleNote(c, p, "secrets")
+			}
+			for _, sec := range secrets {
+				s := sec
+				ui.Row(c.Key("gw-sec:" + s.Name)).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, s.Name).FontSize(12.5).Font(mono()).TextColor(p.text).SingleLine().Grow(1).MinWidth(60)
+					ui.Text(c, fmt.Sprintf("%d B · %s", s.SizeBytes, s.UpdatedAt.Local().Format("2006-01-02 15:04"))).
+						FontSize(11).Font(mono()).TextColor(p.faint).SingleLine()
+					a.ghostButton(c, "gw-sec-del:"+s.Name, "", iconTrash).Clicked(func() {
+						a.actDeleteSecret(s.Name)
+					})
+				})
+			}
+			if len(secrets) == 0 {
+				ui.Text(c, "No secrets stored yet under ~/.crabbro/secrets/.").FontSize(13).TextColor(p.muted).FillWidth()
+			}
 		}
 		hairline(c, p)
 		caption(c, p, "Store API Key (mode 0600)")

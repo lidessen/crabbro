@@ -19,7 +19,12 @@ func TestGatewayUIViewsRenderLightAndDark(t *testing.T) {
 	bodyResp := `{"content":[{"type":"text","text":"hello"}]}`
 
 	a.st = store{
-		conn: connConnected,
+		conn:           connConnected,
+		gwStatusFetch:  gwFresh,
+		gwPlansFetch:   gwFresh,
+		gwRoutesFetch:  gwFresh,
+		gwUsageFetch:   gwFresh,
+		gwSecretsFetch: gwFresh,
 		status: api.DaemonStatus{
 			Version:        "0.1.0",
 			ProxyAddr:      "127.0.0.1:8080",
