@@ -15,7 +15,7 @@ func (a *app) gatewayPage(c *ui.Context, p *palette) {
 	ui.Scroll(c).Grow(1).Background(p.chrome).Children(func() {
 		ui.Column(c).FillWidth().MaxWidth(960).AlignSelf(ui.Center).Padding(20, 24, 32).Gap(12).Children(func() {
 			a.gwStatusCard(c, p, st)
-			a.gwPlansCard(c, p, st.gwPlans)
+			a.gwPlansCard(c, p, st)
 			a.gwRoutesCard(c, p, st.gwRoutes)
 			a.gwUsageCard(c, p, st.gwUsage)
 			a.gwSecretsCard(c, p, st.gwSecrets)
@@ -58,7 +58,9 @@ func (a *app) gwStatusCard(c *ui.Context, p *palette, st store) {
 		}
 		a.fact(c, p, "Listen addr", st.gwStatus.ListenAddr)
 		a.fact(c, p, "Generation", fmt.Sprintf("v%d", st.gwStatus.SnapshotGeneration))
-		a.fact(c, p, "Plans", fmt.Sprintf("%d configured (%d healthy, %d cooling)",
+		// HealthyPlans counts plans outside plan-level cooldown, not
+		// providers that are fine: say that, not "healthy".
+		a.fact(c, p, "Plans", fmt.Sprintf("%d configured (%d not cooling, %d cooling)",
 			st.gwStatus.PlanCount, st.gwStatus.HealthyPlans, st.gwStatus.CoolingPlans))
 		a.fact(c, p, "Routes", fmt.Sprint(st.gwStatus.RouteCount))
 		if len(st.gwStatus.Diagnostics) > 0 {
@@ -72,11 +74,19 @@ func (a *app) gwStatusCard(c *ui.Context, p *palette, st store) {
 	})
 }
 
-func (a *app) gwPlansCard(c *ui.Context, p *palette, plans []api.GatewayPlanStatus) {
+func (a *app) gwPlansCard(c *ui.Context, p *palette, st store) {
+	plans := st.gwPlans
 	a.gwCard(c, p, "plans", "Plans & Quotas", iconSliders, func() {
 		tag(c, p, fmt.Sprintf("%d plans", len(plans)))
 	}, func() {
 		if len(plans) == 0 {
+			// A gateway that is off answers with no plans at all: say the
+			// state is unavailable, not that none are configured.
+			if !st.gwStatus.Enabled {
+				ui.Text(c, "Plans unavailable: the gateway is off, so plan and quota state is not reported.").
+					FontSize(13).TextColor(p.muted).FillWidth()
+				return
+			}
 			ui.Text(c, "No plans loaded yet. Stage YAML plans under ~/.crabbro/gateway/plans/ and run crabbro config commit.").
 				FontSize(13).TextColor(p.muted).FillWidth()
 			return
@@ -91,14 +101,18 @@ func (a *app) gwPlansCard(c *ui.Context, p *palette, plans []api.GatewayPlanStat
 					if !pl.Enabled {
 						tag(c, p, "disabled")
 					} else if pl.Healthy {
-						stateDot(c, p, p.added, "Healthy")
+						// Healthy only means no plan-level cooldown: the API
+						// reports no provider or per-model verdict here.
+						stateDot(c, p, p.added, "Plan not cooling")
 					} else {
-						lbl := "Cooling"
+						lbl := "Plan cooling"
 						if pl.CooldownUntil != nil {
 							rem := time.Until(*pl.CooldownUntil).Truncate(time.Second)
 							if rem > 0 {
-								lbl = fmt.Sprintf("Cooling (%s)", rem)
+								lbl = fmt.Sprintf("Plan cooling (%s left)", rem)
 							}
+						} else {
+							lbl = "Plan cooling (time not reported)"
 						}
 						stateDot(c, p, p.removed, lbl)
 					}
@@ -125,13 +139,21 @@ func (a *app) gwPlansCard(c *ui.Context, p *palette, plans []api.GatewayPlanStat
 					}
 				})
 				if pl.LastError != "" {
-					ui.Text(c, pl.LastError).FontSize(11.5).Font(mono()).TextColor(p.removed).FillWidth()
+					// LastError survives its cooldown and carries no time or
+					// model: label it as the historical reason it is, never
+					// as a live failure of a plan shown as fine.
+					ui.Text(c.Key("gw-plan-err:"+pl.ID),
+						fmt.Sprintf("Last cooldown reason (historical, time & model not reported): %s", pl.LastError)).
+						FontSize(11.5).Font(mono()).TextColor(p.removed).FillWidth()
 				}
 				for wi, w := range pl.Windows {
 					a.gwWindowBar(c, p, fmt.Sprintf("%s:%d", pl.ID, wi), w)
 				}
 			})
 		}
+		hairline(c, p)
+		ui.Text(c, "Plan state above is plan-level cooldown only; model-level cooldowns are not reported, so a plan not cooling may still hold cooling models.").
+			FontSize(11.5).TextColor(p.faint).FillWidth()
 	})
 }
 
