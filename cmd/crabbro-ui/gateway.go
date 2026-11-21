@@ -2,13 +2,72 @@ package main
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/egoist/mygo/ui"
 
 	"github.com/lidessen/crabbro/pkg/api"
 )
+
+const (
+	gwReasonDisplayRunes = 120
+	gwRedactedReason     = "[REDACTED]"
+)
+
+var (
+	gwBearerPattern   = regexp.MustCompile(`(?i)\bbearer\s+[^\s,;]+`)
+	gwAPIKeyPattern   = regexp.MustCompile(`(?i)\bsk-[a-z0-9_-]+`)
+	gwEmailPattern    = regexp.MustCompile(`(?i)\b[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}\b`)
+	gwKeyValuePattern = regexp.MustCompile(
+		`(?i)\b(api[_-]?key|key|access[_-]?token|auth[_-]?token|token|secret|password|passwd|authorization)["']?\s*[=:]\s*["']?[^\s"'&,;]+["']?`)
+)
+
+// gwSafeReason is the UI's last line of defense for LastError text: even if a
+// caller hands the card an unsanitized snapshot, control characters, newlines,
+// secret-like tokens, emails, and unbounded payloads never reach rendered
+// text.
+func gwSafeReason(reason string) string {
+	// Run to a fixed point so an already router-sanitized reason is stable
+	// and a truncation that lands inside a marker is cleaned up.
+	for i := 0; i < 4; i++ {
+		next := gwSanitizeReasonOnce(reason)
+		if next == reason {
+			return reason
+		}
+		reason = next
+	}
+	return reason
+}
+
+func gwSanitizeReasonOnce(reason string) string {
+	reason = strings.Join(strings.Fields(strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.IsSpace(r) {
+			return ' '
+		}
+		return r
+	}, reason)), " ")
+	reason = gwBearerPattern.ReplaceAllString(reason, "Bearer "+gwRedactedReason)
+	reason = gwAPIKeyPattern.ReplaceAllString(reason, gwRedactedReason)
+	reason = gwEmailPattern.ReplaceAllString(reason, gwRedactedReason)
+	reason = gwKeyValuePattern.ReplaceAllString(reason, "$1="+gwRedactedReason)
+	reason = strings.Join(strings.Fields(reason), " ")
+	runes := []rune(reason)
+	if len(runes) <= gwReasonDisplayRunes {
+		return reason
+	}
+	head := string(runes[:gwReasonDisplayRunes-3])
+	if i := strings.LastIndex(head, " "); i > len(head)/2 {
+		head = head[:i]
+	}
+	// Do not end on a half-written redaction marker.
+	if i := strings.LastIndex(head, "["); i >= 0 && !strings.Contains(head[i:], "]") {
+		head = strings.TrimRight(head[:i], " ")
+	}
+	return strings.TrimRight(head, " ") + "..."
+}
 
 func (a *app) gatewayPage(c *ui.Context, p *palette) {
 	st := a.snapshotState()
@@ -263,12 +322,14 @@ func (a *app) gwPlansCard(c *ui.Context, p *palette, st store) {
 							Padding(2, 7).Radius(6).Background(p.text.Alpha(0.06)).SingleLine()
 					}
 				})
-				if pl.LastError != "" {
+				if reason := gwSafeReason(pl.LastError); reason != "" {
 					// LastError survives its cooldown and carries no time or
 					// model: label it as the historical reason it is, never
-					// as a live failure of a plan shown as fine.
+					// as a live failure of a plan shown as fine. The reason
+					// is sanitized here as well as in the router so raw
+					// snapshot text never reaches the frame.
 					ui.Text(c.Key("gw-plan-err:"+pl.ID),
-						fmt.Sprintf("Last cooldown reason (historical, time & model not reported): %s", pl.LastError)).
+						fmt.Sprintf("Last cooldown reason (historical, time & model not reported): %s", reason)).
 						FontSize(11.5).Font(mono()).TextColor(p.removed).FillWidth()
 				}
 				for wi, w := range pl.Windows {

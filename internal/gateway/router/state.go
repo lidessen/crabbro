@@ -4,11 +4,79 @@ package router
 
 import (
 	"container/list"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
-const defaultSessionCacheCap = 4096
+const (
+	defaultSessionCacheCap = 4096
+	maxReasonRunes         = 120
+	redactedReasonToken    = "[REDACTED]"
+)
+
+var (
+	reasonBearerPattern   = regexp.MustCompile(`(?i)\bbearer\s+[^\s,;]+`)
+	reasonAPIKeyPattern   = regexp.MustCompile(`(?i)\bsk-[a-z0-9_-]+`)
+	reasonEmailPattern    = regexp.MustCompile(`(?i)\b[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}\b`)
+	reasonKeyValuePattern = regexp.MustCompile(
+		`(?i)\b(api[_-]?key|key|access[_-]?token|auth[_-]?token|token|secret|password|passwd|authorization)["']?\s*[=:]\s*["']?[^\s"'&,;]+["']?`)
+)
+
+// SanitizeReason turns an arbitrary failure reason into a single-line,
+// bounded summary that is safe to store in health state and render in the UI.
+// It strips control characters and newlines, redacts secret-like tokens and
+// email addresses, collapses whitespace, and caps the result at 120 runes.
+// Classification already emits deterministic summaries; this helper is the
+// defense for direct callers that pass free-form text.
+func SanitizeReason(reason string) string {
+	// Truncation can cut inside a redaction marker or leave a bare key= tail;
+	// repeating the pass until stable keeps stored reasons stable across
+	// repeated Snapshot calls.
+	for i := 0; i < 4; i++ {
+		next := sanitizeReasonOnce(reason)
+		if next == reason {
+			return reason
+		}
+		reason = next
+	}
+	return reason
+}
+
+func sanitizeReasonOnce(reason string) string {
+	reason = strings.Join(strings.Fields(strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.IsSpace(r) {
+			return ' '
+		}
+		return r
+	}, reason)), " ")
+	reason = reasonBearerPattern.ReplaceAllString(reason, "Bearer "+redactedReasonToken)
+	reason = reasonAPIKeyPattern.ReplaceAllString(reason, redactedReasonToken)
+	reason = reasonEmailPattern.ReplaceAllString(reason, redactedReasonToken)
+	reason = reasonKeyValuePattern.ReplaceAllString(reason, "$1="+redactedReasonToken)
+	reason = strings.Join(strings.Fields(reason), " ")
+	return truncateReason(reason, maxReasonRunes)
+}
+
+// truncateReason caps reason at limit runes, cutting on a word boundary when
+// one is close enough to the cap and marking the cut with an ellipsis.
+func truncateReason(reason string, limit int) string {
+	runes := []rune(reason)
+	if len(runes) <= limit {
+		return reason
+	}
+	head := string(runes[:limit-3])
+	if i := strings.LastIndex(head, " "); i > len(head)/2 {
+		head = head[:i]
+	}
+	// Do not end on a half-written redaction marker.
+	if i := strings.LastIndex(head, "["); i >= 0 && !strings.Contains(head[i:], "]") {
+		head = strings.TrimRight(head[:i], " ")
+	}
+	return strings.TrimRight(head, " ") + "..."
+}
 
 // SessionCacheEntry tracks the last warm upstream target for a session.
 type SessionCacheEntry struct {
@@ -147,6 +215,7 @@ func (h *HealthStore) EnterPlanCooldown(planID, scope, reason string, dur time.D
 	if h == nil || planID == "" || dur <= 0 {
 		return
 	}
+	cleanReason := SanitizeReason(reason)
 	h.mu.Lock()
 	st := h.ensureLocked(planID)
 	until := now.Add(dur)
@@ -154,12 +223,12 @@ func (h *HealthStore) EnterPlanCooldown(planID, scope, reason string, dur time.D
 		st.cooldownUntil = until
 	}
 	st.cooldownScope = scope
-	st.lastError = reason
+	st.lastError = cleanReason
 	cb := h.OnChange
 	h.mu.Unlock()
 
 	if cb != nil {
-		cb(planID, "cooling", reason)
+		cb(planID, "cooling", cleanReason)
 	}
 }
 
@@ -168,13 +237,14 @@ func (h *HealthStore) EnterModelCooldown(planID, model, reason string, dur time.
 	if h == nil || planID == "" || model == "" || dur <= 0 {
 		return
 	}
+	cleanReason := SanitizeReason(reason)
 	h.mu.Lock()
 	st := h.ensureLocked(planID)
 	until := now.Add(dur)
 	if until.After(st.modelCool[model]) {
 		st.modelCool[model] = until
 	}
-	st.lastError = reason
+	st.lastError = cleanReason
 	h.mu.Unlock()
 }
 
@@ -310,7 +380,7 @@ func (h *HealthStore) Snapshot(planID string, now time.Time) PlanHealthSnapshot 
 	snap.InFlight = st.inFlight
 	snap.ErrorEWMA = st.errorEWMA
 	snap.LatencyEWMAMs = st.latencyEWMA
-	snap.LastError = st.lastError
+	snap.LastError = SanitizeReason(st.lastError)
 	if !st.cooldownUntil.IsZero() && now.Before(st.cooldownUntil) {
 		t := st.cooldownUntil
 		snap.Healthy = false

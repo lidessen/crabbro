@@ -21,17 +21,35 @@ const (
 
 // FailureClass describes how the executor should react to a failed attempt.
 type FailureClass struct {
-	Kind            string
-	Retryable       bool
-	ContextOnly     bool
-	CooldownScope   string // "" | "plan" | "model"
-	CooldownDur     time.Duration
-	CooldownLabel   string
-	Summary         string
+	Kind          string
+	Retryable     bool
+	ContextOnly   bool
+	CooldownScope string // "" | "plan" | "model"
+	CooldownDur   time.Duration
+	CooldownLabel string
+	Summary       string
+}
+
+// classifiedFailure builds a FailureClass whose Summary is a bounded,
+// client-safe classification. Upstream free text never enters Summary: the
+// classifier may inspect bodies and messages to choose a class, but only
+// deterministic summaries are stored in health state and shown in the UI.
+func classifiedFailure(kind string, retryable, contextOnly bool, scope string, dur time.Duration, label, summary string) FailureClass {
+	return FailureClass{
+		Kind:          kind,
+		Retryable:     retryable,
+		ContextOnly:   contextOnly,
+		CooldownScope: scope,
+		CooldownDur:   dur,
+		CooldownLabel: label,
+		Summary:       router.SanitizeReason(summary),
+	}
 }
 
 // ClassifyHTTPFailure implements the failure & cooldown matrix from docs/design/gateway.md §7.3.
 func ClassifyHTTPFailure(status int, body []byte, h http.Header, planID string, health *router.HealthStore) FailureClass {
+	// The body is inspected only to choose a class. No slice of it is ever
+	// copied into FailureClass.Summary.
 	lower := strings.ToLower(string(body))
 
 	switch status {
@@ -44,105 +62,48 @@ func ClassifyHTTPFailure(status int, body []byte, h http.Header, planID string, 
 			dur = 15 * time.Second
 		}
 		if strings.Contains(lower, "insufficient_quota") || strings.Contains(lower, "quota exceeded") || strings.Contains(lower, "credit balance") {
-			return FailureClass{
-				Kind:          ErrKindQuotaExhausted,
-				Retryable:     true,
-				CooldownScope: "plan",
-				CooldownDur:   maxDuration(dur, 5*time.Minute),
-				CooldownLabel: "plan:" + maxDuration(dur, 5*time.Minute).String(),
-				Summary:       "quota exhausted (429)",
-			}
+			dur = maxDuration(dur, 5*time.Minute)
+			return classifiedFailure(ErrKindQuotaExhausted, true, false, "plan", dur, "plan:"+dur.String(), "quota exhausted (429)")
 		}
-		return FailureClass{
-			Kind:          ErrKindRateLimit,
-			Retryable:     true,
-			CooldownScope: "plan",
-			CooldownDur:   dur,
-			CooldownLabel: "plan:" + dur.String(),
-			Summary:       "rate limited (429)",
-		}
+		return classifiedFailure(ErrKindRateLimit, true, false, "plan", dur, "plan:"+dur.String(), "rate limited (429)")
 	case http.StatusPaymentRequired:
-		return FailureClass{
-			Kind:          ErrKindQuotaExhausted,
-			Retryable:     true,
-			CooldownScope: "plan",
-			CooldownDur:   5 * time.Minute,
-			CooldownLabel: "plan:5m",
-			Summary:       "payment or quota required (402)",
-		}
-	case http.StatusUnauthorized, http.StatusForbidden:
-		return FailureClass{
-			Kind:          ErrKindAuthError,
-			Retryable:     true,
-			CooldownScope: "plan",
-			CooldownDur:   10 * time.Minute,
-			CooldownLabel: "plan:10m",
-			Summary:       "authentication/authorization rejected",
-		}
+		return classifiedFailure(ErrKindQuotaExhausted, true, false, "plan", 5*time.Minute, "plan:5m", "payment or quota required (402)")
+	case http.StatusUnauthorized:
+		return classifiedFailure(ErrKindAuthError, true, false, "plan", 10*time.Minute, "plan:10m", "upstream auth error (401)")
+	case http.StatusForbidden:
+		return classifiedFailure(ErrKindAuthError, true, false, "plan", 10*time.Minute, "plan:10m", "upstream permission denied (403)")
 	case http.StatusNotFound:
-		return FailureClass{
-			Kind:          ErrKindModelUnavailable,
-			Retryable:     true,
-			CooldownScope: "model",
-			CooldownDur:   10 * time.Minute,
-			CooldownLabel: "model:10m",
-			Summary:       "model or endpoint not found (404)",
-		}
+		return classifiedFailure(ErrKindModelUnavailable, true, false, "model", 10*time.Minute, "model:10m", "model or endpoint not found (404)")
 	case http.StatusBadRequest, http.StatusUnprocessableEntity:
 		if isContextOverflow(lower) {
-			return FailureClass{
-				Kind:        ErrKindContextOverflow,
-				Retryable:   true,
-				ContextOnly: true,
-				Summary:     "context length exceeded",
-			}
+			return classifiedFailure(ErrKindContextOverflow, true, true, "", 0, "", "context length exceeded")
 		}
 		if strings.Contains(lower, "model_not_found") || strings.Contains(lower, "does not exist") ||
 			(strings.Contains(lower, "response_format") && (strings.Contains(lower, "unavailable") || strings.Contains(lower, "unsupported") || strings.Contains(lower, "not support"))) {
-			return FailureClass{
-				Kind:          ErrKindModelUnavailable,
-				Retryable:     true,
-				CooldownScope: "model",
-				CooldownDur:   10 * time.Minute,
-				CooldownLabel: "model:10m",
-				Summary:       "model capability or endpoint unavailable",
-			}
+			return classifiedFailure(ErrKindModelUnavailable, true, false, "model", 10*time.Minute, "model:10m", "model capability or endpoint unavailable")
 		}
 		if strings.Contains(lower, "credit balance is too low") || strings.Contains(lower, "insufficient_quota") {
-			return FailureClass{
-				Kind:          ErrKindQuotaExhausted,
-				Retryable:     true,
-				CooldownScope: "plan",
-				CooldownDur:   5 * time.Minute,
-				CooldownLabel: "plan:5m",
-				Summary:       "quota exhausted",
-			}
+			return classifiedFailure(ErrKindQuotaExhausted, true, false, "plan", 5*time.Minute, "plan:5m", "quota exhausted")
 		}
-		return FailureClass{
-			Kind:      ErrKindClientBadRequest,
-			Retryable: false,
-			Summary:   "client bad request",
-		}
+		return classifiedFailure(ErrKindClientBadRequest, false, false, "", 0, "", "upstream invalid request ("+strconv.Itoa(status)+")")
 	default:
 		if status >= 500 || status == 0 {
-			return FailureClass{
-				Kind:          ErrKindUpstreamUnavailable,
-				Retryable:     true,
-				CooldownScope: "plan",
-				CooldownDur:   15 * time.Second,
-				CooldownLabel: "plan:15s",
-				Summary:       "upstream unavailable",
+			summary := "transport error"
+			if status >= 500 {
+				summary = "upstream server error (" + strconv.Itoa(status) + ")"
+			} else if strings.Contains(lower, "timeout") || strings.Contains(lower, "deadline exceeded") {
+				summary = "upstream timeout"
 			}
+			return classifiedFailure(ErrKindUpstreamUnavailable, true, false, "plan", 15*time.Second, "plan:15s", summary)
 		}
-		return FailureClass{
-			Kind:      ErrKindClientBadRequest,
-			Retryable: false,
-			Summary:   "upstream rejected request",
-		}
+		return classifiedFailure(ErrKindClientBadRequest, false, false, "", 0, "", "upstream rejected request ("+strconv.Itoa(status)+")")
 	}
 }
 
 // ClassifySSEFailure maps a fake-200 SSE error code/message onto FailureClass.
+// The code and message are inspected only to choose a class. Upstream free
+// text is never copied into FailureClass.Summary: a malicious or buggy
+// upstream can put API keys, prompts, or response dumps in either field.
 func ClassifySSEFailure(code, msg, planID string, health *router.HealthStore) FailureClass {
 	combined := strings.ToLower(code + " " + msg)
 	switch {
@@ -151,57 +112,17 @@ func ClassifySSEFailure(code, msg, planID string, health *router.HealthStore) Fa
 		if health != nil {
 			dur = health.NextRateLimitBackoff(planID)
 		}
-		return FailureClass{
-			Kind:          ErrKindRateLimit,
-			Retryable:     true,
-			CooldownScope: "plan",
-			CooldownDur:   dur,
-			CooldownLabel: "plan:" + dur.String(),
-			Summary:       msg,
-		}
+		return classifiedFailure(ErrKindRateLimit, true, false, "plan", dur, "plan:"+dur.String(), "upstream SSE error (rate_limit)")
 	case strings.Contains(combined, "quota") || strings.Contains(combined, "credit") || strings.Contains(combined, "balance"):
-		return FailureClass{
-			Kind:          ErrKindQuotaExhausted,
-			Retryable:     true,
-			CooldownScope: "plan",
-			CooldownDur:   5 * time.Minute,
-			CooldownLabel: "plan:5m",
-			Summary:       msg,
-		}
+		return classifiedFailure(ErrKindQuotaExhausted, true, false, "plan", 5*time.Minute, "plan:5m", "upstream SSE error (quota_exhausted)")
 	case strings.Contains(combined, "auth") || strings.Contains(combined, "invalid_api_key") || strings.Contains(combined, "permission"):
-		return FailureClass{
-			Kind:          ErrKindAuthError,
-			Retryable:     true,
-			CooldownScope: "plan",
-			CooldownDur:   10 * time.Minute,
-			CooldownLabel: "plan:10m",
-			Summary:       msg,
-		}
+		return classifiedFailure(ErrKindAuthError, true, false, "plan", 10*time.Minute, "plan:10m", "upstream SSE error (auth_error)")
 	case isContextOverflow(combined):
-		return FailureClass{
-			Kind:        ErrKindContextOverflow,
-			Retryable:   true,
-			ContextOnly: true,
-			Summary:     msg,
-		}
+		return classifiedFailure(ErrKindContextOverflow, true, true, "", 0, "", "context length exceeded")
 	case strings.Contains(combined, "model_not_found"):
-		return FailureClass{
-			Kind:          ErrKindModelUnavailable,
-			Retryable:     true,
-			CooldownScope: "model",
-			CooldownDur:   10 * time.Minute,
-			CooldownLabel: "model:10m",
-			Summary:       msg,
-		}
+		return classifiedFailure(ErrKindModelUnavailable, true, false, "model", 10*time.Minute, "model:10m", "model or endpoint not found")
 	default:
-		return FailureClass{
-			Kind:          ErrKindUpstreamUnavailable,
-			Retryable:     true,
-			CooldownScope: "plan",
-			CooldownDur:   15 * time.Second,
-			CooldownLabel: "plan:15s",
-			Summary:       msg,
-		}
+		return classifiedFailure(ErrKindUpstreamUnavailable, true, false, "plan", 15*time.Second, "plan:15s", "upstream SSE error")
 	}
 }
 

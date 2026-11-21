@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/egoist/mygo/ui"
 
@@ -172,5 +175,59 @@ func TestGatewayPlansCardDistinguishesOffFromNoneConfigured(t *testing.T) {
 	}
 	if !tt.HasText("~/.crabbro/gateway/plans/") {
 		t.Error("the card should still name where plans live, without asserting that directory is empty")
+	}
+}
+
+// gwLastReasonText returns the rendered historical reason line, if any.
+func gwLastReasonText(tt *ui.Tester) string {
+	for _, text := range tt.Texts() {
+		if strings.HasPrefix(text, "Last cooldown reason") {
+			return text
+		}
+	}
+	return ""
+}
+
+// A plan status answer may carry raw LastError text even though the router
+// sanitizes it. The UI boundary must redact secret-like tokens and emails,
+// flatten control characters, and cap the displayed reason.
+func TestGatewayPlansCardSanitizesLastErrorAtBoundary(t *testing.T) {
+	st := gwPlanStore(time.Now().Add(90 * time.Second))
+	st.gwPlans[0].LastError = "<html><body>sk-abc123456789012345 Bearer secret-token-value " +
+		"user@example.com\nhttps://upstream.example/v1/chat?api_key=leaked-token&key=secondary-leak " +
+		strings.Repeat("<div>response dump</div>", 64) + "UPSTREAM-BODY-MARKER</body></html>"
+
+	tt := gwFrame(t, st)
+	reason := gwLastReasonText(tt)
+	if reason == "" {
+		t.Fatal("expected a historical cooldown reason line")
+	}
+	for _, banned := range []string{"sk-abc123456789012345", "secret-token-value", "user@example.com", "api_key=leaked-token", "key=secondary-leak", "UPSTREAM-BODY-MARKER", "\n", "\r", "\t"} {
+		if strings.Contains(reason, banned) {
+			t.Errorf("rendered reason %q leaked %q", reason, banned)
+		}
+	}
+	for _, r := range reason {
+		if unicode.IsControl(r) {
+			t.Errorf("rendered reason %q contains control character %U", reason, r)
+		}
+	}
+	if n := utf8.RuneCountInString(reason); n > 200 {
+		t.Errorf("rendered reason is %d runes, want a bounded display: %q", n, reason)
+	}
+	if !strings.Contains(reason, "[REDACTED]") {
+		t.Errorf("rendered reason %q should show a redaction marker", reason)
+	}
+}
+
+// A reason that sanitizes to nothing must not render an empty labeled line.
+func TestGatewayPlansCardSkipsBlankLastError(t *testing.T) {
+	st := gwPlanStore(time.Now().Add(90 * time.Second))
+	for i := range st.gwPlans {
+		st.gwPlans[i].LastError = " \n\t\x00 "
+	}
+	tt := gwFrame(t, st)
+	if reason := gwLastReasonText(tt); reason != "" {
+		t.Errorf("blank LastError should not render a reason line, got %q", reason)
 	}
 }
