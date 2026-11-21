@@ -12,61 +12,65 @@ import (
 	"github.com/lidessen/crabbro/pkg/api"
 )
 
-const (
-	gwReasonDisplayRunes = 120
-	gwRedactedReason     = "[REDACTED]"
-)
+const gwUnclassifiedReason = "unclassified failure (details omitted)"
 
 var (
-	gwBearerPattern   = regexp.MustCompile(`(?i)\bbearer\s+[^\s,;]+`)
-	gwAPIKeyPattern   = regexp.MustCompile(`(?i)\bsk-[a-z0-9_-]+`)
-	gwEmailPattern    = regexp.MustCompile(`(?i)\b[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}\b`)
-	gwKeyValuePattern = regexp.MustCompile(
-		`(?i)\b(api[_-]?key|key|access[_-]?token|auth[_-]?token|token|secret|password|passwd|authorization)["']?\s*[=:]\s*["']?[^\s"'&,;]+["']?`)
+	// gwClassifiedReasons mirrors the closed set of fixed summaries emitted
+	// by internal/gateway/executor/classify.go. The UI keeps its own copy as
+	// the last line of defense, so anything else becomes a fixed marker.
+	gwClassifiedReasons = map[string]struct{}{
+		"rate limited (429)":                       {},
+		"quota exhausted":                          {},
+		"quota exhausted (429)":                    {},
+		"payment or quota required (402)":          {},
+		"upstream auth error (401)":                {},
+		"upstream permission denied (403)":         {},
+		"model or endpoint not found":              {},
+		"model or endpoint not found (404)":        {},
+		"model capability or endpoint unavailable": {},
+		"context length exceeded":                  {},
+		"upstream timeout":                         {},
+		"transport error":                          {},
+		"mid-stream drop":                          {},
+		"upstream SSE error":                       {},
+		"upstream SSE error (rate_limit)":          {},
+		"upstream SSE error (quota_exhausted)":     {},
+		"upstream SSE error (auth_error)":          {},
+		"429 rate limited":                         {},
+		"insufficient balance":                     {},
+	}
+	gwClassifiedReasonPatterns = []*regexp.Regexp{
+		regexp.MustCompile(`^upstream invalid request \(\d{3}\)$`),
+		regexp.MustCompile(`^upstream rejected request \(\d{3}\)$`),
+		regexp.MustCompile(`^upstream server error \(\d{3}\)$`),
+	}
 )
 
 // gwSafeReason is the UI's last line of defense for LastError text: even if a
-// caller hands the card an unsanitized snapshot, control characters, newlines,
-// secret-like tokens, emails, and unbounded payloads never reach rendered
-// text.
+// caller hands the card an unsanitized snapshot, only the gateway classifier's
+// fixed summaries reach rendered text. Whitespace and control characters are
+// normalized first; an empty result stays empty. Any other non-empty input,
+// including bodies, credentials, URLs, prompts, and emails, becomes a fixed
+// unclassified marker and is never echoed.
 func gwSafeReason(reason string) string {
-	// Run to a fixed point so an already router-sanitized reason is stable
-	// and a truncation that lands inside a marker is cleaned up.
-	for i := 0; i < 4; i++ {
-		next := gwSanitizeReasonOnce(reason)
-		if next == reason {
-			return reason
-		}
-		reason = next
-	}
-	return reason
-}
-
-func gwSanitizeReasonOnce(reason string) string {
 	reason = strings.Join(strings.Fields(strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) || unicode.IsSpace(r) {
 			return ' '
 		}
 		return r
 	}, reason)), " ")
-	reason = gwBearerPattern.ReplaceAllString(reason, "Bearer "+gwRedactedReason)
-	reason = gwAPIKeyPattern.ReplaceAllString(reason, gwRedactedReason)
-	reason = gwEmailPattern.ReplaceAllString(reason, gwRedactedReason)
-	reason = gwKeyValuePattern.ReplaceAllString(reason, "$1="+gwRedactedReason)
-	reason = strings.Join(strings.Fields(reason), " ")
-	runes := []rune(reason)
-	if len(runes) <= gwReasonDisplayRunes {
+	if reason == "" {
+		return ""
+	}
+	if _, ok := gwClassifiedReasons[reason]; ok {
 		return reason
 	}
-	head := string(runes[:gwReasonDisplayRunes-3])
-	if i := strings.LastIndex(head, " "); i > len(head)/2 {
-		head = head[:i]
+	for _, pattern := range gwClassifiedReasonPatterns {
+		if pattern.MatchString(reason) {
+			return reason
+		}
 	}
-	// Do not end on a half-written redaction marker.
-	if i := strings.LastIndex(head, "["); i >= 0 && !strings.Contains(head[i:], "]") {
-		head = strings.TrimRight(head[:i], " ")
-	}
-	return strings.TrimRight(head, " ") + "..."
+	return gwUnclassifiedReason
 }
 
 func (a *app) gatewayPage(c *ui.Context, p *palette) {
@@ -249,8 +253,14 @@ func (a *app) gwPlansCard(c *ui.Context, p *palette, st store) {
 			// is a different fetch: only a fresh off status may explain it as
 			// the gateway being off, and no empty list proves none configured.
 			switch {
-			case gwOffNow(st):
+			case st.gwPlansFetch == gwFresh && gwOffNow(st):
 				ui.Text(c, "Plans unavailable: the gateway is off, so plan and quota state is not reported.").
+					FontSize(13).TextColor(p.muted).FillWidth()
+			case st.gwPlansFetch == gwStale && gwOffNow(st):
+				// The kept empty list predates the current off state: it was
+				// not freshly observed while the gateway is off, so it may
+				// never be explained by it.
+				ui.Text(c, "No plans in the kept answer: that empty list is stale and was not freshly observed while the gateway is off, so whether any plans are configured is not known from here.").
 					FontSize(13).TextColor(p.muted).FillWidth()
 			case st.gwStatusFetch != gwFresh:
 				// A kept or missing status cannot explain the empty list as
@@ -402,9 +412,15 @@ func (a *app) gwRoutesCard(c *ui.Context, p *palette, st store) {
 			// An off gateway answers the routes endpoint with an empty list
 			// whatever the config holds: only a fresh off status explains
 			// that, and no empty answer asserts an empty config.
-			if gwOffNow(st) {
+			switch {
+			case st.gwRoutesFetch == gwFresh && gwOffNow(st):
 				gwOffNote(c, p, "routes")
-			} else {
+			case st.gwRoutesFetch == gwStale && gwOffNow(st):
+				// A kept empty list was not freshly observed while the
+				// gateway is off, so the current off state does not explain it.
+				ui.Text(c, "No routes in the kept answer: that empty list is stale and routes were not freshly observed while the gateway is off, so whether any are configured is not known from here.").
+					FontSize(13).TextColor(p.muted).FillWidth()
+			default:
 				gwEmptyNote(c, p, "routes", "~/.crabbro/gateway/routes/")
 			}
 			return
@@ -456,11 +472,18 @@ type gwUsageWindowFact struct {
 	reported string
 }
 
-// match says the answered range is the selected one: the range asked for and
-// the range the answer named agree with the selection. An unnamed reported
-// range does not count as agreement, because the response cannot confirm it.
-func (w gwUsageWindowFact) match() bool {
-	return w.selected == w.asked && w.asked == w.reported
+// unconfirmed says the selected range was requested but the answer did not
+// name the window it covers, so the response itself cannot confirm the
+// selection.
+func (w gwUsageWindowFact) unconfirmed() bool {
+	return w.selected == w.asked && w.reported == ""
+}
+
+// mismatch says the numbers are not confirmed as the selected range's totals:
+// either the answer named another range, or the selected range was not the
+// one requested.
+func (w gwUsageWindowFact) mismatch() bool {
+	return (w.reported != "" && w.reported != w.selected) || w.asked != w.selected
 }
 
 // described is the range to name when saying what the numbers cover: the
@@ -477,7 +500,9 @@ func (a *app) gwUsageCard(c *ui.Context, p *palette, st store) {
 	selected := windowForIndex(a.gwUsageWinIdx)
 	win := gwUsageWindowFact{selected: selected, asked: st.gwUsageAsked, reported: usage.Window}
 	// Only an answered fetch leaves a range to describe at all.
-	mismatch := st.gwUsageFetch != gwUnknown && !win.match()
+	answered := st.gwUsageFetch != gwUnknown
+	mismatch := answered && win.mismatch()
+	unconfirmed := answered && win.unconfirmed()
 	a.gwCard(c, p, "usage", "Usage Ledger", iconClock, func() {
 		prev := a.gwUsageWinIdx
 		a.words(c, "gw-usage-win", &a.gwUsageWinIdx, "1h", "24h", "7d")
@@ -497,14 +522,26 @@ func (a *app) gwUsageCard(c *ui.Context, p *palette, st store) {
 		if st.gwUsageFetch == gwStale {
 			gwStaleNote(c, p, "usage")
 		}
-		if mismatch {
-			// The numbers and the selected range are not the same window.
-			// Name both rather than let one range's totals wear another's
-			// label; the new range's own answer has not arrived.
+		switch {
+		case mismatch && win.reported != "":
+			// The answer named another range: say both rather than let one
+			// range's totals wear another's label.
 			ui.Text(c, fmt.Sprintf("Range mismatch: %s is selected, but these numbers are the last %s answer. They are not totals for the selected range.",
-				selected, win.described())).
+				selected, win.reported)).
 				FontSize(11.5).Font(mono()).TextColor(p.warning()).FillWidth()
-		} else {
+		case mismatch:
+			// The selected range was never requested, and the answer did not
+			// name the window it covers: neither side confirms the range.
+			ui.Text(c, fmt.Sprintf("Range mismatch: %s is selected, while this answer came from a %s request and did not name the window it covers; it is not confirmed as totals for the selected range.",
+				selected, win.asked)).
+				FontSize(11.5).Font(mono()).TextColor(p.warning()).FillWidth()
+		case unconfirmed:
+			// The selected range was requested, but the response did not
+			// name its own window, so agreement cannot be claimed.
+			ui.Text(c, fmt.Sprintf("Range unconfirmed: %s was selected and requested, but the response did not name the window it covers.",
+				selected)).
+				FontSize(11.5).Font(mono()).TextColor(p.warning()).FillWidth()
+		default:
 			a.fact(c, p, "Range", fmt.Sprintf("%s (as answered)", selected))
 		}
 		tot := usage.Totals
@@ -520,8 +557,17 @@ func (a *app) gwUsageCard(c *ui.Context, p *palette, st store) {
 			// the answered range only — not none recorded anywhere, and not
 			// none in the selected range while the ranges differ.
 			switch {
-			case gwOffNow(st):
+			case st.gwUsageFetch == gwFresh && gwOffNow(st):
 				gwOffUsageNote(c, p, usage.Window)
+			case st.gwUsageFetch == gwStale && gwOffNow(st):
+				// The kept empty buckets were not freshly observed while the
+				// gateway is off, so the current off state does not explain
+				// them and they prove no absence of usage.
+				ui.Text(c, "No usage buckets in the kept answer: that empty list is a stale kept answer and was not freshly observed while the gateway is off, so whether any usage is recorded is not known from here.").
+					FontSize(13).TextColor(p.muted).FillWidth()
+			case unconfirmed:
+				ui.Text(c, "No usage buckets in this answer; the window it covers was not named in the response, and zero buckets does not prove none are recorded elsewhere.").
+					FontSize(13).TextColor(p.muted).FillWidth()
 			case mismatch:
 				ui.Text(c, fmt.Sprintf("No usage buckets in the %s answer; whether the selected %s range has any is not known yet.",
 					win.described(), selected)).FontSize(13).TextColor(p.muted).FillWidth()

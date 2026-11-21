@@ -188,35 +188,111 @@ func gwLastReasonText(tt *ui.Tester) string {
 	return ""
 }
 
-// A plan status answer may carry raw LastError text even though the router
-// sanitizes it. The UI boundary must redact secret-like tokens and emails,
-// flatten control characters, and cap the displayed reason.
-func TestGatewayPlansCardSanitizesLastErrorAtBoundary(t *testing.T) {
-	st := gwPlanStore(time.Now().Add(90 * time.Second))
-	st.gwPlans[0].LastError = "<html><body>sk-abc123456789012345 Bearer secret-token-value " +
-		"user@example.com\nhttps://upstream.example/v1/chat?api_key=leaked-token&key=secondary-leak " +
+// gwUnsafeReason is shaped like an upstream body: an HTML dump with a private
+// response, credential parameters, odd key prefixes, a fake API key, a Bearer
+// token, an email, query tokens, newlines, and a large payload.
+func gwUnsafeReason() string {
+	return "<html><body>private response</body> sk-abc123456789012345 Bearer secret-token-value " +
+		"user@example.com ?credential=example-secret xsk-example\n" +
+		"https://upstream.example/v1/chat?api_key=leaked-token&key=secondary-leak " +
 		strings.Repeat("<div>response dump</div>", 64) + "UPSTREAM-BODY-MARKER</body></html>"
+}
+
+// The UI boundary allows only the classifier's fixed summaries. A plan status
+// answer carrying raw LastError text must render the fixed unclassified marker
+// and never echo any body, credential, email, URL, or prompt fragment.
+func TestGatewayPlansCardRejectsUnrecognizedLastErrorAtBoundary(t *testing.T) {
+	st := gwPlanStore(time.Now().Add(90 * time.Second))
+	st.gwPlans[0].LastError = strings.Join([]string{
+		"<body>private response</body>",
+		"?credential=example-secret",
+		"xsk-example",
+		"sk-abc123456789012345",
+		"Bearer secret-token-value",
+		"user@example.com",
+	}, " ")
+	st.gwPlans[1].LastError = gwUnsafeReason()
 
 	tt := gwFrame(t, st)
-	reason := gwLastReasonText(tt)
-	if reason == "" {
-		t.Fatal("expected a historical cooldown reason line")
-	}
-	for _, banned := range []string{"sk-abc123456789012345", "secret-token-value", "user@example.com", "api_key=leaked-token", "key=secondary-leak", "UPSTREAM-BODY-MARKER", "\n", "\r", "\t"} {
-		if strings.Contains(reason, banned) {
-			t.Errorf("rendered reason %q leaked %q", reason, banned)
+	want := "Last cooldown reason (historical, time & model not reported): " + gwUnclassifiedReason
+	reasons := 0
+	for _, text := range tt.Texts() {
+		for _, banned := range []string{
+			"private response", "credential=example-secret", "xsk-example",
+			"sk-abc123456789012345", "secret-token-value", "user@example.com",
+			"api_key=leaked-token", "key=secondary-leak", "UPSTREAM-BODY-MARKER",
+			"<html", "<body", "https://", "\n", "\r", "\t",
+		} {
+			if strings.Contains(text, banned) {
+				t.Errorf("rendered text %q leaked %q", text, banned)
+			}
+		}
+		for _, r := range text {
+			if unicode.IsControl(r) {
+				t.Errorf("rendered text %q contains control character %U", text, r)
+			}
+		}
+		if !strings.HasPrefix(text, "Last cooldown reason") {
+			continue
+		}
+		reasons++
+		if text != want {
+			t.Errorf("rendered reason = %q, want %q", text, want)
+		}
+		if n := utf8.RuneCountInString(text); n > 200 {
+			t.Errorf("rendered reason is %d runes, want a bounded display: %q", n, text)
 		}
 	}
-	for _, r := range reason {
-		if unicode.IsControl(r) {
-			t.Errorf("rendered reason %q contains control character %U", reason, r)
+	if reasons != len(st.gwPlans) {
+		t.Errorf("rendered %d historical reason lines, want %d", reasons, len(st.gwPlans))
+	}
+}
+
+// The UI allowlist is closed: every classified summary passes unchanged, and
+// anything else becomes the same fixed marker as the router's.
+func TestGatewaySafeReasonAllowsOnlyClassifiedSummaries(t *testing.T) {
+	allowed := []string{
+		"rate limited (429)",
+		"quota exhausted",
+		"quota exhausted (429)",
+		"payment or quota required (402)",
+		"upstream auth error (401)",
+		"upstream permission denied (403)",
+		"model or endpoint not found",
+		"model or endpoint not found (404)",
+		"model capability or endpoint unavailable",
+		"context length exceeded",
+		"upstream timeout",
+		"transport error",
+		"mid-stream drop",
+		"upstream SSE error",
+		"upstream SSE error (rate_limit)",
+		"upstream SSE error (quota_exhausted)",
+		"upstream SSE error (auth_error)",
+		"429 rate limited",
+		"insufficient balance",
+		"upstream invalid request (400)",
+		"upstream rejected request (418)",
+		"upstream server error (502)",
+	}
+	for _, reason := range allowed {
+		if got := gwSafeReason(reason); got != reason {
+			t.Errorf("gwSafeReason(%q) = %q, want the classified summary unchanged", reason, got)
 		}
 	}
-	if n := utf8.RuneCountInString(reason); n > 200 {
-		t.Errorf("rendered reason is %d runes, want a bounded display: %q", n, reason)
+	for _, reason := range []string{
+		"<body>private response</body>",
+		"?credential=example-secret",
+		"xsk-example",
+		"rate limited (429) please retry",
+		gwUnsafeReason(),
+	} {
+		if got := gwSafeReason(reason); got != gwUnclassifiedReason {
+			t.Errorf("gwSafeReason(%q) = %q, want %q", reason, got, gwUnclassifiedReason)
+		}
 	}
-	if !strings.Contains(reason, "[REDACTED]") {
-		t.Errorf("rendered reason %q should show a redaction marker", reason)
+	if got := gwSafeReason(" \n\t\x00 "); got != "" {
+		t.Errorf("blank reason = %q, want empty", got)
 	}
 }
 

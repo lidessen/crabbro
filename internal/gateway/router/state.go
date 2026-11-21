@@ -13,69 +13,78 @@ import (
 
 const (
 	defaultSessionCacheCap = 4096
-	maxReasonRunes         = 120
-	redactedReasonToken    = "[REDACTED]"
+	// unclassifiedReason is the only text stored or shown when a reason is
+	// not one of the classifier's fixed summaries. No part of the input is
+	// echoed: it may hold upstream bodies, credentials, or prompts.
+	unclassifiedReason = "unclassified failure (details omitted)"
 )
 
 var (
-	reasonBearerPattern   = regexp.MustCompile(`(?i)\bbearer\s+[^\s,;]+`)
-	reasonAPIKeyPattern   = regexp.MustCompile(`(?i)\bsk-[a-z0-9_-]+`)
-	reasonEmailPattern    = regexp.MustCompile(`(?i)\b[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}\b`)
-	reasonKeyValuePattern = regexp.MustCompile(
-		`(?i)\b(api[_-]?key|key|access[_-]?token|auth[_-]?token|token|secret|password|passwd|authorization)["']?\s*[=:]\s*["']?[^\s"'&,;]+["']?`)
+	// classifiedReasons is the closed set of fixed summaries emitted by
+	// internal/gateway/executor/classify.go. Anything not in this set and
+	// not matching classifiedReasonPatterns is unclassified.
+	classifiedReasons = map[string]struct{}{
+		"rate limited (429)":                       {},
+		"quota exhausted":                          {},
+		"quota exhausted (429)":                    {},
+		"payment or quota required (402)":          {},
+		"upstream auth error (401)":                {},
+		"upstream permission denied (403)":         {},
+		"model or endpoint not found":              {},
+		"model or endpoint not found (404)":        {},
+		"model capability or endpoint unavailable": {},
+		"context length exceeded":                  {},
+		"upstream timeout":                         {},
+		"transport error":                          {},
+		"mid-stream drop":                          {},
+		"upstream SSE error":                       {},
+		"upstream SSE error (rate_limit)":          {},
+		"upstream SSE error (quota_exhausted)":     {},
+		"upstream SSE error (auth_error)":          {},
+		"429 rate limited":                         {},
+		"insufficient balance":                     {},
+	}
+	// classifiedReasonPatterns allows only the classifier's parameterized
+	// status-code summaries; the digits are the sole variable part.
+	classifiedReasonPatterns = []*regexp.Regexp{
+		regexp.MustCompile(`^upstream invalid request \(\d{3}\)$`),
+		regexp.MustCompile(`^upstream rejected request \(\d{3}\)$`),
+		regexp.MustCompile(`^upstream server error \(\d{3}\)$`),
+	}
 )
 
-// SanitizeReason turns an arbitrary failure reason into a single-line,
-// bounded summary that is safe to store in health state and render in the UI.
-// It strips control characters and newlines, redacts secret-like tokens and
-// email addresses, collapses whitespace, and caps the result at 120 runes.
-// Classification already emits deterministic summaries; this helper is the
-// defense for direct callers that pass free-form text.
+// SanitizeReason restricts an arbitrary failure reason to the fixed summaries
+// the gateway classifier emits, so it is safe to store in health state and
+// render in the UI. Whitespace and control characters are normalized first;
+// an empty result stays empty. Any non-empty input outside the allowlist
+// becomes unclassifiedReason, and no substring of the input is copied into
+// the result, so upstream bodies, credentials, URLs, prompts, and emails
+// cannot pass through.
 func SanitizeReason(reason string) string {
-	// Truncation can cut inside a redaction marker or leave a bare key= tail;
-	// repeating the pass until stable keeps stored reasons stable across
-	// repeated Snapshot calls.
-	for i := 0; i < 4; i++ {
-		next := sanitizeReasonOnce(reason)
-		if next == reason {
+	reason = normalizeReason(reason)
+	if reason == "" {
+		return ""
+	}
+	if _, ok := classifiedReasons[reason]; ok {
+		return reason
+	}
+	for _, pattern := range classifiedReasonPatterns {
+		if pattern.MatchString(reason) {
 			return reason
 		}
-		reason = next
 	}
-	return reason
+	return unclassifiedReason
 }
 
-func sanitizeReasonOnce(reason string) string {
-	reason = strings.Join(strings.Fields(strings.Map(func(r rune) rune {
+// normalizeReason collapses whitespace and control characters into single
+// spaces and trims both ends.
+func normalizeReason(reason string) string {
+	return strings.Join(strings.Fields(strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) || unicode.IsSpace(r) {
 			return ' '
 		}
 		return r
 	}, reason)), " ")
-	reason = reasonBearerPattern.ReplaceAllString(reason, "Bearer "+redactedReasonToken)
-	reason = reasonAPIKeyPattern.ReplaceAllString(reason, redactedReasonToken)
-	reason = reasonEmailPattern.ReplaceAllString(reason, redactedReasonToken)
-	reason = reasonKeyValuePattern.ReplaceAllString(reason, "$1="+redactedReasonToken)
-	reason = strings.Join(strings.Fields(reason), " ")
-	return truncateReason(reason, maxReasonRunes)
-}
-
-// truncateReason caps reason at limit runes, cutting on a word boundary when
-// one is close enough to the cap and marking the cut with an ellipsis.
-func truncateReason(reason string, limit int) string {
-	runes := []rune(reason)
-	if len(runes) <= limit {
-		return reason
-	}
-	head := string(runes[:limit-3])
-	if i := strings.LastIndex(head, " "); i > len(head)/2 {
-		head = head[:i]
-	}
-	// Do not end on a half-written redaction marker.
-	if i := strings.LastIndex(head, "["); i >= 0 && !strings.Contains(head[i:], "]") {
-		head = strings.TrimRight(head[:i], " ")
-	}
-	return strings.TrimRight(head, " ") + "..."
 }
 
 // SessionCacheEntry tracks the last warm upstream target for a session.

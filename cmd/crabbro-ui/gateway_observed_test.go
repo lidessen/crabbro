@@ -251,3 +251,159 @@ func TestGatewayEmptyUsageOnEnabledGatewayScopesItsClaim(t *testing.T) {
 		t.Error("an empty usage answer must not be read as no usage recorded at all")
 	}
 }
+
+// A kept empty plans answer that predates a fresh off status is not a fresh
+// observation of the off gateway: the card must say the list is stale and was
+// not freshly observed while the gateway is off, never blame it on the off
+// state.
+func TestGatewayStaleEmptyPlansBesideFreshOffStatus(t *testing.T) {
+	st := store{
+		conn:          connConnected,
+		gwStatusFetch: gwFresh,
+		gwStatus:      api.GatewayStatusResponse{Enabled: false},
+		gwPlansFetch:  gwStale,
+		gwPlans:       []api.GatewayPlanStatus{},
+	}
+	tt := gwFrame(t, st)
+	if !tt.HasText("the latest plans request failed") {
+		t.Error("the kept plans answer should be marked stale")
+	}
+	if !tt.HasText("that empty list is stale and was not freshly observed while the gateway is off") {
+		t.Error("a stale empty plans list beside a fresh off status must say it was not freshly observed while off")
+	}
+	if tt.HasText("Plans unavailable: the gateway is off") {
+		t.Error("a stale kept empty list must not be explained by the current off state")
+	}
+}
+
+// A kept empty routes answer beside a fresh off status was not freshly
+// observed while the gateway is off and must say so instead of borrowing the
+// off explanation.
+func TestGatewayStaleEmptyRoutesBesideFreshOffStatus(t *testing.T) {
+	st := store{
+		conn:          connConnected,
+		gwStatusFetch: gwFresh,
+		gwStatus:      api.GatewayStatusResponse{Enabled: false},
+		gwRoutesFetch: gwStale,
+		gwRoutes:      []api.GatewayRouteStatus{},
+	}
+	tt := gwFrame(t, st)
+	if !tt.HasText("the latest routes request failed") {
+		t.Error("the kept routes answer should be marked stale")
+	}
+	if !tt.HasText("that empty list is stale and routes were not freshly observed while the gateway is off") {
+		t.Error("a stale empty routes list beside a fresh off status must say it was not freshly observed while off")
+	}
+	if tt.HasText("No routes reported: the gateway is off") {
+		t.Error("a stale kept empty list must not be explained by the current off state")
+	}
+}
+
+// A kept empty usage answer beside a fresh off status is a stale kept answer,
+// not a fresh observation of the off gateway: zero buckets still prove no
+// absence of recorded usage.
+func TestGatewayStaleEmptyUsageBesideFreshOffStatus(t *testing.T) {
+	st := store{
+		conn:          connConnected,
+		gwStatusFetch: gwFresh,
+		gwStatus:      api.GatewayStatusResponse{Enabled: false},
+		gwUsageFetch:  gwStale,
+		gwUsageAsked:  "24h",
+		gwUsage:       api.GatewayUsageResponse{Window: "24h", Buckets: []api.GatewayUsageBucket{}},
+	}
+	tt := gwFrameApp(t, newAppForTest(st, 1))
+	if !tt.HasText("the latest usage request failed") {
+		t.Error("the kept usage answer should be marked stale")
+	}
+	if !tt.HasText("that empty list is a stale kept answer and was not freshly observed while the gateway is off") {
+		t.Error("a stale empty usage answer beside a fresh off status must say it was not freshly observed while off")
+	}
+	if tt.HasText("No usage reported: the gateway is off") {
+		t.Error("a stale kept empty list must not be explained by the current off state")
+	}
+}
+
+// The selected range was requested, but the answer did not name the window it
+// covers: agreement cannot be claimed, so the card says the range is
+// unconfirmed rather than labeling a mismatch it cannot prove.
+func TestGatewayUsageUnnamedWindowIsUnconfirmedNotMismatch(t *testing.T) {
+	st := store{
+		conn:          connConnected,
+		gwStatusFetch: gwFresh,
+		gwStatus:      api.GatewayStatusResponse{Enabled: true, ListenAddr: "127.0.0.1:8081"},
+		gwUsageFetch:  gwFresh,
+		gwUsageAsked:  "24h",
+		gwUsage: api.GatewayUsageResponse{
+			Window:  "",
+			Totals:  api.GatewayUsageBucket{Requests: 9, TotalTokens: 500},
+			Buckets: []api.GatewayUsageBucket{{Plan: "glm-coding", Model: "glm-4.7", Requests: 9}},
+		},
+	}
+	tt := gwFrameApp(t, newAppForTest(st, 1))
+	if !tt.HasText("Range unconfirmed: 24h was selected and requested, but the response did not name the window it covers.") {
+		t.Error("an unnamed answered window should be labeled unconfirmed")
+	}
+	if tt.HasText("Range mismatch") {
+		t.Error("an unnamed window with the selected range asked for must not be called a mismatch")
+	}
+	if tt.HasText("(as answered)") {
+		t.Error("an unnamed window must not be presented as the answered selected range")
+	}
+}
+
+// An unconfirmed empty answer may not be read as no usage anywhere: the card
+// says the window was unnamed and that zero buckets prove no absence.
+func TestGatewayUsageUnconfirmedEmptyBucketsDoNotProveNone(t *testing.T) {
+	st := store{
+		conn:          connConnected,
+		gwStatusFetch: gwFresh,
+		gwStatus:      api.GatewayStatusResponse{Enabled: true, ListenAddr: "127.0.0.1:8081"},
+		gwUsageFetch:  gwFresh,
+		gwUsageAsked:  "24h",
+		gwUsage:       api.GatewayUsageResponse{Window: "", Buckets: []api.GatewayUsageBucket{}},
+	}
+	tt := gwFrameApp(t, newAppForTest(st, 1))
+	if !tt.HasText("Range unconfirmed: 24h was selected and requested") {
+		t.Error("an unnamed answered window should be labeled unconfirmed")
+	}
+	if !tt.HasText("No usage buckets in this answer; the window it covers was not named in the response, and zero buckets does not prove none are recorded elsewhere.") {
+		t.Error("an unconfirmed empty answer must scope its claim to the unnamed window")
+	}
+	if tt.HasText("Range mismatch") {
+		t.Error("an unnamed window with the selected range asked for must not be called a mismatch")
+	}
+}
+
+// The selected range was never requested and the answer did not name its own
+// window: neither side confirms the range, so the card states both facts
+// rather than claiming the answer covers another named range.
+func TestGatewayUsageUnnamedWindowFromAnotherRequestIsMismatch(t *testing.T) {
+	st := store{
+		conn:          connConnected,
+		gwStatusFetch: gwFresh,
+		gwStatus:      api.GatewayStatusResponse{Enabled: true, ListenAddr: "127.0.0.1:8081"},
+		gwUsageFetch:  gwFresh,
+		gwUsageAsked:  "7d",
+		gwUsage: api.GatewayUsageResponse{
+			Window:  "",
+			Totals:  api.GatewayUsageBucket{Requests: 4, TotalTokens: 200},
+			Buckets: []api.GatewayUsageBucket{{Plan: "glm-coding", Model: "glm-4.7", Requests: 4}},
+		},
+	}
+	tt := gwFrameApp(t, newAppForTest(st, 1))
+	if !tt.HasText("Range mismatch") {
+		t.Error("a selected range that was never requested must be labeled a mismatch")
+	}
+	if !tt.HasText("came from a 7d request and did not name the window it covers") {
+		t.Error("the mismatch note should name the requested range and the unnamed window")
+	}
+	if !tt.HasText("it is not confirmed as totals for the selected range") {
+		t.Error("the mismatch note must say the numbers are not confirmed for the selected range")
+	}
+	if tt.HasText("Range unconfirmed") {
+		t.Error("a selected range that was never requested must not be called merely unconfirmed")
+	}
+	if tt.HasText("these numbers are the last") {
+		t.Error("an unnamed window must not be called the last answer for a named range")
+	}
+}
