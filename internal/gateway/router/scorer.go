@@ -198,6 +198,9 @@ func (r *Router) Select(ctx context.Context, snap *config.Snapshot, sig Signals)
 
 	// Stage 4: Sort descending by unified Total score, then target priority, then plan/model.
 	sort.SliceStable(eligible, func(i, j int) bool {
+		if rt.Policy.EffectivePreset() == config.PresetStrictFailover && !rt.Policy.PreferNative() && eligible[i].Target.Priority != eligible[j].Target.Priority {
+			return eligible[i].Target.Priority < eligible[j].Target.Priority
+		}
 		if math.Abs(eligible[i].Scores.Total-eligible[j].Scores.Total) > 1e-9 {
 			return eligible[i].Scores.Total > eligible[j].Scores.Total
 		}
@@ -421,7 +424,7 @@ func (r *Router) evalTargets(snap *config.Snapshot, rt *config.Route, sig Signal
 		cand.Endpoint = ep
 		cand.NativeProtocol = epProto == sig.Protocol
 		if rt.EffectiveFamily() == config.FamilyDecision {
-			if epProto == config.ProtocolTypeSafeJev {
+			if config.ProtocolFamily(epProto) == config.FamilyDecision {
 				cand.DecisionMode = "native"
 				cand.Calibrated = true
 			} else {
@@ -527,13 +530,13 @@ func chooseEndpoint(rt *config.Route, plan *config.Plan, tgt config.Target, ingr
 		if ep == nil {
 			return "", nil, "target endpointProtocol not found"
 		}
-		if fam == config.FamilyGenerative && tgt.EndpointProtocol == config.ProtocolTypeSafeJev {
+		if fam == config.FamilyGenerative && config.ProtocolFamily(tgt.EndpointProtocol) == config.FamilyDecision {
 			return "", nil, "generative route cannot use typesafe-jev"
 		}
-		if fam == config.FamilyDecision && tgt.EndpointProtocol != config.ProtocolTypeSafeJev && !rt.Policy.AllowEmulation {
+		if fam == config.FamilyDecision && config.ProtocolFamily(tgt.EndpointProtocol) != config.FamilyDecision && !rt.Policy.AllowEmulation {
 			return "", nil, "decision emulation disabled"
 		}
-		if fam == config.FamilyGenerative && tgt.EndpointProtocol != ingressProto && !rt.Policy.CrossProtocolAllowed() {
+		if tgt.EndpointProtocol != ingressProto && !rt.Policy.CrossProtocolAllowed() {
 			return "", nil, "cross-protocol bridging disabled"
 		}
 		return tgt.EndpointProtocol, ep, ""
@@ -544,8 +547,13 @@ func chooseEndpoint(rt *config.Route, plan *config.Plan, tgt config.Target, ingr
 		return ingressProto, ep, ""
 	}
 	if fam == config.FamilyDecision {
-		if ep := plan.Endpoints[config.ProtocolTypeSafeJev]; ep != nil {
-			return config.ProtocolTypeSafeJev, ep, ""
+		if !rt.Policy.CrossProtocolAllowed() {
+			return "", nil, "cross-protocol bridging disabled"
+		}
+		for _, p := range []string{config.ProtocolTypeSafeJev, config.ProtocolOpenAIDecisions} {
+			if ep := plan.Endpoints[p]; ep != nil {
+				return p, ep, ""
+			}
 		}
 		if !rt.Policy.AllowEmulation {
 			return "", nil, "no native typesafe-jev endpoint and allowEmulation=false"

@@ -67,7 +67,8 @@
         "openai-responses": { "$ref": "#/$defs/endpoint" },
         "anthropic": { "$ref": "#/$defs/endpoint" },
         "gemini": { "$ref": "#/$defs/endpoint" },
-        "typesafe-jev": { "$ref": "#/$defs/endpoint" }
+        "typesafe-jev": { "$ref": "#/$defs/endpoint" },
+        "openai-decisions": { "$ref": "#/$defs/endpoint" }
       }
     },
     "models": {

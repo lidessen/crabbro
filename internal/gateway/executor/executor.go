@@ -404,6 +404,18 @@ func (e *Executor) tryCandidate(
 	outBody := respBytes
 	var usage shared.TokenUsage
 	if !needBridge {
+		if cand.EndpointProto == config.ProtocolOpenAIDecisions {
+			dreq, decErr := codec.DecodeOpenAIDecisionsRequest(rawBody)
+			if decErr == nil {
+				_, decErr = codec.DecodeOpenAIDecisionsResponse(respBytes, dreq)
+			}
+			if decErr != nil {
+				fc := ClassifyHTTPFailure(http.StatusBadGateway, []byte(decErr.Error()), nil, cand.Plan.ID, e.health())
+				e.applyFailure(cand, fc, latMs, sel.Route.ID, sel.Signals.SessionKey, http.StatusBadGateway)
+				*attempts = append(*attempts, shared.GatewayAttempt{Plan: cand.Plan.ID, Model: cand.Target.Model, Protocol: cand.EndpointProto, Status: http.StatusBadGateway, ErrorKind: fc.Kind, ErrorMessage: decErr.Error(), LatencyMs: latMs})
+				return attemptOutcome{retryable: true, errMsg: decErr.Error()}
+			}
+		}
 		usage = codec.ExtractUsageJSON(cand.EndpointProto, respBytes)
 	} else {
 		var trErr error
@@ -648,12 +660,12 @@ func (e *Executor) ExecuteDecision(ctx context.Context, snap *config.Snapshot, r
 		}
 		resp, err := tr.RoundTrip(upReq)
 		timer.Stop()
-		cancelReq()
 		if e.health() != nil {
 			e.health().ReleaseInFlight(cand.Plan.ID)
 		}
 		latMs := time.Since(attStart).Milliseconds()
 		if err != nil {
+			cancelReq()
 			fc := ClassifyHTTPFailure(0, []byte(err.Error()), nil, cand.Plan.ID, e.health())
 			e.applyFailure(cand, fc, latMs, sel.Route.ID, "", 0)
 			attempts = append(attempts, shared.GatewayAttempt{
@@ -665,8 +677,13 @@ func (e *Executor) ExecuteDecision(ctx context.Context, snap *config.Snapshot, r
 			continue
 		}
 
-		respBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
+		respBytes, readErr := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
 		resp.Body.Close()
+		cancelReq()
+		if readErr != nil {
+			lastErr = readErr
+			continue
+		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			fc := ClassifyHTTPFailure(resp.StatusCode, respBytes, resp.Header, cand.Plan.ID, e.health())
 			e.applyFailure(cand, fc, latMs, sel.Route.ID, "", resp.StatusCode)
@@ -699,8 +716,8 @@ func (e *Executor) ExecuteDecision(ctx context.Context, snap *config.Snapshot, r
 				lastErr = err
 				continue
 			}
-			dresp.Calibrated = false
-			dresp.Mode = "emulated"
+			dresp.Calibrated = cand.Calibrated
+			dresp.Mode = cand.DecisionMode
 		}
 
 		attempts = append(attempts, shared.GatewayAttempt{

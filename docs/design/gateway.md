@@ -2,7 +2,7 @@
 
 Status: Implemented  
 Date: 2026-11-19  
-Scope: Prerequisite shared-core refactoring and an independent local LLM & Decision gateway subsystem inside `crabbrod` that aggregates API-key coding plans across `openai-chat`, `openai-responses`, `anthropic`, `gemini`, and `typesafe-jev`.
+Scope: Prerequisite shared-core refactoring and an independent local LLM & Decision gateway subsystem inside `crabbrod` that aggregates API-key coding plans across `openai-chat`, `openai-responses`, `anthropic`, `gemini`, `typesafe-jev`, and `openai-decisions`.
 
 Cross-references: [NETWORK_PIPELINE_DESIGN.md](../../NETWORK_PIPELINE_DESIGN.md), [rules.md](./rules.md), [plugins.md](./plugins.md), [ui-api.md](./ui-api.md), [gateway-plan.v1.json](../../schemas/gateway-plan.v1.json), [gateway-route.v1.json](../../schemas/gateway-route.v1.json).
 
@@ -14,7 +14,7 @@ Cross-references: [NETWORK_PIPELINE_DESIGN.md](../../NETWORK_PIPELINE_DESIGN.md)
 2. **Extract four shared core capabilities first.** Before adding gateway data-plane code, extract `internal/secret`, an `ExchangeSink` observation interface, a non-pruned quota ledger (`usage.db`), and unify `internal/decision` over the gateway's `decision` route.
 3. **Four orthogonal primitives.** Separate **Protocol** (wire codec), **Plan** (one API key + shared quota windows + 1..N protocol endpoints + declared model specs), **Route** (virtual model matching + scheduling policy + ordered targets), and **Profile** (`/p/{profile}/...` URL scope).
 4. **Never mutate external agent config files.** Clients (`Claude Code`, `Codex`, `OpenCode`, `Gemini CLI`, or custom tools) point their `*_BASE_URL` env var or setting at the gateway or a `/p/{profile}/` prefix. `crabbrod` never edits `~/.claude/settings.json` or `~/.codex/config.toml`.
-5. **Two semantic families across five wire codecs.** `openai-chat`, `openai-responses`, `anthropic`, and `gemini` belong to the **Generative** family; `typesafe-jev` belongs to the **Decision** family. `Generative -> typesafe-jev` is rejected at config validation time. `typesafe-jev -> Generative` is allowed as explicit, flagged emulation (`X-Crabbro-Decision-Mode: emulated`, `calibrated: false`).
+5. **Two semantic families across six wire codecs.** `openai-chat`, `openai-responses`, `anthropic`, and `gemini` belong to the **Generative** family; `typesafe-jev` and `openai-decisions` (`POST /v1/decisions`) belong to the **Decision** family and bridge through DecisionIR. `Generative -> Decision` is rejected at config validation time. `Decision -> Generative` is allowed as explicit, flagged emulation (`X-Crabbro-Decision-Mode: emulated`, `calibrated: false`).
 6. **Same-protocol Fast Path; IR Bridge only when protocols differ.** When `clientProtocol == chosenEndpoint.Protocol`, requests pass through with only a surgical top-level `"model"` JSON patch, static header/extraBody injection, and a read-only streaming `UsageTap`. Cross-protocol calls translate through `GenIR` or `DecisionIR -> GenIR` without an `N×N` converter matrix.
 7. **One unified multi-objective router (`Quality × Cache × Quota`).** Instead of magpie-style two-step `intent classifier -> soonest-reset account` routing that breaks prompt caches, every generative request runs a 4-stage pipeline: deterministic signal extraction (`0 ms`) -> optional cold-boundary semantic tiering -> hard constraint filtering -> unified utility scoring with full explainable trace.
 8. **True pre-commit failover with first-SSE-event peek.** Requests are buffered up to `DefaultMaxRequestBody` (32 MiB) so attempts can retry cleanly. For `text/event-stream` responses, the executor peeks the first meaningful SSE event *before* committing HTTP `200` downstream, catching providers that return HTTP `200` with an immediate rate-limit or quota error payload.
@@ -159,7 +159,7 @@ Unification plan:
 | `internal/gateway` | Listener (`:8081`), profile/path routing (`/p/{profile}/...`), `ExchangeSink` recording, lifecycle (`Start`/`Stop`) | Forward-proxy CONNECT/MITM, Goja/Node plugin evaluation |
 | `internal/gateway/config` | Plan & route YAML loading, Draft 2020-12 schema validation, cross-file checks, `draft/validate/commit/discard`, immutable `Snapshot` | Live cooldowns, token counters, HTTP transport |
 | `internal/gateway/ir` | Canonical `GenRequest`, `GenResponse`, `StreamEvent`, `TokenUsage`, `DecisionRequest`, `DecisionResponse`, `DecisionIR -> GenIR` adapter | Wire JSON serialization or vendor HTTP headers |
-| `internal/gateway/codec` | 5 wire codecs (`openai-chat`, `openai-responses`, `anthropic`, `gemini`, `typesafe-jev`): Fast Path `"model"` patcher + `UsageTap`, and Bridge Path `Decode`/`Encode`/stream state machines | Retry loops, plan selection, SQLite writes |
+| `internal/gateway/codec` | 6 wire codecs (`openai-chat`, `openai-responses`, `anthropic`, `gemini`, `typesafe-jev`, `openai-decisions`): Fast Path `"model"` patcher + `UsageTap`, and Bridge Path `Decode`/`Encode`/stream state machines | Retry loops, plan selection, SQLite writes |
 | `internal/gateway/router` | `SignalExtractor`, cold-boundary `SemanticTiering` hook, hard filters, `Quality × Cache × Quota` utility scorer, `SessionCacheStore` | HTTP round-trips, body buffering |
 | `internal/gateway/executor` | Request body buffering (`<= 32 MiB`), attempt loop, first-SSE-event peek, error classifier, cooldown manager, per-plan `http.Transport` pool | Scoring weights, YAML file I/O |
 | `internal/gateway/ledger` | `usage.db` SQLite store, rolling window aggregator, upstream rate-limit header calibration | Request body storage |
@@ -710,7 +710,7 @@ Using only `pkg/api` and `pkg/client` (no `internal/` imports):
 - Implement `internal/gateway/config` (YAML loader + Draft 2020-12 validation + `Snapshot` + `/v1/config/*?kind=gateway-plan|gateway-route`).
 - Implement `internal/gateway/ledger` (`usage.db` SQLite store + rolling window + rate-limit header calibration).
 - Implement `internal/gateway/router` (4-stage `SignalExtractor`, hard filters, `Quality × Cache × Quota` scorer, `SessionCacheStore`, `preview`).
-- Implement `internal/gateway/executor` (32 MiB request buffer, pre-commit retry loop, **First-SSE-Event Peek**, cooldowns, per-plan `proxyUrl` transports) and same-protocol Fast Path + `UsageTap` for `anthropic`, `openai-chat`, `openai-responses`, `gemini`, and `typesafe-jev`.
+- Implement `internal/gateway/executor` (32 MiB request buffer, pre-commit retry loop, **First-SSE-Event Peek**, cooldowns, per-plan `proxyUrl` transports) and same-protocol Fast Path + `UsageTap` for `anthropic`, `openai-chat`, `openai-responses`, `gemini`, `typesafe-jev`, and `openai-decisions`.
 - **Exit criteria:** Multi-plan failover, fake-200 SSE peek failover, cache-preserving sticky routing, and `crabbro requests show` / `crabbro gw usage` verified end-to-end with mock upstreams.
 
 ### Phase 3: Cross-Protocol Bridges and `internal/decision` Unification

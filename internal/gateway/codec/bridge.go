@@ -69,11 +69,6 @@ func (b *Bridge) BuildUpstreamBody(cand router.Candidate, ingress IngressInfo, r
 	if ingress.Action == "count_tokens" && cand.EndpointProto != config.ProtocolAnthropic {
 		return nil, nil, fmt.Errorf("count_tokens is only supported by native anthropic targets")
 	}
-	upCodec, err := codecFor(cand.EndpointProto)
-	if err != nil {
-		return nil, nil, err
-	}
-
 	st := &bridgeState{
 		ingressProto:   ingress.Protocol,
 		upstreamProto:  cand.EndpointProto,
@@ -82,12 +77,36 @@ func (b *Bridge) BuildUpstreamBody(cand router.Candidate, ingress IngressInfo, r
 	}
 
 	var greq *ir.GenRequest
+	var err error
 	if ingress.Family == config.FamilyDecision {
-		dreq, decErr := DecodeDecisionRequest(rawBody)
+		var dreq *ir.DecisionRequest
+		var decErr error
+		if ingress.Protocol == config.ProtocolOpenAIDecisions {
+			dreq, decErr = DecodeOpenAIDecisionsRequest(rawBody)
+		} else {
+			dreq, decErr = DecodeDecisionRequest(rawBody)
+		}
 		if decErr != nil {
 			return nil, nil, decErr
 		}
 		st.origDecisionReq = dreq
+		if config.ProtocolFamily(cand.EndpointProto) == config.FamilyDecision {
+			copyReq := *dreq
+			copyReq.Model = cand.Target.Model
+			var body []byte
+			if cand.EndpointProto == config.ProtocolOpenAIDecisions {
+				body, err = EncodeOpenAIDecisionsRequest(&copyReq)
+			} else {
+				body, err = EncodeDecisionRequest(&copyReq)
+			}
+			if err != nil {
+				return nil, nil, err
+			}
+			if cand.ModelSpec != nil {
+				body, err = PatchModelAndExtraBody(body, cand.EndpointProto, cand.Target.Model, cand.ModelSpec.ExtraBody)
+			}
+			return body, st, err
+		}
 		greq, err = ir.DecisionToGenRequest(dreq, cand.Target.Model)
 		if err != nil {
 			return nil, nil, err
@@ -111,6 +130,10 @@ func (b *Bridge) BuildUpstreamBody(cand router.Candidate, ingress IngressInfo, r
 	if cand.ModelSpec != nil && len(cand.ModelSpec.ExtraBody) > 0 {
 		greq.ExtraBody = cand.ModelSpec.ExtraBody
 	}
+	upCodec, err := codecFor(cand.EndpointProto)
+	if err != nil {
+		return nil, nil, err
+	}
 	upBody, err := upCodec.EncodeRequest(greq)
 	if err != nil {
 		return nil, nil, err
@@ -120,6 +143,21 @@ func (b *Bridge) BuildUpstreamBody(cand router.Candidate, ingress IngressInfo, r
 
 // TranslateResponse decodes the upstream response and re-encodes it into the ingress format.
 func (b *Bridge) TranslateResponse(cand router.Candidate, ingress IngressInfo, state any, status int, hdr http.Header, body []byte) (int, http.Header, []byte, shared.TokenUsage, error) {
+	if st, ok := state.(*bridgeState); ok && st.origDecisionReq != nil && config.ProtocolFamily(cand.EndpointProto) == config.FamilyDecision {
+		dresp, err := b.DecodeDecisionResponse(cand, state, body)
+		if err != nil {
+			return status, nil, nil, shared.TokenUsage{}, err
+		}
+		var out []byte
+		if ingress.Protocol == config.ProtocolOpenAIDecisions {
+			out, err = EncodeOpenAIDecisionsResponse(dresp)
+		} else {
+			out, err = EncodeDecisionResponse(dresp)
+		}
+		h := make(http.Header)
+		h.Set("Content-Type", "application/json")
+		return status, h, out, dresp.Usage, err
+	}
 	upCodec, err := codecFor(cand.EndpointProto)
 	if err != nil {
 		return status, nil, nil, shared.TokenUsage{}, err
@@ -140,7 +178,13 @@ func (b *Bridge) TranslateResponse(cand router.Candidate, ingress IngressInfo, s
 		if dErr != nil {
 			return status, nil, nil, gresp.Usage, dErr
 		}
-		outBody, eErr := EncodeDecisionResponse(dresp)
+		var outBody []byte
+		var eErr error
+		if ingress.Protocol == config.ProtocolOpenAIDecisions {
+			outBody, eErr = EncodeOpenAIDecisionsResponse(dresp)
+		} else {
+			outBody, eErr = EncodeDecisionResponse(dresp)
+		}
 		if eErr != nil {
 			return status, nil, nil, gresp.Usage, eErr
 		}
@@ -223,6 +267,24 @@ func (b *Bridge) DecodeDecisionResponse(cand router.Candidate, state any, body [
 	st, ok := state.(*bridgeState)
 	if !ok || st.origDecisionReq == nil {
 		return nil, fmt.Errorf("missing original decision request state")
+	}
+	if cand.EndpointProto == config.ProtocolOpenAIDecisions {
+		return DecodeOpenAIDecisionsResponse(body, st.origDecisionReq)
+	}
+	if cand.EndpointProto == config.ProtocolTypeSafeJev {
+		var d ir.DecisionResponse
+		if err := json.Unmarshal(body, &d); err != nil {
+			return nil, err
+		}
+		for k := range st.origDecisionReq.Questions {
+			if _, ok := d.Answers[k]; !ok {
+				return nil, fmt.Errorf("missing decision answer %q", k)
+			}
+		}
+		d.Mode = "native"
+		d.Calibrated = true
+		d.Usage = ExtractUsageJSON(cand.EndpointProto, body)
+		return &d, nil
 	}
 	upCodec, err := codecFor(cand.EndpointProto)
 	if err != nil {

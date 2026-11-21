@@ -67,6 +67,15 @@ func BuildUpstreamURL(baseURL, proto, action, targetModel, cleanQuery string, st
 		default:
 			suffix = "/v1/chat/completions"
 		}
+	case config.ProtocolOpenAIDecisions:
+		switch {
+		case strings.HasSuffix(basePath, "/decisions"):
+			suffix = basePath
+		case hasNonRootPath:
+			suffix = basePath + "/decisions"
+		default:
+			suffix = "/v1/decisions"
+		}
 	case config.ProtocolOpenAIResponses:
 		switch {
 		case strings.HasSuffix(basePath, "/responses"):

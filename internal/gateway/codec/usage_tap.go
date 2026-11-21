@@ -22,7 +22,7 @@ func ExtractUsageJSON(proto string, body []byte) shared.TokenUsage {
 		if json.Unmarshal(body, &doc) == nil && doc.Usage != nil {
 			return doc.Usage.toTokenUsage()
 		}
-	case config.ProtocolOpenAIResponses:
+	case config.ProtocolOpenAIResponses, config.ProtocolOpenAIDecisions:
 		var doc struct {
 			Usage *oaResponsesUsage `json:"usage"`
 		}
@@ -141,7 +141,7 @@ func (t *UsageTap) flushEvent() {
 			u := doc.Usage.toTokenUsage()
 			mergeMaxUsage(&t.usage, u)
 		}
-	case config.ProtocolOpenAIResponses:
+	case config.ProtocolOpenAIResponses, config.ProtocolOpenAIDecisions:
 		var doc struct {
 			Type     string `json:"type"`
 			Response *struct {
@@ -308,7 +308,8 @@ type oaResponsesUsage struct {
 	InputTokens        int64 `json:"input_tokens"`
 	OutputTokens       int64 `json:"output_tokens"`
 	InputTokensDetails *struct {
-		CachedTokens int64 `json:"cached_tokens"`
+		CachedTokens     int64 `json:"cached_tokens"`
+		CacheWriteTokens int64 `json:"cache_write_tokens"`
 	} `json:"input_tokens_details"`
 	OutputTokensDetails *struct {
 		ReasoningTokens int64 `json:"reasoning_tokens"`
@@ -322,6 +323,7 @@ func (u oaResponsesUsage) toTokenUsage() shared.TokenUsage {
 	}
 	if u.InputTokensDetails != nil {
 		out.CacheReadTokens = u.InputTokensDetails.CachedTokens
+		out.CacheWriteTokens = u.InputTokensDetails.CacheWriteTokens
 	}
 	if u.OutputTokensDetails != nil {
 		out.ReasoningTokens = u.OutputTokensDetails.ReasoningTokens

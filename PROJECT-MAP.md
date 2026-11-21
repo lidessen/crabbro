@@ -23,7 +23,7 @@ CLI (cmd/crabbro) / Native MyGo Desktop UI (cmd/crabbro-ui)
                        crabbrod (cmd/crabbrod)
    ┌──────────────────────────┴──────────────────────────┐
 Forward Proxy (:8080)                     LLM & Decision Gateway (:8081)
-HTTP / CONNECT / MITM / WS                5 codecs + Fast/IR paths + Router
+HTTP / CONNECT / MITM / WS                6 codecs + Fast/IR paths + Router
 YAML pipelines + Goja fallback            SSE pre-commit peek + failover
    └──────────────────────────┬──────────────────────────┘
                         Shared Core Layer
@@ -34,7 +34,7 @@ internal/secret | ExchangeSink (ring/history.db) | usage.db | internal/decision 
 | --- | --- | --- | --- | --- |
 | Daemon & Control API | Host proxy, gateway, sessions, MITM, `/v1` API & SSE events | Does not edit client CLI config files | `cmd/crabbrod`, `internal/api` | Available |
 | Forward Proxy & Rules | HTTP/HTTPS MITM, WebSocket frames, YAML `uses` pipelines + Goja fallback | Bodies >256 KiB forwarded unchanged; no WS over HTTP/2 | `internal/proxy`, `internal/rule` | Available |
-| LLM & Decision Gateway | `openai-chat`, `openai-responses`, `anthropic`, `gemini`, `typesafe-jev`; `Quality x Cache x Quota` routing; `usage.db` | No audio/image/embedding modalities; no USD billing claims | `internal/gateway`, `docs/design/gateway.md` | Available |
+| LLM & Decision Gateway | `openai-chat`, `openai-responses`, `anthropic`, `gemini`, `typesafe-jev`, `openai-decisions`; `Quality x Cache x Quota` routing; `usage.db` | No audio/image/embedding modalities; no USD billing claims | `internal/gateway`, `docs/design/gateway.md` | Available |
 | Node Plugin Host | Lazy Node host with per-plugin `worker_threads` for npm rule plugins | Not an OS sandbox; `crabbro.*` builtins reserved | `internal/plugin`, `cmd/crabbro-plugin-host`, `sdk/plugin` | Available |
 | Clients (CLI & Desktop UI) | Typed `/v1` JSON consumer, MyGo native 4-page app (`Crabbro.app`) | Neither `pkg/api` nor `pkg/client` imports a UI toolkit | `cmd/crabbro`, `cmd/crabbro-ui`, `pkg/client` | Available |
 

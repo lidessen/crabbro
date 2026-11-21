@@ -1,6 +1,6 @@
 // Package codec implements wire-protocol parsing, same-protocol Fast Path
 // patching, streaming UsageTap/error detection, and cross-protocol IR bridges
-// across openai-chat, openai-responses, anthropic, gemini, and typesafe-jev.
+// across openai-chat, openai-responses, anthropic, gemini, typesafe-jev, and openai-decisions.
 package codec
 
 import (
@@ -20,9 +20,9 @@ var profilePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
 // IngressInfo describes the normalized wire metadata of an incoming gateway call.
 type IngressInfo struct {
 	Profile        string
-	Protocol       string // openai-chat | openai-responses | anthropic | gemini | typesafe-jev | models
+	Protocol       string // openai-chat | openai-responses | anthropic | gemini | typesafe-jev | openai-decisions | models
 	Family         string // generative | decision
-	Action         string // chat | responses | messages | count_tokens | generateContent | streamGenerateContent | systemone | models
+	Action         string // chat | responses | messages | count_tokens | generateContent | streamGenerateContent | systemone | decisions | models
 	RequestedModel string
 	Stream         bool
 	SessionHint    string
@@ -88,6 +88,10 @@ func ParseIngress(r *http.Request, body []byte) (IngressInfo, error) {
 		info.Protocol = config.ProtocolAnthropic
 		info.Family = config.FamilyGenerative
 		info.Action = "count_tokens"
+	case cleanPath == "/v1/decisions":
+		info.Protocol = config.ProtocolOpenAIDecisions
+		info.Family = config.FamilyDecision
+		info.Action = "decisions"
 	case cleanPath == "/v1/systemone":
 		info.Protocol = config.ProtocolTypeSafeJev
 		info.Family = config.FamilyDecision

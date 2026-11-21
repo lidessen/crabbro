@@ -153,14 +153,14 @@ func ValidateRouteBytes(filename, expectedID string, data []byte) (*Route, []sha
 				Message: "minContextTokens exceeds maxContextTokens",
 			})
 		}
-		if fam == FamilyGenerative && tgt.EndpointProtocol == ProtocolTypeSafeJev {
+		if fam == FamilyGenerative && ProtocolFamily(tgt.EndpointProtocol) == FamilyDecision {
 			diags = append(diags, shared.Diagnostic{
 				File:    filename,
 				Path:    fmt.Sprintf("$.targets[%d].endpointProtocol", i),
 				Message: "generative route cannot target typesafe-jev endpoint",
 			})
 		}
-		if fam == FamilyDecision && tgt.EndpointProtocol != "" && tgt.EndpointProtocol != ProtocolTypeSafeJev && !route.Policy.AllowEmulation {
+		if fam == FamilyDecision && tgt.EndpointProtocol != "" && ProtocolFamily(tgt.EndpointProtocol) != FamilyDecision && !route.Policy.AllowEmulation {
 			diags = append(diags, shared.Diagnostic{
 				File:    filename,
 				Path:    fmt.Sprintf("$.targets[%d].endpointProtocol", i),
@@ -212,11 +212,11 @@ func ValidateCrossFile(plans map[string]*Plan, routes map[string]*Route) []share
 			} else {
 				hasCompatible := false
 				for epProto := range plan.Endpoints {
-					if fam == FamilyGenerative && epProto != ProtocolTypeSafeJev {
+					if fam == FamilyGenerative && ProtocolFamily(epProto) == FamilyGenerative {
 						hasCompatible = true
 						break
 					}
-					if fam == FamilyDecision && (epProto == ProtocolTypeSafeJev || route.Policy.AllowEmulation) {
+					if fam == FamilyDecision && (ProtocolFamily(epProto) == FamilyDecision || route.Policy.AllowEmulation) {
 						hasCompatible = true
 						break
 					}

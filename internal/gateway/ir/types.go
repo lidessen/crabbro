@@ -123,9 +123,10 @@ type DecisionQuestion struct {
 
 // DecisionRequest represents a TypeSafe System One (/v1/systemone) request.
 type DecisionRequest struct {
-	Model     string                      `json:"model"`
-	State     any                         `json:"state"`
-	Questions map[string]DecisionQuestion `json:"questions"`
+	Model          string                      `json:"model"`
+	State          any                         `json:"state"`
+	PromptCacheKey string                      `json:"prompt_cache_key,omitempty"`
+	Questions      map[string]DecisionQuestion `json:"questions"`
 }
 
 // DecisionAnswer represents a single answered question.

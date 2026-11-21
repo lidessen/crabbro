@@ -20,6 +20,7 @@ const (
 	ProtocolAnthropic       = "anthropic"
 	ProtocolGemini          = "gemini"
 	ProtocolTypeSafeJev     = "typesafe-jev"
+	ProtocolOpenAIDecisions = "openai-decisions"
 
 	FamilyGenerative = "generative"
 	FamilyDecision   = "decision"
@@ -43,18 +44,19 @@ const (
 	DefaultTierTimeout = 800 * time.Millisecond
 )
 
-// AllProtocols lists the five supported wire protocols.
+// AllProtocols lists the six supported wire protocols.
 var AllProtocols = []string{
 	ProtocolOpenAIChat,
 	ProtocolOpenAIResponses,
 	ProtocolAnthropic,
 	ProtocolGemini,
 	ProtocolTypeSafeJev,
+	ProtocolOpenAIDecisions,
 }
 
 // ProtocolFamily returns the semantic family ("generative" or "decision") for proto.
 func ProtocolFamily(proto string) string {
-	if proto == ProtocolTypeSafeJev {
+	if proto == ProtocolTypeSafeJev || proto == ProtocolOpenAIDecisions {
 		return FamilyDecision
 	}
 	for _, p := range AllProtocols {
