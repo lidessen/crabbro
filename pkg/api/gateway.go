@@ -125,8 +125,39 @@ type GatewayWindowUsage struct {
 	Source         string  `json:"source"`
 }
 
+// RemoteQuotaWindow describes a provider-reported usage window.
+type RemoteQuotaWindow struct {
+	Name     string     `json:"name"`
+	UsagePct *float64   `json:"usagePct,omitempty"`
+	ResetAt  *time.Time `json:"resetAt,omitempty"`
+}
+
+// RemoteResetCoupon describes an available reset coupon.
+type RemoteResetCoupon struct {
+	Scope     string     `json:"scope"`
+	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
+}
+
+// RemoteQuotaJSON is a sanitized provider-reported snapshot.
+type RemoteQuotaJSON struct {
+	PlanTier           string              `json:"planTier,omitempty"`
+	Balance            string              `json:"balance,omitempty"`
+	UsagePct           *float64            `json:"usagePct,omitempty"`
+	ResetAt            *time.Time          `json:"resetAt,omitempty"`
+	ExpiresAt          *time.Time          `json:"expiresAt,omitempty"`
+	Windows            []RemoteQuotaWindow `json:"windows,omitempty"`
+	Resets             []RemoteResetCoupon `json:"resets,omitempty"`
+	ResetsRemaining    int                 `json:"resetsRemaining"`
+	SoonestResetExpiry *time.Time          `json:"soonestResetExpiry,omitempty"`
+	SyncSource         string              `json:"syncSource"`
+	SyncedAt           *time.Time          `json:"syncedAt,omitempty"`
+	Stale              bool                `json:"stale"`
+	LastError          string              `json:"lastError,omitempty"`
+}
+
 // GatewayPlanStatus is a redacted view of one configured plan and its live state.
 type GatewayPlanStatus struct {
+	RemoteQuota    *RemoteQuotaJSON     `json:"remoteQuota,omitempty"`
 	DirectEnabled  bool                 `json:"directEnabled"`
 	DirectProfiles []string             `json:"directProfiles,omitempty"`
 	ID             string               `json:"id"`

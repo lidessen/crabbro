@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/lidessen/crabbro/internal/shared"
 )
@@ -32,7 +33,7 @@ func cmdGateway(cfg *clientConfig, args []string) error {
 			}
 		})
 	case "plans":
-		return gwGetJSON(cfg, args[1:], "/v1/gateway/plans", func(raw []byte) {
+		return gwPlansJSON(cfg, args[1:], func(raw []byte) {
 			var out shared.GatewayPlanListResponse
 			if json.Unmarshal(raw, &out) != nil {
 				fmt.Println(string(raw))
@@ -61,6 +62,18 @@ func cmdGateway(cfg *clientConfig, args []string) error {
 				fmt.Printf("%-18s enabled=%t secret=%-7s health=%-24s endpoints=%s models=%s\n",
 					p.ID, p.Enabled, sec, health, strings.Join(p.Endpoints, ","), strings.Join(p.Models, ","))
 				fmt.Printf("  direct: %s\n", direct)
+				if q := p.RemoteQuota; q != nil {
+					fmt.Printf("  remote balance=%s resets=%d source=%s stale=%t", q.Balance, q.ResetsRemaining, q.SyncSource, q.Stale)
+					if q.SoonestResetExpiry != nil {
+						fmt.Printf(" expires=%s", q.SoonestResetExpiry.Format(time.RFC3339))
+					}
+					fmt.Println()
+					for _, w := range q.Windows {
+						if w.UsagePct != nil {
+							fmt.Printf("  remote window %s used=%.0f%%\n", w.Name, *w.UsagePct)
+						}
+					}
+				}
 				for _, w := range p.Windows {
 					fmt.Printf("  window %-8s (%s %s) tokens=%d/%d reqs=%d/%d rem=%.0f%% surplus=%+.2f src=%s\n",
 						w.Name, w.Duration, w.Mode, w.UsedTokens, w.MaxTokens, w.UsedRequests, w.MaxRequests,
@@ -184,6 +197,28 @@ func cmdGateway(cfg *clientConfig, args []string) error {
 	default:
 		return fmt.Errorf("unknown gw subcommand: %s", args[0])
 	}
+}
+
+func gwPlansJSON(cfg *clientConfig, args []string, render func([]byte)) error {
+	fs := flag.NewFlagSet("gw plans", flag.ContinueOnError)
+	pretty := fs.Bool("pretty", false, "Human-readable output")
+	refresh := fs.Bool("refresh", false, "Refresh provider quotas")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	method, path := http.MethodGet, "/v1/gateway/plans"
+	if *refresh {
+		method, path = http.MethodPost, "/v1/gateway/quotas/refresh"
+	}
+	if !*pretty {
+		return printAPI(cfg, method, path, nil)
+	}
+	raw, err := gwFetch(cfg, method, path, nil)
+	if err != nil {
+		return err
+	}
+	render(raw)
+	return nil
 }
 
 func gwGetJSON(cfg *clientConfig, args []string, path string, render func([]byte)) error {

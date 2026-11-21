@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/lidessen/crabbro/internal/gateway"
+	"github.com/lidessen/crabbro/internal/gateway/config"
 	"github.com/lidessen/crabbro/internal/secret"
 	"github.com/lidessen/crabbro/internal/shared"
 )
@@ -192,5 +193,29 @@ targets:
 	s.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("usage = %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestGatewayQuotaRefreshProjectsFailure(t *testing.T) {
+	s := testMITMServer(t)
+	gw, err := gateway.New(gateway.Options{RootDir: t.TempDir()}, secret.New(t.TempDir()), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gw.Stop()
+	s.Gateway = gw
+	snap := gw.Config.Snapshot()
+	snap.AllPlans["zcode"] = &config.Plan{ID: "zcode", Credential: "missing"}
+	req := httptest.NewRequest(http.MethodPost, "/v1/gateway/quotas/refresh", nil)
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, req)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"remoteQuota"`) || !strings.Contains(w.Body.String(), `"stale":true`) {
+		t.Fatalf("refresh: %d %s", w.Code, w.Body.String())
+	}
+	req = httptest.NewRequest(http.MethodGet, "/v1/gateway/plans", nil)
+	w = httptest.NewRecorder()
+	s.ServeHTTP(w, req)
+	if !strings.Contains(w.Body.String(), `"provider sync failed"`) {
+		t.Fatalf("plans: %s", w.Body.String())
 	}
 }

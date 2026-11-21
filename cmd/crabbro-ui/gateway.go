@@ -236,6 +236,7 @@ func (a *app) gwPlansCard(c *ui.Context, p *palette, st store) {
 			return
 		}
 		tag(c, p, fmt.Sprintf("%d plans", len(plans)))
+		a.ghostButton(c, "gw-refresh-quotas", "Refresh quotas", iconReplay).Clicked(func() { a.actRefreshGatewayQuotas() })
 		if st.gwPlansFetch == gwStale {
 			gwStaleTag(c, p)
 		}
@@ -341,6 +342,23 @@ func (a *app) gwPlansCard(c *ui.Context, p *palette, st store) {
 					ui.Text(c.Key("gw-plan-err:"+pl.ID),
 						fmt.Sprintf("Last cooldown reason (historical, time & model not reported): %s", reason)).
 						FontSize(11.5).Font(mono()).TextColor(p.removed).FillWidth()
+				}
+				if q := pl.RemoteQuota; q != nil {
+					summary := "Remote quota"
+					if q.Stale {
+						summary += " (stale)"
+					}
+					if q.Balance != "" {
+						summary += " · " + q.Balance
+					}
+					if q.UsagePct != nil {
+						summary += fmt.Sprintf(" · %.0f%% used", *q.UsagePct)
+					}
+					summary += fmt.Sprintf(" · %d resets", q.ResetsRemaining)
+					if q.SoonestResetExpiry != nil {
+						summary += " (exp " + q.SoonestResetExpiry.Format("2006-01-02 15:04 MST") + ")"
+					}
+					ui.Text(c, summary).FontSize(11.5).TextColor(p.muted).FillWidth()
 				}
 				for wi, w := range pl.Windows {
 					a.gwWindowBar(c, p, fmt.Sprintf("%s:%d", pl.ID, wi), w)

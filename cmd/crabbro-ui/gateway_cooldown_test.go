@@ -307,3 +307,16 @@ func TestGatewayPlansCardSkipsBlankLastError(t *testing.T) {
 		t.Errorf("blank LastError should not render a reason line, got %q", reason)
 	}
 }
+
+func TestGatewayRemoteQuotaSummary(t *testing.T) {
+	st := gwPlanStore(time.Now().Add(time.Minute))
+	usage := 25.0
+	st.gwPlans[0].RemoteQuota = &api.RemoteQuotaJSON{Balance: "$17.65", UsagePct: &usage, ResetsRemaining: 2, Stale: true}
+	tt := gwFrame(t, st)
+	if !tt.HasText("Remote quota (stale) · $17.65 · 25% used · 2 resets") {
+		t.Fatal("remote quota summary missing")
+	}
+	if !tt.HasText("Refresh quotas") {
+		t.Fatal("refresh action missing")
+	}
+}

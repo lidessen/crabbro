@@ -120,3 +120,16 @@ func (s *Server) handleGatewayReload(w http.ResponseWriter, r *http.Request) {
 	diags, complete := s.Gateway.Reload()
 	writeJSON(w, http.StatusOK, map[string]any{"complete": complete, "diagnostics": diags})
 }
+
+func (s *Server) handleGatewayQuotaRefresh(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, shared.ErrCodeBadRequest, "method not allowed")
+		return
+	}
+	if s.Gateway == nil {
+		writeError(w, http.StatusBadRequest, shared.ErrCodeBadRequest, "gateway is not enabled")
+		return
+	}
+	s.Gateway.Quotas.Refresh(r.Context(), s.Gateway.Config.Snapshot().AllPlans)
+	writeJSON(w, http.StatusOK, s.Gateway.Plans())
+}

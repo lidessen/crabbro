@@ -151,3 +151,10 @@ func (c *Client) CommitConfig(ctx context.Context, kind, id string) error {
 func (c *Client) DiscardConfig(ctx context.Context, kind, id string) error {
 	return c.postJSON(ctx, configQueryPath("discard", kind, id), nil, nil)
 }
+
+// RefreshGatewayQuotas synchronizes provider quota snapshots.
+func (c *Client) RefreshGatewayQuotas(ctx context.Context) ([]api.GatewayPlanStatus, error) {
+	var out api.GatewayPlanListResponse
+	err := c.postJSON(ctx, "/v1/gateway/quotas/refresh", nil, &out)
+	return out.Plans, err
+}

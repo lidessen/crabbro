@@ -11,6 +11,7 @@ import (
 	"github.com/lidessen/crabbro/internal/gateway/config"
 	"github.com/lidessen/crabbro/internal/gateway/ir"
 	"github.com/lidessen/crabbro/internal/gateway/ledger"
+	"github.com/lidessen/crabbro/internal/gateway/quota"
 	"github.com/lidessen/crabbro/internal/secret"
 	"github.com/lidessen/crabbro/internal/shared"
 )
@@ -66,10 +67,13 @@ type Selection struct {
 
 // Router implements the 4-stage Cache × Quota × Quality route selector.
 type Router struct {
-	Secrets        *secret.Store
-	Sessions       *SessionCacheStore
-	Health         *HealthStore
-	Ledger         *ledger.Store
+	Secrets  *secret.Store
+	Sessions *SessionCacheStore
+	Health   *HealthStore
+	Ledger   *ledger.Store
+	Quotas   interface {
+		Get(string) (*quota.RemoteQuota, bool)
+	}
 	DecisionCaller DecisionCaller
 	Now            func() time.Time
 }
@@ -541,6 +545,15 @@ func (r *Router) evalTargets(snap *config.Snapshot, rt *config.Route, sig Signal
 			cand.RejectReason = "soft quota window exhausted"
 			out = append(out, cand)
 			continue
+		}
+
+		if r.Quotas != nil && (rt.Policy.EffectivePreset() == config.PresetBalanced || rt.Policy.EffectivePreset() == config.PresetBurnExpiring) {
+			if q, ok := r.Quotas.Get(plan.ID); ok && !q.Stale && q.ResetsRemaining > 0 && q.SoonestResetExpiry != nil {
+				left := q.SoonestResetExpiry.Sub(now)
+				if left > 0 && left <= 72*time.Hour && q.UsagePct != nil && *q.UsagePct < 50 {
+					quotaScore += 0.2 * (1 - left.Hours()/72) * (1 - *q.UsagePct/100)
+				}
+			}
 		}
 
 		var cacheRaw float64

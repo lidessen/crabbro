@@ -21,6 +21,7 @@ import (
 	"github.com/lidessen/crabbro/internal/gateway/executor"
 	"github.com/lidessen/crabbro/internal/gateway/ir"
 	"github.com/lidessen/crabbro/internal/gateway/ledger"
+	"github.com/lidessen/crabbro/internal/gateway/quota"
 	"github.com/lidessen/crabbro/internal/gateway/router"
 	"github.com/lidessen/crabbro/internal/secret"
 	"github.com/lidessen/crabbro/internal/shared"
@@ -47,15 +48,17 @@ type Gateway struct {
 	Sessions   *router.SessionCacheStore
 	Health     *router.HealthStore
 	Router     *router.Router
+	Quotas     *quota.Syncer
 	Executor   *executor.Executor
 	Sink       capture.ExchangeSink
 
-	maxBody   int64
-	server    *http.Server
-	listener  net.Listener
-	startOnce sync.Once
-	mu        sync.Mutex
-	closed    bool
+	maxBody     int64
+	server      *http.Server
+	listener    net.Listener
+	startOnce   sync.Once
+	mu          sync.Mutex
+	closed      bool
+	quotaCancel context.CancelFunc
 }
 
 // New initializes a Gateway rooted at opt.RootDir using shared secrets and sink.
@@ -85,6 +88,8 @@ func New(opt Options, secrets *secret.Store, sink capture.ExchangeSink) (*Gatewa
 	sess := router.NewSessionCacheStore(4096)
 	health := router.NewHealthStore()
 	rtr := router.New(secrets, sess, health, ldg)
+	qs := quota.New(secrets)
+	rtr.Quotas = qs
 	exec := executor.New(rtr, secrets, ldg, sink)
 	exec.Bridge = codec.NewBridge()
 	exec.CaptureMode = opt.CaptureMode
@@ -99,6 +104,7 @@ func New(opt Options, secrets *secret.Store, sink capture.ExchangeSink) (*Gatewa
 		Sessions:   sess,
 		Health:     health,
 		Router:     rtr,
+		Quotas:     qs,
 		Executor:   exec,
 		Sink:       sink,
 		maxBody:    opt.MaxRequestBody,
@@ -145,7 +151,10 @@ func (g *Gateway) Start() error {
 			ReadHeaderTimeout: 30 * time.Second,
 			IdleTimeout:       120 * time.Second,
 		}
+		ctx, cancel := context.WithCancel(context.Background())
+		g.quotaCancel = cancel
 		g.mu.Unlock()
+		go g.Quotas.Run(ctx, func() map[string]*config.Plan { return g.Config.Snapshot().AllPlans })
 		go func() {
 			if serveErr := g.server.Serve(ln); serveErr != nil && serveErr != http.ErrServerClosed {
 				// listener closed or stopped
@@ -167,7 +176,11 @@ func (g *Gateway) Stop() error {
 	}
 	g.closed = true
 	srv := g.server
+	cancel := g.quotaCancel
 	g.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 
 	var err error
 	if srv != nil {
@@ -456,6 +469,7 @@ func (g *Gateway) Plans() shared.GatewayPlanListResponse {
 			ErrorEWMA:     hs.ErrorEWMA,
 			LatencyEWMAMs: hs.LatencyEWMAMs,
 			Windows:       g.Router.ComputeWindowUsage(p, now),
+			RemoteQuota:   func() *quota.RemoteQuota { q, _ := g.Quotas.Get(id); return q }(),
 		})
 	}
 	return shared.GatewayPlanListResponse{Plans: out}

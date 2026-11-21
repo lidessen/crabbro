@@ -9,6 +9,7 @@ import (
 	"github.com/lidessen/crabbro/internal/gateway/config"
 	"github.com/lidessen/crabbro/internal/gateway/ir"
 	"github.com/lidessen/crabbro/internal/gateway/ledger"
+	"github.com/lidessen/crabbro/internal/gateway/quota"
 	"github.com/lidessen/crabbro/internal/secret"
 	"github.com/lidessen/crabbro/internal/shared"
 )
@@ -224,5 +225,26 @@ func TestMatchModelAnySlashWildcard(t *testing.T) {
 	}
 	if matchModelAny([]string{"openai/*"}, "deepseek/deepseek-v4.1-flash") {
 		t.Fatal("unexpected match for openai/*")
+	}
+}
+
+type quotaFixture map[string]*quota.RemoteQuota
+
+func (q quotaFixture) Get(id string) (*quota.RemoteQuota, bool) { v, ok := q[id]; return v, ok }
+func TestExpiringCouponBoost(t *testing.T) {
+	r, snap, _, _ := setupRouterFixture(t)
+	now := time.Now().UTC()
+	r.Now = func() time.Time { return now }
+	snap.Routes[0].Targets[1].Priority = snap.Routes[0].Targets[0].Priority
+	expiry := now.Add(12 * time.Hour)
+	usage := 10.0
+	r.Quotas = quotaFixture{"glm-coding": {ResetsRemaining: 1, SoonestResetExpiry: &expiry, UsagePct: &usage}}
+	sig := ExtractSignals("", config.ProtocolAnthropic, config.FamilyGenerative, "coding-main", "", []byte(`{"model":"coding-main","messages":[{"role":"user","content":"hello"}]}`))
+	sel, err := r.Select(context.Background(), snap, sig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sel.Candidates[0].Plan.ID != "glm-coding" {
+		t.Fatalf("coupon did not win: %+v", sel.Decision.Candidates)
 	}
 }

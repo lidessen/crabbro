@@ -1015,3 +1015,17 @@ func (a *app) askQuestion(message, detail string) (bool, error) {
 	})
 	return err == nil && res.Button == 0, err
 }
+
+func (a *app) actRefreshGatewayQuotas() {
+	a.setBusy("refreshing quotas")
+	go func() {
+		_, err := a.c.RefreshGatewayQuotas(a.ctx)
+		a.post(func() {
+			a.setBusy("")
+			if err != nil {
+				a.note("refresh quotas: %v", err)
+			}
+			a.nudge("")
+		})
+	}()
+}
