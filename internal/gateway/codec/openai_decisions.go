@@ -1,6 +1,7 @@
 package codec
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -40,14 +41,82 @@ type decisionWireRequest struct {
 	PromptCacheKey string             `json:"prompt_cache_key,omitempty"`
 }
 type decisionWireAnswer struct {
-	Type          string             `json:"type"`
-	Name          string             `json:"name"`
-	Probability   *float64           `json:"probability,omitempty"`
-	Choice        string             `json:"choice,omitempty"`
-	Confidence    *float64           `json:"confidence,omitempty"`
-	Score         *float64           `json:"score,omitempty"`
-	Probabilities map[string]float64 `json:"probabilities,omitempty"`
+	Type          string                `json:"type"`
+	Name          string                `json:"name"`
+	Probability   *float64              `json:"probability,omitempty"`
+	Choice        string                `json:"choice,omitempty"`
+	Confidence    *float64              `json:"confidence,omitempty"`
+	Score         *float64              `json:"score,omitempty"`
+	Probabilities decisionProbabilities `json:"probabilities,omitempty"`
 }
+type decisionProbabilities map[string]float64
+
+type decisionProbability struct {
+	Value       any     `json:"value"`
+	Label       string  `json:"label,omitempty"`
+	Probability float64 `json:"probability"`
+}
+
+func (p *decisionProbabilities) UnmarshalJSON(b []byte) error {
+	b = bytes.TrimSpace(b)
+	if len(b) == 0 || b[0] != '[' {
+		return json.Unmarshal(b, (*map[string]float64)(p))
+	}
+	var entries []struct {
+		Value       json.RawMessage `json:"value"`
+		Label       string          `json:"label"`
+		Probability float64         `json:"probability"`
+	}
+	if err := json.Unmarshal(b, &entries); err != nil {
+		return err
+	}
+	result := make(decisionProbabilities, len(entries))
+	for _, entry := range entries {
+		var value any
+		decoder := json.NewDecoder(bytes.NewReader(entry.Value))
+		decoder.UseNumber()
+		if err := decoder.Decode(&value); err != nil {
+			return fmt.Errorf("invalid probability value: %w", err)
+		}
+		var key string
+		switch v := value.(type) {
+		case string:
+			key = v
+		case json.Number:
+			key = v.String()
+		default:
+			return fmt.Errorf("invalid probability value type %T", value)
+		}
+		if entry.Label != "" {
+			key = entry.Label
+		}
+		result[key] = entry.Probability
+	}
+	*p = result
+	return nil
+}
+
+func (a decisionWireAnswer) MarshalJSON() ([]byte, error) {
+	type wireAnswer decisionWireAnswer
+	var probabilities []decisionProbability
+	keys := make([]string, 0, len(a.Probabilities))
+	for key := range a.Probabilities {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for i, key := range keys {
+		entry := decisionProbability{Value: key, Probability: a.Probabilities[key]}
+		if a.Type == ir.DecisionKindScore {
+			entry.Value, entry.Label = i, key
+		}
+		probabilities = append(probabilities, entry)
+	}
+	return json.Marshal(struct {
+		wireAnswer
+		Probabilities []decisionProbability `json:"probabilities,omitempty"`
+	}{wireAnswer: wireAnswer(a), Probabilities: probabilities})
+}
+
 type decisionWireResponse struct {
 	Model   string               `json:"model"`
 	Answers []decisionWireAnswer `json:"answers"`
