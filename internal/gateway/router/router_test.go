@@ -342,7 +342,7 @@ func TestUnderutilizedWindowBoost(t *testing.T) {
 }
 
 // The documented target-weight formula: zero-value and 1 are neutral, the
-// bias is logarithmic and clamped to [-2.5, +2.5] on the schema's 0..100
+// bias is logarithmic and clamped to [-1.2, +1.2] on the schema's 0..100
 // range, and NaN cannot leak into scores.
 func TestTargetWeightBiasFormula(t *testing.T) {
 	for _, tt := range []struct {
@@ -350,12 +350,12 @@ func TestTargetWeightBiasFormula(t *testing.T) {
 	}{
 		{0, 0},
 		{1, 0},
-		{10, 1.25},
-		{100, 2.5},
-		{0.1, -1.25},
-		{0.01, -2.5},
-		{0.000001, -2.5}, // clamped at the floor
-		{1000, 2.5},      // clamped at the ceiling
+		{10, 0.6},
+		{100, 1.2},
+		{0.1, -0.6},
+		{0.01, -1.2},
+		{0.000001, -1.2}, // clamped at the floor
+		{1000, 1.2},      // clamped at the ceiling
 		{-5, 0},          // negative behaves like unset
 		{math.NaN(), 0},  // NaN never reaches Total
 	} {
@@ -365,9 +365,36 @@ func TestTargetWeightBiasFormula(t *testing.T) {
 	}
 }
 
-// Two otherwise-identical targets are separated by exactly the documented
-// weight bias: weight 10 beats weight 1 by +1.25, and the bias is surfaced
-// as the candidate's Weight score component.
+func TestTargetWeightCannotFlipTierMismatch(t *testing.T) {
+	for _, preset := range []string{config.PresetBalanced, config.PresetQualityFirst, config.PresetBurnExpiring, config.PresetStrictFailover} {
+		t.Run(preset, func(t *testing.T) {
+			r, snap, _, _ := setupRouterFixture(t)
+			snap.Routes[0].Policy.Preset = preset
+			snap.Plans["kimi-coding"].Models["kimi-k2.5"].Tier = config.TierFast
+			zero := 0.0
+			snap.Plans["glm-coding"].Models["glm-4.7"].CodingScore = &zero
+			snap.Routes[0].Targets = []config.Target{
+				{Plan: "kimi-coding", Model: "kimi-k2.5", Priority: 10, Weight: 100},
+				{Plan: "glm-coding", Model: "glm-4.7", Priority: 10, Weight: 0.01},
+			}
+			weights := effectiveWeights(snap.Routes[0].Policy)
+			spread := 2 * weightBiasScale * math.Min(1, math.Max(0, weights.quality))
+			if weights.quality > 0 && spread >= 2.5*weights.quality {
+				t.Fatalf("weight spread %v exceeds tier gap %v", spread, 2.5*weights.quality)
+			}
+			sig := ExtractSignals("", config.ProtocolAnthropic, config.FamilyGenerative, "coding-main", "", []byte(`{"model":"coding-main","messages":[{"role":"user","content":"hello"}]}`))
+			sel, err := r.Select(context.Background(), snap, sig)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if sel.Candidates[0].Plan.ID != "glm-coding" {
+				t.Fatalf("under-tier target won: %+v", sel.Decision.Candidates)
+			}
+		})
+	}
+}
+
+// Two otherwise-identical targets differ by the documented weight bias.
 func TestTargetWeightDemotesLowWeightFallback(t *testing.T) {
 	r, snap, _, _ := setupRouterFixture(t)
 	now := time.Now().UTC()
@@ -384,11 +411,11 @@ func TestTargetWeightDemotesLowWeightFallback(t *testing.T) {
 	if sel.Candidates[0].Plan.ID != "kimi-coding" {
 		t.Fatalf("weight-10 target lost to weight-1: %+v", sel.Decision.Candidates)
 	}
-	if math.Abs(sel.Candidates[0].Scores.Weight-1.25) > 1e-9 || sel.Candidates[1].Scores.Weight != 0 {
-		t.Fatalf("weight components = %v/%v, want 1.25/0", sel.Candidates[0].Scores.Weight, sel.Candidates[1].Scores.Weight)
+	if math.Abs(sel.Candidates[0].Scores.Weight-0.6) > 1e-9 || sel.Candidates[1].Scores.Weight != 0 {
+		t.Fatalf("weight components = %v/%v, want 0.6/0", sel.Candidates[0].Scores.Weight, sel.Candidates[1].Scores.Weight)
 	}
-	if diff := sel.Candidates[0].Scores.Total - sel.Candidates[1].Scores.Total; math.Abs(diff-1.25) > 1e-6 {
-		t.Fatalf("total difference = %v, want exactly the +1.25 weight bias", diff)
+	if diff := sel.Candidates[0].Scores.Total - sel.Candidates[1].Scores.Total; math.Abs(diff-0.6) > 1e-6 {
+		t.Fatalf("total difference = %v, want exactly the +0.6 weight bias", diff)
 	}
 
 	// Zero-value weight is neutral: it scores exactly like the explicit 1,
@@ -411,8 +438,8 @@ func TestTargetWeightDemotesLowWeightFallback(t *testing.T) {
 	if sel.Candidates[0].Plan.ID != "kimi-coding" {
 		t.Fatalf("weight-10 target lost to unset-weight target: %+v", sel.Decision.Candidates)
 	}
-	if d := sel.Candidates[0].Scores.Total - sel.Candidates[1].Scores.Total; math.Abs(d-1.25) > 1e-6 {
-		t.Fatalf("total difference = %v, want the +1.25 weight bias over a neutral target", d)
+	if d := sel.Candidates[0].Scores.Total - sel.Candidates[1].Scores.Total; math.Abs(d-0.6) > 1e-6 {
+		t.Fatalf("total difference = %v, want the +0.6 weight bias over a neutral target", d)
 	}
 }
 
@@ -441,10 +468,9 @@ func TestTargetWeightOverridesCacheStickiness(t *testing.T) {
 		t.Fatalf("baseline lost warm-cache stickiness: %+v", sel.Decision.Candidates)
 	}
 
-	// glm at weight 100 (+2.50) outranks the warm kimi cache gravity
-	// (overlap 1.0 * freshness 0.9 * cache weight 2.0 = 1.80).
+	// The weight difference outweighs kimi’s warm cache gravity of 1.80.
 	snap.Routes[0].Targets = []config.Target{
-		{Plan: "kimi-coding", Model: "kimi-k2.5", Priority: 10},
+		{Plan: "kimi-coding", Model: "kimi-k2.5", Priority: 10, Weight: 0.05},
 		{Plan: "glm-coding", Model: "glm-4.7", Priority: 20, Weight: 100},
 	}
 	sel, err = r.Select(context.Background(), snap, ExtractSignals("", config.ProtocolAnthropic, config.FamilyGenerative, "coding-main", "ses_weight", body))
@@ -454,8 +480,8 @@ func TestTargetWeightOverridesCacheStickiness(t *testing.T) {
 	if sel.Candidates[0].Plan.ID != "glm-coding" {
 		t.Fatalf("weight-100 target failed to beat warm cache stickiness: %+v", sel.Decision.Candidates)
 	}
-	if sel.Candidates[0].Scores.Weight != 2.5 {
-		t.Fatalf("weight component = %v, want 2.5", sel.Candidates[0].Scores.Weight)
+	if sel.Candidates[0].Scores.Weight != 1.2 {
+		t.Fatalf("weight component = %v, want 1.2", sel.Candidates[0].Scores.Weight)
 	}
 	if sel.Candidates[1].Scores.Cache <= 0 {
 		t.Fatalf("warm candidate cache score = %v, want the sticky cache to still be scored", sel.Candidates[1].Scores.Cache)

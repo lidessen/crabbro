@@ -567,7 +567,7 @@ func (r *Router) evalTargets(snap *config.Snapshot, rt *config.Route, sig Signal
 			protoRaw = 1.0
 		}
 		priBias := -0.001 * float64(tgt.Priority)
-		weightBias := targetWeightBias(tgt.Weight)
+		weightBias := targetWeightBias(tgt.Weight) * math.Min(1, math.Max(0, weights.quality))
 		healthPen := 0.0
 		if r.Health != nil && rt.Policy.EffectivePreset() != config.PresetStrictFailover {
 			hs := r.Health.Snapshot(plan.ID, now)
@@ -1066,28 +1066,12 @@ type objectiveWeights struct {
 	protocol float64
 }
 
-// Target weight turns a route author's preference into a bounded additive
-// bias on the unified Total — it is not a fifth objective and never scales
-// the other components. The exact formula is
-//
-//	weightBias = weightBiasScale * ln(clamp(w, 0.01, 100)) / ln(100)
-//
-// with weightBiasScale = 2.5, so on the schema's 0..100 range:
-//
-//	weight 0 (YAML zero value) or 1  ->  0.00 (neutral; unset == default)
-//	weight 10                        -> +1.25
-//	weight 100                       -> +2.50
-//	weight 0.1                       -> -1.25 (symmetric demotion, floor -2.50)
-//
-// +2.50 outranks a full NewUserTurn cache gravity (<= 2.0 under the balanced
-// preset), so a weight-100 target beats a weight-1 target even when the
-// weight-1 target holds the warm session cache; a ToolLoop pin (gravity 10)
-// still wins, and the bias can never override hard constraints (those reject
-// before scoring) or flip a tier mismatch (quality deficit -2.25 under
-// balanced). Strict-failover routes that sort by target priority ignore the
-// bias for ordering, exactly like every other score component.
+// Target weight is a bounded additive bias. Its maximum spread is 2.4,
+// below the minimum matched-versus-under-tier quality gap of 2.5 in the
+// burn-expiring preset. Scale it down with quality overrides below 1; a zero
+// quality weight disables the bias (including strict-failover).
 const (
-	weightBiasScale = 2.5
+	weightBiasScale = 1.2
 	weightBiasMin   = 0.01
 	weightBiasMax   = 100.0
 )

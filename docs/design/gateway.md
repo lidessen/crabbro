@@ -391,13 +391,10 @@ Explicit `policy.weights` override individual preset values. Candidates sort des
 Per-target `weight` (route YAML `targets[].weight`, schema range `0..100`) is a bounded additive preference bias on the unified `Total` — not a fifth objective:
 
 ```
-weightBias = 2.5 * ln(clamp(weight, 0.01, 100)) / ln(100)
+weightBias = 1.2 * ln(clamp(weight, 0.01, 100)) / ln(100) * clamp(w.quality, 0, 1)
 ```
 
-- `weight: 0` (the YAML zero value) or `1` → bias `0.00` (neutral; unset behaves exactly like the default)
-- `weight: 10` → `+1.25`; `weight: 100` → `+2.50`; `weight: 0.1` → `-1.25` (symmetric demotion, floor `-2.50`)
-
-`+2.50` outranks a full `NewUserTurn` cache gravity (≤ `2.0` under `balanced`), so a `weight: 100` target beats a `weight: 1` target even when the low-weight target holds the warm session cache — the intended way to demote expensive fallback targets (e.g. pay-per-token Vercel) without disabling them. A `ToolLoop` cache pin (gravity `10`) still wins, hard constraints still reject before scoring, and a tier mismatch (`-2.25` quality deficit under `balanced`) cannot be flipped by any weight. `strict-failover` routes that order by target `priority` ignore the bias for ordering, like every other score component. The bias is surfaced as the `weight` field of each candidate's `scores` in the `RouteDecision` trace.
+A zero or unset weight and `weight: 1` are neutral. At quality weight 1 or higher, weights 10, 100, 0.1 and 0.01 give biases +0.6, +1.2, -0.6 and -1.2 respectively. The maximum spread is 2.4, below the minimum matched versus under-tier quality gap of 2.5 in `burn-expiring` (3.75 in `balanced`, 6.25 in `quality-first`). Lower positive quality overrides proportionally reduce the bias; zero quality disables it, including in `strict-failover`. Other score components and strict-failover priority can still determine the winner across tiers. A weight of 100 can overcome warm cache preference against a sufficiently low-weight fallback, while a ToolLoop cache pin remains stronger. The bias appears in each candidate's `scores.weight` trace field.
 
 #### 4.5 Explainable `RouteDecision` trace example
 
