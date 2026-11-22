@@ -91,17 +91,37 @@ func gwPlanStore(until time.Time) store {
 }
 
 // The plan out of cooldown must say so about the plan, not claim the
-// provider is healthy, and the count in the status card must agree.
+// provider is healthy, and the count in the status card must agree. A plan
+// whose credential secret is missing cannot be routed to at all, so it must
+// not claim Ready even when no plan-level cooldown is active.
 func TestGatewayPlanNotCoolingIsNotProviderHealthy(t *testing.T) {
-	tt := gwFrame(t, gwPlanStore(time.Now().Add(90*time.Second)))
+	st := gwPlanStore(time.Now().Add(90 * time.Second))
+	if !st.gwPlans[0].HasSecret {
+		t.Fatal("the not-cooling fixture plan needs its secret for the Ready case to be about cooldown only")
+	}
+	tt := gwFrame(t, st)
 	if !tt.HasText("Ready") {
 		t.Error("a plan without plan-level cooldown should say it is the plan that is not cooling")
 	}
-	if tt.HasText("Healthy") {
+	if tt.HasText("Healthy") || tt.HasText("Provider healthy") {
 		t.Error("no active plan cooldown is not a provider health verdict; the label Healthy must not appear")
 	}
 	if !tt.HasText("not cooling") {
 		t.Error("the status card plan count should say not cooling, not healthy")
+	}
+
+	// The same not-cooling plan without its credential secret is ineligible
+	// for routing: it must say the credential is missing, never Ready.
+	st.gwPlans[0].HasSecret = false
+	tt = gwFrame(t, st)
+	if tt.HasText("Ready") {
+		t.Error("a plan whose secret is missing is ineligible for routing and must not claim Ready")
+	}
+	if !tt.HasText("Missing credential") {
+		t.Error("a plan whose secret is missing should say the credential is missing")
+	}
+	if tt.HasText("Healthy") || tt.HasText("Provider healthy") {
+		t.Error("a missing credential is not a provider health verdict; the label Healthy must not appear")
 	}
 }
 

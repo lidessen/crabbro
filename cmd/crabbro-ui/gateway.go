@@ -287,6 +287,12 @@ func (a *app) gwPlansCard(c *ui.Context, p *palette, st store) {
 					ui.Text(c, pl.ID).FontSize(13).FontWeight(600).Font(mono()).TextColor(p.text).SingleLine()
 					if !pl.Enabled {
 						tag(c, p, "disabled")
+					} else if !pl.HasSecret {
+						// A plan whose secret is missing cannot be routed to
+						// at all, whatever its cooldown state, so it must not
+						// wear the green Ready badge: say why it is ineligible
+						// in a warning tone instead.
+						stateDot(c, p, p.warning(), "Missing credential")
 					} else if pl.Healthy {
 						// Healthy only means no plan-level cooldown: the API
 						// reports no provider or per-model verdict here.
