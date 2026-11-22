@@ -78,7 +78,11 @@ func cmdGateway(cfg *clientConfig, args []string) error {
 				fmt.Printf("%-18s enabled=%t secret=%-7s health=%-24s endpoints=%s models=%s\n",
 					p.ID, p.Enabled, sec, health, strings.Join(p.Endpoints, ","), strings.Join(p.Models, ","))
 				if p.LastError != "" {
-					fmt.Printf("  error: %s\n", p.LastError)
+					label := "current error"
+					if p.CooldownUntil != nil && !p.CooldownUntil.IsZero() && !p.CooldownUntil.After(time.Now()) {
+						label = "last reported error (state not refreshed)"
+					}
+					fmt.Printf("  %s: %s\n", label, p.LastError)
 				}
 				if p.HistoricalLastError != "" {
 					fmt.Printf("  historical error: %s (time & model not reported)\n", p.HistoricalLastError)

@@ -94,7 +94,7 @@ func gwPlanStore(until time.Time) store {
 // provider is healthy, and the count in the status card must agree.
 func TestGatewayPlanNotCoolingIsNotProviderHealthy(t *testing.T) {
 	tt := gwFrame(t, gwPlanStore(time.Now().Add(90*time.Second)))
-	if !tt.HasText("Plan not cooling") {
+	if !tt.HasText("Ready") {
 		t.Error("a plan without plan-level cooldown should say it is the plan that is not cooling")
 	}
 	if tt.HasText("Healthy") {
@@ -109,7 +109,7 @@ func TestGatewayPlanNotCoolingIsNotProviderHealthy(t *testing.T) {
 // API does not report says that instead of implying there is none.
 func TestGatewayCoolingPlanShowsRemainingTimeOrItsAbsence(t *testing.T) {
 	tt := gwFrame(t, gwPlanStore(time.Now().Add(90*time.Second)))
-	if !tt.HasText("Plan cooling (") || !tt.HasText(" left)") {
+	if !tt.HasText("Cooling (") || !tt.HasText(" left)") {
 		t.Error("a cooling plan should say Plan cooling with the remaining time left")
 	}
 
@@ -120,7 +120,7 @@ func TestGatewayCoolingPlanShowsRemainingTimeOrItsAbsence(t *testing.T) {
 		}
 	}
 	tt = gwFrame(t, unreported)
-	if !tt.HasText("Plan cooling (time not reported)") {
+	if !tt.HasText("Unhealthy (cooldown time not reported)") {
 		t.Error("a cooling plan without a reported end time should say the time is not reported")
 	}
 }
@@ -133,7 +133,7 @@ func TestGatewayLastErrorIsLabeledHistoricalLastCooldownReason(t *testing.T) {
 	if !tt.HasText("Last cooldown reason (historical, time & model not reported): 429 rate limited") {
 		t.Error("HistoricalLastError should be labeled as the historical last cooldown reason, with time and model said to be unreported")
 	}
-	if !tt.HasText("Plan not cooling") {
+	if !tt.HasText("Ready") {
 		t.Error("the labeled historical reason should still sit beside the plan that is not cooling")
 	}
 }
@@ -366,5 +366,15 @@ func TestGatewayRemoteQuotaSummaryShowsWindowNote(t *testing.T) {
 	tt := gwFrame(t, st)
 	if !tt.HasText("Remote quota · $17.66 · 25% used · Token Pass $70.62 remaining · 2 resets") {
 		t.Fatal("remote quota summary should surface the token pass note")
+	}
+}
+
+func TestGatewayExpiredCooldownErrorIsReportedAsStale(t *testing.T) {
+	tt := gwFrame(t, gwPlanStore(time.Now().Add(-time.Minute)))
+	if !tt.HasText("Last reported error (state not refreshed): quota exhausted") {
+		t.Error("expired cooldown error should be labeled as last reported")
+	}
+	if tt.HasText("Current cooldown reason: quota exhausted") {
+		t.Error("expired cooldown error must not be labeled current")
 	}
 }

@@ -290,15 +290,15 @@ func (a *app) gwPlansCard(c *ui.Context, p *palette, st store) {
 					} else if pl.Healthy {
 						// Healthy only means no plan-level cooldown: the API
 						// reports no provider or per-model verdict here.
-						stateDot(c, p, p.added, "Plan not cooling")
+						stateDot(c, p, p.added, "Ready")
 					} else {
-						lbl, col := "Plan cooling", p.removed
+						lbl, col := "Unhealthy", p.removed
 						if pl.CooldownUntil == nil || pl.CooldownUntil.IsZero() {
-							lbl = "Plan cooling (time not reported)"
+							lbl = "Unhealthy (cooldown time not reported)"
 						} else {
-							rem := time.Until(*pl.CooldownUntil).Truncate(time.Second)
+							rem := time.Until(*pl.CooldownUntil)
 							if rem > 0 {
-								lbl = fmt.Sprintf("Plan cooling (%s left)", rem)
+								lbl = fmt.Sprintf("Cooling (%s left)", rem.Round(time.Second))
 							} else {
 								// The window this answer describes has
 								// already closed: the answer is older than
@@ -335,11 +335,17 @@ func (a *app) gwPlansCard(c *ui.Context, p *palette, st store) {
 				})
 				if reason := gwSafeReason(pl.LastError); reason != "" && !pl.Healthy {
 					// LastError is populated only while the plan is
-					// unhealthy: label it the current cooldown reason. The
+					// unhealthy; an expired timer makes the snapshot stale. The
 					// reason is sanitized here as well as in the router so
 					// raw snapshot text never reaches the frame.
+					label := "Current error"
+					if pl.CooldownUntil != nil && pl.CooldownUntil.After(time.Now()) {
+						label = "Current cooldown reason"
+					} else if pl.CooldownUntil != nil && !pl.CooldownUntil.IsZero() {
+						label = "Last reported error (state not refreshed)"
+					}
 					ui.Text(c.Key("gw-plan-err:"+pl.ID),
-						fmt.Sprintf("Current cooldown reason: %s", reason)).
+						fmt.Sprintf("%s: %s", label, reason)).
 						FontSize(11.5).Font(mono()).TextColor(p.removed).FillWidth()
 				}
 				if reason := gwSafeReason(pl.HistoricalLastError); reason != "" {

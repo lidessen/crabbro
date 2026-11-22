@@ -97,7 +97,7 @@ func (eh *EventHub) Len() int {
 }
 
 func (eh *EventHub) sinceLocked(after int64) []*shared.Event {
-	if eh.next == 0 {
+	if eh.next == 0 || after >= eh.next {
 		return nil
 	}
 	start := int64(1)

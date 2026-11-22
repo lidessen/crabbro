@@ -1,6 +1,7 @@
 package capture
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -56,5 +57,19 @@ func TestEventHubRingDropsOldest(t *testing.T) {
 	first := <-sub
 	if first.ID != int64(h.next-eventRingCap+1) {
 		t.Fatalf("oldest retained id = %d, hub next = %d", first.ID, h.next)
+	}
+}
+
+func TestEventHubFutureCursor(t *testing.T) {
+	h := NewEventHub()
+	h.Emit(&shared.Event{Type: shared.EventRequestStarted})
+	for _, cursor := range []int64{2, math.MaxInt64} {
+		sub := h.SubscribeAfter(cursor)
+		select {
+		case ev := <-sub:
+			t.Fatalf("cursor %d replayed event %+v", cursor, ev)
+		default:
+		}
+		h.Unsubscribe(sub)
 	}
 }
