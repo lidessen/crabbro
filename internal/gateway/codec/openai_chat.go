@@ -250,6 +250,13 @@ func (oaChatCodec) EncodeRequest(req *ir.GenRequest) ([]byte, error) {
 					})
 				}
 			}
+			if len(txtParts) == 0 && len(toolCalls) == 0 {
+				// Thinking is intentionally not replayable as OpenAI Chat
+				// assistant content. A thinking-only turn must be dropped
+				// instead of becoming {"role":"assistant"} with neither
+				// content nor tool_calls, which upstream schemas reject.
+				continue
+			}
 			msgObj := map[string]any{"role": "assistant"}
 			if len(txtParts) > 0 {
 				msgObj["content"] = strings.Join(txtParts, "")

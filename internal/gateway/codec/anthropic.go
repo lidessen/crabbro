@@ -96,6 +96,7 @@ func decodeAnthContent(raw json.RawMessage) []ir.ContentPart {
 		Text      string          `json:"text"`
 		Thinking  string          `json:"thinking"`
 		Signature string          `json:"signature"`
+		Data      string          `json:"data"`
 		ID        string          `json:"id"`
 		Name      string          `json:"name"`
 		Input     json.RawMessage `json:"input"`
@@ -120,11 +121,25 @@ func decodeAnthContent(raw json.RawMessage) []ir.ContentPart {
 				parts = append(parts, ir.ContentPart{Kind: ir.PartText, Text: b.Text})
 			}
 		case "thinking":
+			// Signed thinking is preserved in the IR so same-provider history
+			// can be replayed. Foreign/unknown signatures are stripped before
+			// any cross-provider encode by the bridge and same-protocol
+			// normalizer.
 			if b.Thinking != "" {
 				parts = append(parts, ir.ContentPart{
 					Kind:      ir.PartThinking,
 					Text:      b.Thinking,
 					Signature: b.Signature,
+				})
+			}
+		case "redacted_thinking":
+			// Redacted thinking has no readable text: keep the opaque blob
+			// tagged as its own kind so no codec accidentally serializes it as
+			// a normal thinking block. Cross-provider encoders drop it.
+			if b.Data != "" {
+				parts = append(parts, ir.ContentPart{
+					Kind:         ir.PartRedactedThinking,
+					RedactedData: b.Data,
 				})
 			}
 		case "image":
@@ -332,6 +347,7 @@ func (anthropicCodec) DecodeResponse(body []byte) (*ir.GenResponse, error) {
 			Text      string          `json:"text"`
 			Thinking  string          `json:"thinking"`
 			Signature string          `json:"signature"`
+			Data      string          `json:"data"`
 			ID        string          `json:"id"`
 			Name      string          `json:"name"`
 			Input     json.RawMessage `json:"input"`
@@ -353,6 +369,10 @@ func (anthropicCodec) DecodeResponse(body []byte) (*ir.GenResponse, error) {
 		switch b.Type {
 		case "thinking":
 			out.Content = append(out.Content, ir.ContentPart{Kind: ir.PartThinking, Text: b.Thinking, Signature: b.Signature})
+		case "redacted_thinking":
+			if b.Data != "" {
+				out.Content = append(out.Content, ir.ContentPart{Kind: ir.PartRedactedThinking, RedactedData: b.Data})
+			}
 		case "text":
 			out.Content = append(out.Content, ir.ContentPart{Kind: ir.PartText, Text: b.Text})
 		case "tool_use":
@@ -377,11 +397,21 @@ func (anthropicCodec) EncodeResponse(resp *ir.GenResponse) ([]byte, error) {
 	for _, p := range resp.Content {
 		switch p.Kind {
 		case ir.PartThinking:
-			blk := map[string]any{"type": "thinking", "thinking": p.Text}
-			if p.Signature != "" {
-				blk["signature"] = p.Signature
+			// A cross-protocol upstream cannot mint a valid Anthropic
+			// signature. Emitting the block unsigned would make the response
+			// malformed and could later be replayed as foreign history.
+			if p.Signature == "" {
+				continue
 			}
-			blocks = append(blocks, blk)
+			blocks = append(blocks, map[string]any{
+				"type":      "thinking",
+				"thinking":  p.Text,
+				"signature": p.Signature,
+			})
+		case ir.PartRedactedThinking:
+			// Opaque Anthropic-encrypted blobs are never re-encoded after
+			// crossing the IR boundary.
+			continue
 		case ir.PartText:
 			blocks = append(blocks, map[string]any{"type": "text", "text": p.Text})
 		case ir.PartToolUse:

@@ -375,13 +375,25 @@ func stripForeignThinkingSignatures(req *ir.GenRequest) {
 	}
 	for i := range req.System {
 		req.System[i].Signature = ""
+		req.System[i].RedactedData = ""
 	}
 	for mi := range req.Messages {
-		for pi := range req.Messages[mi].Parts {
-			if req.Messages[mi].Parts[pi].Kind == ir.PartThinking {
-				req.Messages[mi].Parts[pi].Signature = ""
+		parts := req.Messages[mi].Parts
+		kept := parts[:0]
+		for pi := range parts {
+			switch parts[pi].Kind {
+			case ir.PartThinking:
+				// The target protocol/provider cannot prove the signature
+				// origin, so encoders must see unsigned thinking (and drop it
+				// when the target cannot consume unsigned reasoning).
+				parts[pi].Signature = ""
+			case ir.PartRedactedThinking:
+				// Never carry an opaque encrypted blob across protocols.
+				continue
 			}
+			kept = append(kept, parts[pi])
 		}
+		req.Messages[mi].Parts = kept
 	}
 }
 

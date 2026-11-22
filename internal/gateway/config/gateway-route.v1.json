@@ -52,7 +52,7 @@
         "preferNativeProtocol": { "type": "boolean" },
         "allowCrossProtocol": { "type": "boolean" },
         "allowEmulation": { "type": "boolean" },
-        "maxAttempts": { "type": "integer", "minimum": 1, "maximum": 16 },
+        "maxAttempts": { "type": "integer", "minimum": 1, "maximum": 16, "description": "Maximum upstream attempts for this route (default 3). Direct <plan>/<model> addresses use maxAttempts 1 unless the plan opts into direct.fallbackRoute." },
         "cacheTtlOverride": { "$ref": "#/$defs/duration" },
         "semanticTiering": {
           "type": "object",

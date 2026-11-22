@@ -49,6 +49,63 @@ func TestDirectResolutionAndPrecedence(t *testing.T) {
 	}
 }
 
+// Direct addressing is strict by default. Setting direct.fallbackRoute is the
+// only way to append an explicitly configured same-family route and extend the
+// attempt budget.
+func TestDirectFallbackOptIn(t *testing.T) {
+	r, snap, _, _ := setupRouterFixture(t)
+	p := snap.Plans["glm-coding"]
+	sig := Signals{Protocol: config.ProtocolAnthropic, Family: config.FamilyGenerative, RequestedModel: "glm-coding/glm-4.7"}
+
+	route, resolution, err := r.ResolveRoute(snap, sig)
+	if err != nil || resolution != ResolutionDirect || route.ID != "direct:glm-coding" {
+		t.Fatalf("default direct route=%+v resolution=%s err=%v", route, resolution, err)
+	}
+	if route.Policy.EffectiveMaxAttempts() != 1 || len(route.Targets) != 1 {
+		t.Fatalf("default direct must stay single-target: %+v", route)
+	}
+	sel, err := r.Select(context.Background(), snap, sig)
+	if err != nil || len(sel.Candidates) != 1 || sel.Candidates[0].Plan.ID != "glm-coding" {
+		t.Fatalf("default direct selection=%+v err=%v", sel, err)
+	}
+
+	fallback := &config.Route{
+		ID:     "coding-fallback",
+		Family: config.FamilyGenerative,
+		Policy: config.RoutePolicy{Preset: config.PresetStrictFailover, MaxAttempts: 2},
+		Targets: []config.Target{
+			{Plan: "glm-coding", Model: "glm-4.7", Priority: 1},
+			{Plan: "kimi-coding", Model: "kimi-k2.5", Priority: 2},
+		},
+	}
+	snap.Routes = append(snap.Routes, fallback)
+	snap.AllRoutes = append(snap.AllRoutes, fallback)
+	p.Direct = &config.DirectSpec{FallbackRoute: "coding-fallback"}
+
+	route, resolution, err = r.ResolveRoute(snap, sig)
+	if err != nil || resolution != ResolutionDirect || len(route.Targets) != 2 {
+		t.Fatalf("opt-in direct route=%+v resolution=%s err=%v", route, resolution, err)
+	}
+	if route.Policy.EffectiveMaxAttempts() != 3 {
+		t.Fatalf("direct fallback attempts = %d, want 1 direct + 2 fallback", route.Policy.EffectiveMaxAttempts())
+	}
+	sel, err = r.Select(context.Background(), snap, sig)
+	if err != nil || len(sel.Candidates) != 2 {
+		t.Fatalf("opt-in direct selection=%+v err=%v", sel, err)
+	}
+	if sel.Candidates[0].Plan.ID != "glm-coding" || sel.Candidates[0].Target.Model != "glm-4.7" {
+		t.Fatalf("direct target must remain first: %+v", sel.Candidates)
+	}
+	if sel.Candidates[1].Plan.ID != "kimi-coding" {
+		t.Fatalf("fallback target missing: %+v", sel.Candidates)
+	}
+
+	fallback.Family = config.FamilyDecision
+	if _, _, err := r.ResolveRoute(snap, sig); err == nil || !strings.Contains(err.Error(), "family") {
+		t.Fatalf("cross-family direct fallback must fail closed: %v", err)
+	}
+}
+
 func TestDirectFailClosedAndEndpointRestrictions(t *testing.T) {
 	r, snap, _, _ := setupRouterFixture(t)
 	p := snap.Plans["glm-coding"]

@@ -10,11 +10,12 @@ import (
 )
 
 const (
-	PartText       = "text"
-	PartImage      = "image"
-	PartThinking   = "thinking"
-	PartToolUse    = "tool_use"
-	PartToolResult = "tool_result"
+	PartText             = "text"
+	PartImage            = "image"
+	PartThinking         = "thinking"
+	PartRedactedThinking = "redacted_thinking"
+	PartToolUse          = "tool_use"
+	PartToolResult       = "tool_result"
 
 	EventStreamStart   = "stream_start"
 	EventThinkingDelta = "thinking_delta"
@@ -57,16 +58,17 @@ type Message struct {
 
 // ContentPart is one typed block inside System, Message, or GenResponse.
 type ContentPart struct {
-	Kind      string          // text | image | thinking | tool_use | tool_result
-	Text      string          // text or thinking text
-	Signature string          // vendor-scoped opaque signature; never forwarded cross-provider
-	MediaType string          // e.g. image/png
-	Data      string          // base64 image bytes or data
-	URL       string          // remote/data image URL
-	ToolID    string          // tool call ID
-	ToolName  string          // tool function name
-	InputJSON json.RawMessage // raw JSON tool arguments
-	IsError   bool            // true when tool_result reports a tool error
+	Kind         string          // text | image | thinking | redacted_thinking | tool_use | tool_result
+	Text         string          // text or thinking text
+	Signature    string          // vendor-scoped opaque signature; never forwarded cross-provider
+	RedactedData string          // encrypted anthropic redacted_thinking payload; never forwarded cross-provider
+	MediaType    string          // e.g. image/png
+	Data         string          // base64 image bytes or data
+	URL          string          // remote/data image URL
+	ToolID       string          // tool call ID
+	ToolName     string          // tool function name
+	InputJSON    json.RawMessage // raw JSON tool arguments
+	IsError      bool            // true when tool_result reports a tool error
 }
 
 // ToolDecl describes a callable tool/function.

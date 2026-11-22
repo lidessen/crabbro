@@ -56,6 +56,11 @@ type Executor struct {
 	CaptureMode    string
 	MaxRequestBody int64
 
+	// Signatures tracks in-memory thinking-signature provenance so the
+	// same-protocol fast path can preserve signed history for the upstream
+	// that minted it and strip it everywhere else.
+	Signatures *codec.SignatureProvenance
+
 	// AutoResetSignal is invoked when an upstream attempt is classified as
 	// quota exhaustion or rate limiting. Implementations must not block: the
 	// gateway uses it to raise the opt-in reset-coupon evaluation off the
@@ -73,6 +78,7 @@ func New(rtr *router.Router, secrets *secret.Store, ldg *ledger.Store, sink capt
 		Transports:     NewTransportPool(),
 		CaptureMode:    CapturePreview,
 		MaxRequestBody: shared.DefaultMaxGatewayRequestBody,
+		Signatures:     codec.NewSignatureProvenance(),
 	}
 }
 
@@ -220,6 +226,12 @@ func (e *Executor) tryCandidate(
 	var bridgeState any
 	if !needBridge {
 		upBody, err = codec.PatchModelAndExtraBody(rawBody, cand.EndpointProto, cand.Target.Model, cand.ModelSpec.ExtraBody)
+		if err == nil {
+			// Same-protocol failover can cross providers/model families. A
+			// native body otherwise carries vendor signatures verbatim into
+			// the next upstream, which rejects them as invalid.
+			upBody, err = codec.NormalizeSameProtocolBody(upBody, cand.EndpointProto, codec.CandidateSignatureOrigin(cand), e.Signatures)
+		}
 	} else {
 		upBody, bridgeState, err = e.Bridge.BuildUpstreamBody(cand, ingress, rawBody)
 	}
@@ -410,6 +422,9 @@ func (e *Executor) tryCandidate(
 	outBody := respBytes
 	var usage shared.TokenUsage
 	if !needBridge {
+		// Remember which exact upstream minted each thinking signature so the
+		// next same-protocol turn can preserve it only for that target.
+		e.Signatures.RecordResponse(cand.EndpointProto, codec.CandidateSignatureOrigin(cand), respBytes)
 		if cand.EndpointProto == config.ProtocolOpenAIDecisions {
 			dreq, decErr := codec.DecodeOpenAIDecisionsRequest(rawBody)
 			if decErr == nil {
@@ -504,9 +519,14 @@ func (e *Executor) commitStream(
 
 	if !needBridge {
 		tap := codec.NewUsageTap(cand.EndpointProto)
-		dst := &streamSinkWriter{w: w, f: flusher, tap: tap, preview: &preview}
+		var sigTap *codec.SignatureStreamTap
+		if e.Signatures != nil {
+			sigTap = codec.NewSignatureStreamTap(cand.EndpointProto, codec.CandidateSignatureOrigin(cand), e.Signatures)
+		}
+		dst := &streamSinkWriter{w: w, f: flusher, tap: tap, preview: &preview, sigTap: sigTap}
 		src := io.MultiReader(bytes.NewReader(peeked), sseRest)
 		_, streamErr = io.Copy(dst, src)
+		sigTap.Close()
 		usage = tap.Usage()
 	} else {
 		capW := &limitedPreviewWriter{w: w, preview: &preview}
@@ -1107,12 +1127,16 @@ type streamSinkWriter struct {
 	w       io.Writer
 	f       http.Flusher
 	tap     *codec.UsageTap
+	sigTap  *codec.SignatureStreamTap
 	preview *bytes.Buffer
 }
 
 func (s *streamSinkWriter) Write(p []byte) (int, error) {
 	if s.tap != nil {
 		_, _ = s.tap.Write(p)
+	}
+	if s.sigTap != nil {
+		_, _ = s.sigTap.Write(p)
 	}
 	if s.preview != nil && s.preview.Len() < shared.MaxBodySize {
 		rem := shared.MaxBodySize - s.preview.Len()

@@ -216,6 +216,19 @@ func ValidateRouteBytes(filename, expectedID string, data []byte) (*Route, []sha
 // between routes and plans.
 func ValidateCrossFile(plans map[string]*Plan, routes map[string]*Route) []shared.Diagnostic {
 	var diags []shared.Diagnostic
+	for _, plan := range plans {
+		if plan == nil || plan.DirectFallbackRoute() == "" {
+			continue
+		}
+		fallback, ok := routes[plan.DirectFallbackRoute()]
+		if !ok || !fallback.IsEnabled() {
+			diags = append(diags, shared.Diagnostic{
+				File:    plan.ID + ".yaml",
+				Path:    "$.direct.fallbackRoute",
+				Message: fmt.Sprintf("fallback route %q must name an enabled route", plan.DirectFallbackRoute()),
+			})
+		}
+	}
 	for _, route := range routes {
 		if route == nil {
 			continue

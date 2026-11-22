@@ -2,6 +2,7 @@ package quota
 
 import (
 	"context"
+	"errors"
 	"math"
 	"net/http"
 	"path/filepath"
@@ -259,6 +260,17 @@ func sanitizedSyncError(err error) (string, bool) {
 	}
 	if err.Error() == "unsupported provider" {
 		return "", false
+	}
+	// fetch() emits only stage/kind/HTTP-status diagnostics. Pass those
+	// through verbatim: they contain no URL, header, credential, or body
+	// text, and they are what makes a stale minimax-cn snapshot actionable.
+	var syncErr *syncFetchError
+	if errors.As(err, &syncErr) {
+		return syncErr.Error(), true
+	}
+	var fetchErr *fetchError
+	if errors.As(err, &fetchErr) {
+		return fetchErr.Error(), true
 	}
 	for _, prefix := range []string{
 		"endpoint requires session auth or rejected credentials (HTTP ",

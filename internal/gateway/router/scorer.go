@@ -166,8 +166,11 @@ func (r *Router) ResolveRoute(snap *config.Snapshot, sig Signals) (*config.Route
 				if raw == "" || ms == nil {
 					return nil, "", fmt.Errorf("model %q is not declared on plan %q", raw, id)
 				}
-				yes := true
-				return &config.Route{ID: "direct:" + p.ID, Family: sig.Family, Policy: config.RoutePolicy{Preset: config.PresetStrictFailover, PreferNativeProtocol: &yes, AllowCrossProtocol: &yes, MaxAttempts: 1}, Targets: []config.Target{{Plan: p.ID, Model: key, Priority: 10}}}, ResolutionDirect, nil
+				rt, err := directRouteFor(snap, p, key, sig.Family)
+				if err != nil {
+					return nil, "", err
+				}
+				return rt, ResolutionDirect, nil
 			}
 		}
 		for _, rt := range routes {
@@ -177,6 +180,92 @@ func (r *Router) ResolveRoute(snap *config.Snapshot, sig Signals) (*config.Route
 		}
 	}
 	return nil, "", fmt.Errorf("no enabled gateway route matches profile=%q protocol=%q model=%q", sig.Profile, sig.Protocol, sig.RequestedModel)
+}
+
+// directRouteFor builds the synthetic route for a <plan>/<model> address.
+// Without an explicit plan.direct.fallbackRoute it stays single-target with
+// maxAttempts 1. With the opt-in flag set, the named enabled same-family
+// route's targets are appended after the direct target and the direct
+// attempt's budget expands to cover them.
+func directRouteFor(snap *config.Snapshot, plan *config.Plan, model, family string) (*config.Route, error) {
+	directTarget := config.Target{Plan: plan.ID, Model: model, Priority: 0}
+	routeID := "direct:" + plan.ID
+	fallbackID := plan.DirectFallbackRoute()
+	if fallbackID == "" {
+		yes := true
+		return &config.Route{
+			ID:     routeID,
+			Family: family,
+			Policy: config.RoutePolicy{
+				Preset:               config.PresetStrictFailover,
+				PreferNativeProtocol: &yes,
+				AllowCrossProtocol:   &yes,
+				MaxAttempts:          1,
+			},
+			Targets: []config.Target{directTarget},
+		}, nil
+	}
+	if snap == nil {
+		return nil, fmt.Errorf("direct fallback route %q is not configured", fallbackID)
+	}
+	var fallback *config.Route
+	for _, rt := range snap.Routes {
+		if rt != nil && rt.ID == fallbackID && rt.IsEnabled() {
+			fallback = rt
+			break
+		}
+	}
+	if fallback == nil {
+		return nil, fmt.Errorf("direct fallback route %q is not found or disabled", fallbackID)
+	}
+	if fallback.EffectiveFamily() != family {
+		return nil, fmt.Errorf("direct fallback route %q belongs to family %q, request family is %q", fallbackID, fallback.EffectiveFamily(), family)
+	}
+	seen := map[string]struct{}{targetKey(directTarget): {}}
+	targets := []config.Target{directTarget}
+	for i, tgt := range fallback.Targets {
+		key := targetKey(tgt)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		tgt.Priority = 100 + i
+		targets = append(targets, tgt)
+	}
+	if len(targets) == 1 {
+		// The named route only repeats the direct target: remain strict
+		// rather than pretending a failover target exists.
+		yes := true
+		return &config.Route{
+			ID:     routeID,
+			Family: family,
+			Policy: config.RoutePolicy{
+				Preset:               config.PresetStrictFailover,
+				PreferNativeProtocol: &yes,
+				AllowCrossProtocol:   &yes,
+				MaxAttempts:          1,
+			},
+			Targets: targets,
+		}, nil
+	}
+	no := false
+	yes := true
+	return &config.Route{
+		ID:     routeID,
+		Family: family,
+		Policy: config.RoutePolicy{
+			Preset:               config.PresetStrictFailover,
+			PreferNativeProtocol: &no,
+			AllowCrossProtocol:   &yes,
+			AllowEmulation:       fallback.Policy.AllowEmulation,
+			MaxAttempts:          1 + fallback.Policy.EffectiveMaxAttempts(),
+		},
+		Targets: targets,
+	}, nil
+}
+
+func targetKey(t config.Target) string {
+	return t.Plan + "\x00" + t.Model + "\x00" + t.EndpointProtocol
 }
 
 // Select runs the 4-stage routing pipeline and returns an ordered failover candidate list.

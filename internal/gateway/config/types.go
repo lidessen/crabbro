@@ -127,11 +127,25 @@ func (p *Plan) IsEnabled() bool {
 type DirectSpec struct {
 	Enabled  *bool    `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 	Profiles []string `yaml:"profiles,omitempty" json:"profiles,omitempty"`
+	// FallbackRoute opts direct <plan>/<model> addressing into failover.
+	// When empty (the default) direct addressing remains single-target with
+	// maxAttempts 1. When set, the named enabled same-family route's targets
+	// are appended after the direct target.
+	FallbackRoute string `yaml:"fallbackRoute,omitempty" json:"fallbackRoute,omitempty"`
 }
 
 // DirectEnabled reports whether direct addressing is available.
 func (p *Plan) DirectEnabled() bool {
 	return p.IsEnabled() && (p.Direct == nil || p.Direct.Enabled == nil || *p.Direct.Enabled)
+}
+
+// DirectFallbackRoute returns the explicit opt-in fallback route for direct
+// addressing, or "" when direct addressing stays single-target.
+func (p *Plan) DirectFallbackRoute() string {
+	if p == nil || p.Direct == nil {
+		return ""
+	}
+	return p.Direct.FallbackRoute
 }
 
 // AllowsDirectProfile reports whether profile may directly address this plan.

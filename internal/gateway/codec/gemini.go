@@ -122,6 +122,13 @@ func (geminiCodec) DecodeRequest(body []byte, ingress IngressInfo) (*ir.GenReque
 					Data:      p.InlineData.Data,
 				})
 			case p.FunctionCall != nil:
+				// A functionCall without a name cannot be represented as a
+				// valid tool turn in any protocol. Thought signatures are
+				// intentionally not copied into the IR: cross-protocol
+				// conversion must never forward them.
+				if strings.TrimSpace(p.FunctionCall.Name) == "" {
+					continue
+				}
 				id := firstNonEmpty(p.FunctionCall.ID, fmt.Sprintf("call_gem_%d_%d", mi, pi))
 				nameToID[p.FunctionCall.Name] = id
 				args, _ := json.Marshal(p.FunctionCall.Args)
@@ -216,6 +223,11 @@ func (geminiCodec) EncodeRequest(req *ir.GenRequest) ([]byte, error) {
 					gparts = append(gparts, map[string]any{"text": p.URL})
 				}
 			case ir.PartToolUse:
+				// Gemini rejects a functionCall without a name; skip rather
+				// than emitting a malformed tool turn.
+				if strings.TrimSpace(p.ToolName) == "" {
+					continue
+				}
 				gparts = append(gparts, map[string]any{
 					"functionCall": map[string]any{
 						"name": p.ToolName,
@@ -223,7 +235,13 @@ func (geminiCodec) EncodeRequest(req *ir.GenRequest) ([]byte, error) {
 					},
 				})
 			case ir.PartToolResult:
-				fnName := firstNonEmpty(p.ToolName, idToName[p.ToolID], p.ToolID)
+				// functionResponse requires the name of a preceding
+				// functionCall; using the opaque call ID as a function name
+				// would emit a response for a declaration that does not exist.
+				fnName := firstNonEmpty(p.ToolName, idToName[p.ToolID])
+				if strings.TrimSpace(fnName) == "" {
+					continue
+				}
 				respObj := map[string]any{"result": p.Text}
 				if p.IsError {
 					respObj = map[string]any{"error": p.Text}
@@ -338,6 +356,9 @@ func (geminiCodec) DecodeResponse(body []byte) (*ir.GenResponse, error) {
 				case p.Text != "":
 					out.Content = append(out.Content, ir.ContentPart{Kind: ir.PartText, Text: p.Text})
 				case p.FunctionCall != nil:
+					if strings.TrimSpace(p.FunctionCall.Name) == "" {
+						continue
+					}
 					hasTools = true
 					args, _ := json.Marshal(p.FunctionCall.Args)
 					if len(args) == 0 || string(args) == "null" {
@@ -436,6 +457,9 @@ func (d *gemStreamDec) Feed(_, data string) ([]ir.StreamEvent, bool, error) {
 				case p.Text != "":
 					evs = append(evs, ir.StreamEvent{Kind: ir.EventTextDelta, Text: p.Text})
 				case p.FunctionCall != nil:
+					if strings.TrimSpace(p.FunctionCall.Name) == "" {
+						continue
+					}
 					idx := d.nextToolIdx
 					d.nextToolIdx++
 					id := firstNonEmpty(p.FunctionCall.ID, fmt.Sprintf("call_gem_%d", idx))

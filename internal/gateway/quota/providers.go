@@ -75,6 +75,94 @@ func shanghaiStamp(v string) *time.Time {
 	return &u
 }
 
+// fetchFailure is the only provider error shape that may cross the quota
+// boundary. It records a request stage class and HTTP status, never a URL,
+// header, credential, or response body.
+type fetchFailure struct {
+	class  string // request | transport | http | parse
+	status int
+}
+
+func (e *fetchFailure) Error() string {
+	switch e.class {
+	case "http":
+		if e.status == http.StatusUnauthorized || e.status == http.StatusForbidden {
+			return fmt.Sprintf("endpoint requires session auth or rejected credentials (HTTP %d)", e.status)
+		}
+		if e.status > 0 {
+			return fmt.Sprintf("provider request failed (HTTP %d)", e.status)
+		}
+		return "provider request failed"
+	case "transport":
+		return "request failed"
+	case "parse":
+		return "invalid provider response"
+	default:
+		return "invalid endpoint"
+	}
+}
+
+// fetchError is the sanitized, stage-attributed diagnostic stored in
+// RemoteQuota.LastError when a sync attempt fails.
+type fetchError struct {
+	Stage  string // primary | fallback
+	Kind   string // request | transport | http | parse
+	Status int
+}
+
+func (e *fetchError) Error() string {
+	stage := e.Stage
+	if stage == "" {
+		stage = "primary"
+	}
+	switch e.Kind {
+	case "http":
+		if e.Status > 0 {
+			return fmt.Sprintf("%s: HTTP %d", stage, e.Status)
+		}
+		return stage + ": HTTP error"
+	case "transport":
+		return stage + ": transport error"
+	case "parse":
+		return stage + ": parse error"
+	default:
+		return stage + ": request error"
+	}
+}
+
+// syncFetchError combines the primary and legacy fallback diagnostics so a
+// stale minimax-cn snapshot says which stage failed and why.
+type syncFetchError struct {
+	Primary  *fetchError
+	Fallback *fetchError
+}
+
+func (e *syncFetchError) Error() string {
+	parts := make([]string, 0, 2)
+	if e.Primary != nil {
+		parts = append(parts, e.Primary.Error())
+	}
+	if e.Fallback != nil {
+		parts = append(parts, e.Fallback.Error())
+	}
+	return "quota sync failed (" + strings.Join(parts, "; ") + ")"
+}
+
+func stageFetchError(stage string, err error) *fetchError {
+	if err == nil {
+		return nil
+	}
+	var ff *fetchFailure
+	if errors.As(err, &ff) {
+		return &fetchError{Stage: stage, Kind: ff.class, Status: ff.status}
+	}
+	return &fetchError{Stage: stage, Kind: "parse"}
+}
+
+func parseFetchError(stage string) *fetchError {
+	return &fetchError{Stage: stage, Kind: "parse"}
+}
+
 func object(v any) map[string]any { m, _ := v.(map[string]any); return m }
 func percent(used, cap any) *float64 {
 	u, ok := number(used)
@@ -126,7 +214,7 @@ func zcodeBase(p *config.Plan) string {
 func fetchJSON(ctx context.Context, client *http.Client, endpoint, key string, bearer bool) (map[string]any, error) {
 	req, e := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if e != nil {
-		return nil, errors.New("invalid endpoint")
+		return nil, &fetchFailure{class: "request"}
 	}
 	if bearer {
 		key = "Bearer " + key
@@ -135,19 +223,16 @@ func fetchJSON(ctx context.Context, client *http.Client, endpoint, key string, b
 	req.Header.Set("Accept", "application/json")
 	resp, e := client.Do(req)
 	if e != nil {
-		return nil, errors.New("request failed")
+		return nil, &fetchFailure{class: "transport"}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		if resp.StatusCode == 401 || resp.StatusCode == 403 {
-			return nil, fmt.Errorf("endpoint requires session auth or rejected credentials (HTTP %d)", resp.StatusCode)
-		}
-		return nil, fmt.Errorf("provider request failed (HTTP %d)", resp.StatusCode)
+		return nil, &fetchFailure{class: "http", status: resp.StatusCode}
 	}
 	var m map[string]any
 	dec := json.NewDecoder(io.LimitReader(resp.Body, 1<<20))
 	if dec.Decode(&m) != nil || m == nil {
-		return nil, errors.New("invalid provider response")
+		return nil, &fetchFailure{class: "parse"}
 	}
 	return m, nil
 }
@@ -187,7 +272,7 @@ func fetch(ctx context.Context, c *http.Client, p *config.Plan, key string) (Rem
 	case "kimi-code-cn":
 		endpoint = "https://api.kimi.com/coding/v1/usages"
 	case "minimax-cn":
-		endpoint = minimaxRemainsPercent
+		return fetchMiniMax(ctx, c, key)
 	case "opencode-go":
 		endpoint = "https://opencode.ai/zen/go/v1/usage"
 	case "zenmux":
@@ -200,28 +285,20 @@ func fetch(ctx context.Context, c *http.Client, p *config.Plan, key string) (Rem
 	}
 	m, e := fetchJSON(ctx, c, endpoint, key, kind != "zcode")
 	if e != nil {
-		if kind == "zenmux" && strings.Contains(e.Error(), "(HTTP 403)") {
+		var ff *fetchFailure
+		if kind == "zenmux" && errors.As(e, &ff) && ff.class == "http" && ff.status == http.StatusForbidden {
 			// The management subscription endpoint answers a normal
 			// (non-management) key with 403; name the scope gap so the
 			// surfaced status says what actually failed.
 			return q, errors.New("zenmux key lacks management scope (HTTP 403)")
 		}
-		if kind == "minimax-cn" {
-			// The remains_percent document is absent on older deployments
-			// that only serve the legacy coding_plan counts document.
-			if legacy, e2 := fetchJSON(ctx, c, minimaxLegacyRemains, key, true); e2 == nil {
-				m, e = legacy, nil
-			}
-		}
-	}
-	if e != nil {
-		return q, e
+		return q, &syncFetchError{Primary: stageFetchError("primary", e)}
 	}
 	switch kind {
 	case "zcode":
 		d, err := envelope(m)
 		if err != nil {
-			return q, err
+			return q, &syncFetchError{Primary: parseFetchError("primary")}
 		}
 		if s, ok := d["level"].(string); ok {
 			q.PlanTier = safe(s)
@@ -258,7 +335,7 @@ func fetch(ctx context.Context, c *http.Client, p *config.Plan, key string) (Rem
 		}
 		coupons, err := listResetCoupons(ctx, c, zcodeBase(p), key)
 		if err != nil {
-			return q, err
+			return q, &syncFetchError{Primary: &fetchError{Stage: "primary", Kind: "request"}}
 		}
 		now := time.Now()
 		for _, cp := range coupons {
@@ -365,18 +442,9 @@ func fetch(ctx context.Context, c *http.Client, p *config.Plan, key string) (Rem
 				}
 			}
 		}
-	case "minimax-cn":
-		if parseMiniMaxQuota(&q, m) == 0 {
-			// A successful remains_percent answer that yields no windows
-			// may still be a shape mismatch: try the legacy counts
-			// document before declaring the response invalid.
-			if legacy, e2 := fetchJSON(ctx, c, minimaxLegacyRemains, key, true); e2 == nil {
-				parseMiniMaxQuota(&q, legacy)
-			}
-		}
 	case "zenmux":
 		if m["success"] != true {
-			return q, errors.New("provider request failed")
+			return q, &syncFetchError{Primary: parseFetchError("primary")}
 		}
 		d := object(m["data"])
 		if tier, ok := object(d["plan"])["tier"].(string); ok && !strings.Contains(tier, key) {
@@ -403,8 +471,8 @@ func fetch(ctx context.Context, c *http.Client, p *config.Plan, key string) (Rem
 			}
 		}
 	}
-	if (kind == "kimi-code-cn" || kind == "minimax-cn" || kind == "opencode-go" || kind == "zenmux") && len(q.Windows) == 0 {
-		return q, errors.New("invalid provider response")
+	if (kind == "kimi-code-cn" || kind == "opencode-go" || kind == "zenmux") && len(q.Windows) == 0 {
+		return q, &syncFetchError{Primary: parseFetchError("primary")}
 	}
 	if len(q.Windows) > 0 {
 		q.UsagePct = q.Windows[0].UsagePct
@@ -425,6 +493,44 @@ func flexStamp(v any) *time.Time {
 		}
 	}
 	return timestamp(v)
+}
+
+// fetchMiniMax tries the remains_percent document first and the legacy
+// coding_plan counts document second. Both stages retain their own sanitized
+// diagnostic (stage, kind, HTTP status) so a stale minimax-cn snapshot says
+// exactly which endpoint rejected the sync and whether it was transport,
+// HTTP, or parse-level.
+func fetchMiniMax(ctx context.Context, c *http.Client, key string) (RemoteQuota, error) {
+	var q RemoteQuota
+	primary, primaryErr := fetchJSON(ctx, c, minimaxRemainsPercent, key, true)
+	if primaryErr == nil && parseMiniMaxQuota(&q, primary) > 0 {
+		finalizeMiniMaxQuota(&q)
+		return q, nil
+	}
+	legacy, legacyErr := fetchJSON(ctx, c, minimaxLegacyRemains, key, true)
+	if legacyErr == nil && parseMiniMaxQuota(&q, legacy) > 0 {
+		finalizeMiniMaxQuota(&q)
+		return q, nil
+	}
+	primaryFailure := parseFetchError("primary")
+	if primaryErr != nil {
+		primaryFailure = stageFetchError("primary", primaryErr)
+	}
+	fallbackFailure := parseFetchError("fallback")
+	if legacyErr != nil {
+		fallbackFailure = stageFetchError("fallback", legacyErr)
+	}
+	return q, &syncFetchError{Primary: primaryFailure, Fallback: fallbackFailure}
+}
+
+func finalizeMiniMaxQuota(q *RemoteQuota) {
+	if q == nil || len(q.Windows) == 0 {
+		return
+	}
+	q.UsagePct = q.Windows[0].UsagePct
+	if q.ResetAt == nil {
+		q.ResetAt = q.Windows[0].ResetAt
+	}
 }
 
 // parseMiniMaxQuota reads one MiniMax token-plan document into quota windows

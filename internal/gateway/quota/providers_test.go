@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -237,3 +238,124 @@ func TestZenmuxManagementScopeRejectionSurfaces(t *testing.T) {
 		t.Fatalf("LastError = %q, want the management-scope 403 status", q.LastError)
 	}
 }
+
+// Both MiniMax endpoints failing must preserve the stage, class, and HTTP
+// status of each endpoint in the sanitized stale snapshot. Nothing from the
+// URL, credential, or response body may cross the boundary.
+func TestMiniMaxSyncPreservesBothEndpointDiagnostics(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/backend/account/token_plan/remains_percent":
+			w.WriteHeader(http.StatusNotFound)
+			fmt.Fprint(w, "<html>private@example.com secret-token https://host/?api_key=leaked</html>")
+		case "/v1/api/openplatform/coding_plan/remains":
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprint(w, "<html>private@example.com secret-token</html>")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	store := secret.New(t.TempDir())
+	if err := store.Set("minimax_key", "test-key"); err != nil {
+		t.Fatal(err)
+	}
+	s := New(store, t.TempDir())
+	u, _ := url.Parse(server.URL)
+	s.client.Transport = rewriteTransport{u}
+	s.Refresh(context.Background(), map[string]*config.Plan{
+		"minimax-cn": {ID: "minimax-cn", Credential: "minimax_key"},
+	})
+	q, ok := s.Get("minimax-cn")
+	if !ok || !q.Stale {
+		t.Fatalf("stale minimax snapshot missing: %+v", q)
+	}
+	if q.LastError != "quota sync failed (primary: HTTP 404; fallback: HTTP 500)" {
+		t.Fatalf("LastError = %q", q.LastError)
+	}
+	raw := q.LastError + " " + q.SyncSource
+	for _, banned := range []string{"http://", "https://", server.URL, "test-key", "secret-token", "private@example.com", "api_key"} {
+		if strings.Contains(raw, banned) {
+			t.Fatalf("sanitized diagnostic leaked %q: %s", banned, raw)
+		}
+	}
+}
+
+// A successful HTTP status with an unusable body is a parse failure, and the
+// legacy endpoint's own parse failure must remain visible.
+func TestMiniMaxSyncPreservesParseFailures(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<html>not json secret-token</html>`)
+	}))
+	defer server.Close()
+	store := secret.New(t.TempDir())
+	if err := store.Set("minimax_key", "test-key"); err != nil {
+		t.Fatal(err)
+	}
+	s := New(store, t.TempDir())
+	u, _ := url.Parse(server.URL)
+	s.client.Transport = rewriteTransport{u}
+	s.Refresh(context.Background(), map[string]*config.Plan{
+		"minimax-cn": {ID: "minimax-cn", Credential: "minimax_key"},
+	})
+	q, ok := s.Get("minimax-cn")
+	if !ok || !q.Stale {
+		t.Fatalf("stale minimax snapshot missing: %+v", q)
+	}
+	if q.LastError != "quota sync failed (primary: parse error; fallback: parse error)" {
+		t.Fatalf("LastError = %q", q.LastError)
+	}
+	if strings.Contains(q.LastError, "secret-token") || strings.Contains(q.LastError, "html") {
+		t.Fatalf("parse diagnostic leaked provider body: %s", q.LastError)
+	}
+}
+
+// Mixed transport/HTTP diagnostics keep both stages distinct.
+func TestMiniMaxSyncDistinguishesTransportAndHTTP(t *testing.T) {
+	primary := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/backend/account/token_plan/remains_percent" {
+			primary = true
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	store := secret.New(t.TempDir())
+	if err := store.Set("minimax_key", "test-key"); err != nil {
+		t.Fatal(err)
+	}
+	s := New(store, t.TempDir())
+	u, _ := url.Parse(server.URL)
+	s.client.Transport = rewriteTransport{u}
+	// The legacy endpoint request fails at transport level.
+	s.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path == "/v1/api/openplatform/coding_plan/remains" {
+			return nil, fmt.Errorf("dial tcp secret-token failed")
+		}
+		u2 := *r.URL
+		u2.Scheme = u.Scheme
+		u2.Host = u.Host
+		r2 := r.Clone(r.Context())
+		r2.URL = &u2
+		return http.DefaultTransport.RoundTrip(r2)
+	})
+	s.Refresh(context.Background(), map[string]*config.Plan{
+		"minimax-cn": {ID: "minimax-cn", Credential: "minimax_key"},
+	})
+	q, ok := s.Get("minimax-cn")
+	if !ok || !q.Stale {
+		t.Fatalf("stale minimax snapshot missing: %+v", q)
+	}
+	if !primary || q.LastError != "quota sync failed (primary: HTTP 503; fallback: transport error)" {
+		t.Fatalf("primaryHit=%t LastError=%q", primary, q.LastError)
+	}
+	if strings.Contains(q.LastError, "secret-token") {
+		t.Fatalf("transport diagnostic leaked error text: %s", q.LastError)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

@@ -42,6 +42,39 @@ models:
 	}
 }
 
+func TestDirectFallbackRouteOptInValidation(t *testing.T) {
+	base := `version: 1
+id: test
+credential: key
+direct: {fallbackRoute: %s}
+endpoints:
+  anthropic: {baseUrl: "https://example.com"}
+models:
+  model:
+    endpoints: [anthropic]
+`
+	p, diags := ValidatePlanBytes("test.yaml", "test", []byte(fmt.Sprintf(base, "fallback")))
+	if len(diags) > 0 {
+		t.Fatalf("fallbackRoute should validate: %+v", diags)
+	}
+	fallback := &Route{ID: "fallback", Targets: []Target{{Plan: "test", Model: "model"}}}
+	if diags := ValidateCrossFile(map[string]*Plan{"test": p}, map[string]*Route{"fallback": fallback}); len(diags) > 0 {
+		t.Fatalf("configured fallback route should resolve: %+v", diags)
+	}
+	if diags := ValidateCrossFile(map[string]*Plan{"test": p}, map[string]*Route{}); len(diags) != 1 ||
+		diags[0].Path != "$.direct.fallbackRoute" || !strings.Contains(diags[0].Message, "enabled route") {
+		t.Fatalf("missing fallback route diagnostics = %+v", diags)
+	}
+	disabled := false
+	fallback.Enabled = &disabled
+	if diags := ValidateCrossFile(map[string]*Plan{"test": p}, map[string]*Route{"fallback": fallback}); len(diags) != 1 {
+		t.Fatalf("disabled fallback route diagnostics = %+v", diags)
+	}
+	if _, diags := ValidatePlanBytes("test.yaml", "test", []byte(fmt.Sprintf(base, "INVALID"))); len(diags) == 0 {
+		t.Fatal("invalid fallbackRoute id accepted")
+	}
+}
+
 func TestRouteSchemaAcceptsSixProtocols(t *testing.T) {
 	_, schema, err := loadSchemas()
 	if err != nil {
