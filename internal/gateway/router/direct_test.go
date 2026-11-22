@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lidessen/crabbro/internal/gateway/config"
 )
@@ -150,6 +151,111 @@ func TestDirectFailClosedAndEndpointRestrictions(t *testing.T) {
 	sel, err = r.Select(context.Background(), snap, sig)
 	if err == nil || sel == nil || sel.Decision.RouteID != "direct:glm-coding" {
 		t.Fatalf("selection=%+v err=%v", sel, err)
+	}
+}
+
+// Strict-failover ranks by Total score even when preferNativeProtocol is
+// false, so the documented warm-cache pin on ToolLoop / NewUserTurn still
+// outranks the target priority bias. The synthetic direct fallback route is
+// the sole priority-first exception: an explicit <plan>/<model> address must
+// always try its direct target before any appended fallback_route targets,
+// even when a warm session sits on one of those fallback targets.
+func TestStrictFailoverCacheStickinessAndDirectFallbackPriority(t *testing.T) {
+	r, snap, _, _ := setupRouterFixture(t)
+	now := time.Date(2026, 11, 19, 10, 30, 0, 0, time.UTC)
+	r.Now = func() time.Time { return now }
+
+	no := false
+	main := snap.Routes[0]
+	main.Policy = config.RoutePolicy{Preset: config.PresetStrictFailover, PreferNativeProtocol: &no}
+	// kimi has the worse (higher) priority, so only warm-cache gravity can
+	// keep it first on ToolLoop / NewUserTurn.
+	main.Targets = []config.Target{
+		{Plan: "kimi-coding", Model: "kimi-k2.5", Priority: 20},
+		{Plan: "glm-coding", Model: "glm-4.7", Priority: 10},
+	}
+	r.Sessions.Update(SessionCacheEntry{
+		SessionKey:       "ses_strict_failover",
+		LastPlan:         "kimi-coding",
+		LastModel:        "kimi-k2.5",
+		WarmPrefixTokens: 50000,
+		LastSuccessAt:    now.Add(-30 * time.Second),
+	})
+
+	coldBody := []byte(`{"model":"coding-main","messages":[{"role":"user","content":"hello"}]}`)
+	cold := ExtractSignals("", config.ProtocolAnthropic, config.FamilyGenerative, "coding-main", "", coldBody)
+	if cold.TurnPhase != PhaseColdStart {
+		t.Fatalf("cold phase = %s, want ColdStart", cold.TurnPhase)
+	}
+	sel, err := r.Select(context.Background(), snap, cold)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sel.Candidates[0].Plan.ID != "glm-coding" {
+		t.Fatalf("cold strict-failover must follow target priority, got %s (%+v)", sel.Candidates[0].Plan.ID, sel.Decision.Candidates)
+	}
+
+	toolBody := []byte(`{"model":"coding-main","messages":[{"role":"user","content":"edit"},{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}]}`)
+	toolSig := ExtractSignals("", config.ProtocolAnthropic, config.FamilyGenerative, "coding-main", "ses_strict_failover", toolBody)
+	if toolSig.TurnPhase != PhaseToolLoop {
+		t.Fatalf("tool phase = %s, want ToolLoop", toolSig.TurnPhase)
+	}
+	sel, err = r.Select(context.Background(), snap, toolSig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sel.Candidates[0].Plan.ID != "kimi-coding" {
+		t.Fatalf("ToolLoop warm-cache pin lost with preferNativeProtocol=false: got %s (%+v)", sel.Candidates[0].Plan.ID, sel.Decision.Candidates)
+	}
+	if sel.Candidates[0].Scores.Cache != 10 {
+		t.Fatalf("ToolLoop cache score = %v, want 10", sel.Candidates[0].Scores.Cache)
+	}
+
+	turnBody := []byte(`{"model":"coding-main","messages":[{"role":"user","content":"first"},{"role":"assistant","content":"ok"},{"role":"user","content":"next step"}]}`)
+	turnSig := ExtractSignals("", config.ProtocolAnthropic, config.FamilyGenerative, "coding-main", "ses_strict_failover", turnBody)
+	if turnSig.TurnPhase != PhaseNewUserTurn {
+		t.Fatalf("turn phase = %s, want NewUserTurn", turnSig.TurnPhase)
+	}
+	sel, err = r.Select(context.Background(), snap, turnSig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sel.Candidates[0].Plan.ID != "kimi-coding" {
+		t.Fatalf("NewUserTurn warm-cache stickiness lost with preferNativeProtocol=false: got %s (%+v)", sel.Candidates[0].Plan.ID, sel.Decision.Candidates)
+	}
+	if sel.Candidates[0].Scores.Cache <= 0.01 {
+		t.Fatalf("NewUserTurn cache score = %v, want warm-cache gravity above the priority bias", sel.Candidates[0].Scores.Cache)
+	}
+
+	// Direct fallback opt-in: the primary direct target stays first even
+	// though the warm session's cache gravity favors kimi fallback.
+	p := snap.Plans["glm-coding"]
+	fallback := &config.Route{
+		ID:     "coding-fallback",
+		Family: config.FamilyGenerative,
+		Policy: config.RoutePolicy{Preset: config.PresetStrictFailover, MaxAttempts: 2},
+		Targets: []config.Target{
+			{Plan: "glm-coding", Model: "glm-4.7", Priority: 1},
+			{Plan: "kimi-coding", Model: "kimi-k2.5", Priority: 2},
+		},
+	}
+	snap.Routes = append(snap.Routes, fallback)
+	snap.AllRoutes = append(snap.AllRoutes, fallback)
+	p.Direct = &config.DirectSpec{FallbackRoute: "coding-fallback"}
+
+	directSig := ExtractSignals("", config.ProtocolAnthropic, config.FamilyGenerative, "glm-coding/glm-4.7", "ses_strict_failover", turnBody)
+	sel, err = r.Select(context.Background(), snap, directSig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sel.Candidates) != 2 {
+		t.Fatalf("direct fallback candidates = %d, want 2 (%+v)", len(sel.Candidates), sel.Decision.Candidates)
+	}
+	if sel.Candidates[0].Plan.ID != "glm-coding" || sel.Candidates[0].Target.Model != "glm-4.7" {
+		t.Fatalf("direct fallback must try the primary direct target first: %+v", sel.Decision.Candidates)
+	}
+	if sel.Candidates[1].Plan.ID != "kimi-coding" || sel.Candidates[1].Scores.Cache <= 0 {
+		t.Fatalf("fallback target must follow the direct target and retain its warm-cache score: %+v", sel.Decision.Candidates)
 	}
 }
 

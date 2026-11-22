@@ -344,8 +344,18 @@ func (r *Router) Select(ctx context.Context, snap *config.Snapshot, sig Signals)
 	}
 
 	// Stage 4: Sort descending by unified Total score, then target priority, then plan/model.
+	// strict-failover still ranks by Total score so warm-cache gravity wins on
+	// ToolLoop/NewUserTurn; its zero quality/quota weights leave the small
+	// target-priority bias in charge of cold, cacheless requests. The synthetic
+	// direct-fallback route is the only priority-first exception: an explicit
+	// <plan>/<model> address must attempt its direct target before appended
+	// fallback_route targets even when a warm session favors a fallback.
+	directFallback := resolution == ResolutionDirect &&
+		len(rt.Targets) > 1 &&
+		rt.Policy.EffectivePreset() == config.PresetStrictFailover &&
+		!rt.Policy.PreferNative()
 	sort.SliceStable(eligible, func(i, j int) bool {
-		if rt.Policy.EffectivePreset() == config.PresetStrictFailover && !rt.Policy.PreferNative() && eligible[i].Target.Priority != eligible[j].Target.Priority {
+		if directFallback && eligible[i].Target.Priority != eligible[j].Target.Priority {
 			return eligible[i].Target.Priority < eligible[j].Target.Priority
 		}
 		if math.Abs(eligible[i].Scores.Total-eligible[j].Scores.Total) > 1e-9 {
