@@ -110,6 +110,7 @@ const (
 	EventGatewayConfigChanged     = api.EventGatewayConfigChanged
 	EventGatewayPlanHealthChanged = api.EventGatewayPlanHealthChanged
 	EventGatewayQuotaReset        = api.EventGatewayQuotaReset
+	EventGatewayQuotaExpiring     = api.EventGatewayQuotaExpiring
 
 	ActionAbort                = api.ActionAbort
 	ActionBlock                = api.ActionBlock

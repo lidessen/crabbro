@@ -183,7 +183,12 @@ func (s *Syncer) AutoReset(ctx context.Context, plans map[string]*config.Plan, p
 		s.syncPlan(ctx, p, false)
 	}
 	for _, scope := range eligible {
-		if !policy.AllowsAutoResetScope(scope) || !s.autoResetEligible(planID, scope, now) {
+		if !policy.AllowsAutoResetScope(scope) {
+			continue
+		}
+		// Normal exhaustion triggers and the opt-in pre-expiry safeguard are
+		// evaluated independently; both still pass through the same guards.
+		if !s.autoResetEligible(planID, scope, now) && !s.preExpirySafeguardEligible(planID, scope, policy.Safeguard, now) {
 			continue
 		}
 		out, err := s.redeem(ctx, p, scope, false, &policy)
@@ -246,48 +251,112 @@ func (s *Syncer) scopeExhausted(planID, scope string) bool {
 	return false
 }
 
-// autoResetEligible permits a weekly coupon for an exhausted five-hour window
-// only when weekly consumption is high or that coupon is about to expire.
+// weeklyRecoveryMinPct is the weekly usage at or above which an exhausted
+// five-hour window may fall back to a weekly coupon. Spending a weekly coupon
+// while the weekly window still has plenty of quota left wastes it, so the
+// fallback is deliberately stricter than the normal matching-window trigger.
+const weeklyRecoveryMinPct = 90.0
+
+// autoResetEligible reports whether fresh quota evidence justifies spending a
+// coupon for scope. A weekly coupon may recover an exhausted five-hour window
+// only when the weekly window itself is nearly consumed; the pre-expiry
+// safeguard handles use-it-or-lose-it cases separately with a scope-local
+// threshold.
 func (s *Syncer) autoResetEligible(planID, scope string, now time.Time) bool {
 	if s.scopeExhausted(planID, scope) {
 		return true
 	}
-	if scope != "weekly" || !s.scopeExhausted(planID, "fiveHour") {
+	if scope != ScopeWeekly || !s.scopeExhausted(planID, ScopeFiveHour) {
 		return false
 	}
 	q, ok := s.Get(planID)
 	if !ok || q.Stale {
 		return false
 	}
+	used, ok := windowUsagePct(q, ScopeWeekly)
+	return ok && used >= weeklyRecoveryMinPct
+}
+
+// windowUsagePct returns the usage percentage of the window behind scope.
+// Aggregate usage is only used when the provider reports no named windows.
+func windowUsagePct(q *RemoteQuota, scope string) (float64, bool) {
+	if q == nil {
+		return 0, false
+	}
+	name := windowNameForScope(scope)
 	for _, w := range q.Windows {
-		if w.Name == "Weekly" && w.UsagePct != nil && *w.UsagePct >= 90 {
-			return true
+		if w.Name == name && w.UsagePct != nil {
+			return *w.UsagePct, true
 		}
 	}
+	if len(q.Windows) == 0 && q.UsagePct != nil {
+		return *q.UsagePct, true
+	}
+	return 0, false
+}
+
+// soonestCouponExpiry returns the earliest future coupon expiry for scope.
+func soonestCouponExpiry(q *RemoteQuota, scope string, now time.Time) (time.Time, bool) {
+	if q == nil {
+		return time.Time{}, false
+	}
+	var soonest time.Time
 	for _, cp := range q.Resets {
-		if cp.Scope == "weekly" && cp.ExpiresAt != nil && cp.ExpiresAt.After(now) && cp.ExpiresAt.Sub(now) <= 2*time.Hour {
-			return true
+		if cp.Scope != scope || cp.ExpiresAt == nil || !cp.ExpiresAt.After(now) {
+			continue
+		}
+		if soonest.IsZero() || cp.ExpiresAt.Before(soonest) {
+			soonest = *cp.ExpiresAt
 		}
 	}
-	return false
+	// Older/simplified snapshots may only carry the aggregate expiry. The
+	// caller still enforces the per-scope usage threshold, so this cannot
+	// spend a weekly coupon while weekly quota remains.
+	if soonest.IsZero() && len(q.Resets) == 0 && q.SoonestResetExpiry != nil && q.SoonestResetExpiry.After(now) {
+		soonest = *q.SoonestResetExpiry
+	}
+	return soonest, !soonest.IsZero()
+}
+
+// preExpirySafeguardEligible implements the opt-in rule
+//   soonestCouponExpiry(scope) < leadTime AND used(scope) >= minUsedPct
+// The usage threshold is evaluated against the same window the coupon resets.
+// This is what prevents an expiring weekly coupon from burning itself merely
+// to recover a five-hour window while weekly quota remains plentiful.
+func (s *Syncer) preExpirySafeguardEligible(planID, scope string, spec config.SafeguardSpec, now time.Time) bool {
+	if !spec.Enabled {
+		return false
+	}
+	q, ok := s.Get(planID)
+	if !ok || q.Stale {
+		return false
+	}
+	expiry, ok := soonestCouponExpiry(q, scope, now)
+	if !ok || expiry.Sub(now) > spec.LeadTimeDuration() {
+		return false
+	}
+	used, ok := windowUsagePct(q, scope)
+	if !ok {
+		return false
+	}
+	return used >= spec.MinUsedPercent()
 }
 
 // maybeAutoReset launches the opt-in evaluation when a freshly synced
-// snapshot shows an exhausted configured window.
+// snapshot shows an exhausted configured window or an expiring coupon that
+// crosses the pre-expiry safeguard threshold.
 func (s *Syncer) maybeAutoReset(p *config.Plan, q RemoteQuota) {
 	if !p.AutoReset.Enabled || provider(p) != "zcode" || q.Stale {
 		return
 	}
+	now := s.now()
 	for _, scope := range p.AutoReset.EffectiveAutoResetScopes() {
 		if !p.AutoReset.AllowsAutoResetScope(scope) {
 			continue
 		}
-		name := windowNameForScope(scope)
-		for _, w := range q.Windows {
-			if w.Name == name && w.UsagePct != nil && *w.UsagePct >= exhaustedWindowPct || scope == "weekly" && s.autoResetEligible(p.ID, scope, s.now()) {
-				s.AutoResetAsync(func() map[string]*config.Plan { return map[string]*config.Plan{p.ID: p} }, p.ID, false)
-				return
-			}
+		if s.autoResetEligible(p.ID, scope, now) || s.preExpirySafeguardEligible(p.ID, scope, p.AutoReset.Safeguard, now) {
+			s.AutoResetAsync(func() map[string]*config.Plan { return map[string]*config.Plan{p.ID: p} }, p.ID, false)
+			return
 		}
 	}
 }
@@ -347,17 +416,22 @@ func (s *Syncer) redeem(ctx context.Context, p *config.Plan, scope string, dryRu
 			pick = cp
 		}
 	}
-	if policy != nil && pick.scope == "weekly" && !s.scopeExhausted(p.ID, "weekly") {
-		q, ok := s.Get(p.ID)
-		safe := false
-		if ok && !q.Stale {
-			for _, w := range q.Windows {
-				if w.Name == "Weekly" && w.UsagePct != nil && *w.UsagePct >= 90 {
-					safe = true
-				}
-			}
+	if policy != nil && pick.scope == ScopeWeekly && !s.scopeExhausted(p.ID, ScopeWeekly) {
+		// Recovering a different window with a weekly coupon is only safe
+		// when the weekly window is genuinely consumed. The safeguard may
+		// lower that bar for a coupon that is about to expire, but never
+		// below its configured usage threshold.
+		minUsed := weeklyRecoveryMinPct
+		guard := policy.Safeguard
+		if guard.Enabled && pick.expiresAt != nil && pick.expiresAt.After(now) && pick.expiresAt.Sub(now) <= guard.LeadTimeDuration() {
+			minUsed = guard.MinUsedPercent()
 		}
-		if !safe && (pick.expiresAt == nil || !pick.expiresAt.After(now) || pick.expiresAt.Sub(now) > 2*time.Hour) {
+		q, ok := s.Get(p.ID)
+		used, hasUsage := 0.0, false
+		if ok && !q.Stale {
+			used, hasUsage = windowUsagePct(q, ScopeWeekly)
+		}
+		if !hasUsage || used < minUsed {
 			return out, ErrResetNoCoupons
 		}
 	}

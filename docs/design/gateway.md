@@ -361,6 +361,8 @@ surplus(w)     = remainingRatio - timeLeftRatio
   - Otherwise take `max_w (surplus(w) * (1.0 - 0.5*timeLeftRatio(w)))` (burn soonest-expiring surplus first).
 - Plans without declared `windows` receive neutral `QuotaUrgency = 0.0` (only RPM/TPM/cooldown apply).
 
+Provider-reported expiry adds a bounded bonus (`<= +0.2`) to `QuotaUrgency`: reset coupons and underutilized windows inside 24h (weekly: 48h) score higher as their expiry approaches and only in proportion to the quota still usable. A plan whose five-hour window is exhausted (`quota_exhausted`, usage `>= 99%`) never receives this bonus, so an expiring coupon cannot outrank a plan with burnable quota.
+
 **Three-tier quota calibration ladder (no vendor balance API required):**
 1. **Tier 1 (Exact):** Parse `anthropic-ratelimit-*`, `x-ratelimit-remaining-*`, `x-ratelimit-reset-*` headers when upstream provides them.
 2. **Tier 2 (Local ledger):** Aggregate token/request totals from `usage.db` over each window (`rolling` sliding sum or `fixed` calendar boundary).
@@ -475,9 +477,15 @@ Some coding plans (BigModel `zcode`) grant reset coupons that restore an exhaust
     scopes: [fiveHour]       # default: both fiveHour and weekly
     expiringWithin: 24h      # only coupons expiring inside this horizon; empty = any
     minInterval: 5m          # anti-double-spend cooldown between auto redemptions
+    safeguard:               # opt-in pre-expiry redemption; default off
+      enabled: true
+      leadTime: 30m          # redeem when the scope's coupon expires inside this lead
+      minUsedPct: 80         # ...and the same window is at least this used
   ```
 
-  When enabled, the gateway redeems a coupon only after it observes the matching window exhausted (provider-reported usage `>= 99%`) — either from a quota refresh or from an upstream `quota_exhausted` / `rate_limit` classification (which re-fetches the windows first). Redemption is guarded by a per-plan single-flight mutex plus the per-`(plan, scope)` `minInterval`, always re-reads `/list` before `/use`, and **never blindly retries** an ambiguous or failed `/use`: the attempt fails closed to the normal cooling/failover path. A verified success refreshes the quota snapshot, clears plan cooling, and emits `gateway_quota_reset` carrying only the plan and scope.
+  When enabled, the gateway redeems a coupon only after it observes the matching window exhausted (provider-reported usage `>= 99%`) — either from a quota refresh or from an upstream `quota_exhausted` / `rate_limit` classification (which re-fetches the windows first). The pre-expiry safeguard additionally redeems when the scope's soonest coupon is inside `leadTime` **and** that scope's window (`fiveHour` or `weekly`) is at least `minUsedPct` used, so a weekly coupon is never spent merely to recover a five-hour window while weekly quota remains plentiful. Redemption is guarded by a per-plan single-flight mutex plus the per-`(plan, scope)` `minInterval`, always re-reads `/list` before `/use`, and **never blindly retries** an ambiguous or failed `/use`: the attempt fails closed to the normal cooling/failover path. A verified success refreshes the quota snapshot, clears plan cooling, and emits `gateway_quota_reset` carrying only the plan and scope.
+
+- **Expiry reminders:** plans may configure `quotaReminder.leadTime` (default `24h`). When a coupon or an underutilized weekly/monthly window enters that horizon, the gateway emits one `gateway_quota_expiring` event per coupon/window (deduplicated by scope and expiry). The sanitized `reminders` list in the quota snapshot uses the same lead time; provider coupon identifiers never appear in either surface.
 
 ---
 

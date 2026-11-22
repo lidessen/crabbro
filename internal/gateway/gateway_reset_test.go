@@ -176,6 +176,59 @@ func TestGatewayAutoResetClearsCooldown(t *testing.T) {
 	}
 }
 
+// TestGatewayQuotaExpiryReminderEvent proves the reminder reaches the
+// existing event surface exactly once per coupon, with no provider IDs.
+func TestGatewayQuotaExpiryReminderEvent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/monitor/usage/quota/limit":
+			fmt.Fprint(w, `{"code":0,"data":{"level":"lite","limits":[{"unit":3,"usage":100,"remaining":90},{"unit":6,"usage":100,"remaining":90}]}}`)
+		case "/api/biz/customer-package-reset/list":
+			fmt.Fprintf(w, `{"code":200,"success":true,"data":{"fiveHourResets":[{"recordId":4242,"grantType":"DIRECT","expireTime":%q,"available":true}]}}`,
+				time.Now().Add(90*time.Minute).Format("2006-01-02 15:04:05"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	sink := &resetSink{}
+	gw, _ := newResetGateway(t, server.URL, config.AutoResetSpec{}, sink)
+	// A 2h lead time puts the 90m coupon inside the reminder window.
+	gw.Config.Snapshot().AllPlans["zcode"].QuotaReminder = config.QuotaReminderSpec{LeadTime: "2h"}
+	gw.Quotas.Refresh(context.Background(), gw.Config.Snapshot().AllPlans)
+	waitUntil(t, "quota expiry reminder", func() bool {
+		return countEvents(sink.snapshot(), string(shared.EventGatewayQuotaExpiring)) == 1
+	})
+	// A second refresh sees the same coupon and must not re-emit.
+	gw.Quotas.Refresh(context.Background(), gw.Config.Snapshot().AllPlans)
+	time.Sleep(100 * time.Millisecond)
+	events := sink.snapshot()
+	if got := countEvents(events, string(shared.EventGatewayQuotaExpiring)); got != 1 {
+		t.Fatalf("reminder events = %d (%v)", got, events)
+	}
+	for _, ev := range events {
+		if strings.Contains(ev, string(shared.EventGatewayQuotaExpiring)) {
+			if !strings.Contains(ev, "zcode") || !strings.Contains(ev, "fiveHour") || !strings.Contains(ev, "expiring_coupon") {
+				t.Fatalf("unexpected reminder payload: %s", ev)
+			}
+			if strings.Contains(ev, "4242") || strings.Contains(ev, "recordId") {
+				t.Fatalf("reminder event leaks a coupon identifier: %s", ev)
+			}
+		}
+	}
+}
+
+func countEvents(events []string, typ string) int {
+	n := 0
+	for _, ev := range events {
+		if strings.HasPrefix(ev, typ) {
+			n++
+		}
+	}
+	return n
+}
+
 // TestGatewayResetQuotaControlPath covers the operator path used by
 // POST /v1/gateway/quotas/reset and `crabbro gw quotas reset`.
 func TestGatewayResetQuotaControlPath(t *testing.T) {

@@ -74,7 +74,23 @@
           "items": { "enum": ["fiveHour", "weekly"] }
         },
         "expiringWithin": { "$ref": "#/$defs/duration" },
-        "minInterval": { "$ref": "#/$defs/duration" }
+        "minInterval": { "$ref": "#/$defs/duration" },
+        "safeguard": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "leadTime": { "$ref": "#/$defs/duration" },
+            "minUsedPct": { "type": "number", "minimum": 1, "maximum": 99 }
+          }
+        }
+      }
+    },
+    "quotaReminder": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "leadTime": { "$ref": "#/$defs/duration" }
       }
     },
     "endpoints": {

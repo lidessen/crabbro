@@ -45,6 +45,9 @@ const (
 	// EventGatewayQuotaReset is emitted after a verified reset-coupon
 	// redemption. Payload carries the plan and window scope only.
 	EventGatewayQuotaReset EventType = "gateway_quota_reset"
+	// EventGatewayQuotaExpiring is emitted once per coupon (or underutilized
+	// window) when its expiry enters the configured reminder lead time.
+	EventGatewayQuotaExpiring EventType = "gateway_quota_expiring"
 )
 
 // Event is a structured observation emitted by the daemon. Events are

@@ -8,4 +8,5 @@ import (
 type RemoteQuota = api.RemoteQuotaJSON
 type QuotaWindow = api.RemoteQuotaWindow
 type ResetCoupon = api.RemoteResetCoupon
+type QuotaReminder = api.QuotaReminder
 type apiResetOutcome = api.GatewayQuotaResetResponse

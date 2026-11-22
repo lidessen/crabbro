@@ -109,12 +109,13 @@ type Plan struct {
 	Description string                   `yaml:"description,omitempty" json:"description,omitempty"`
 	Credential  string                   `yaml:"credential" json:"credential"`
 	ProxyURL    string                   `yaml:"proxyUrl,omitempty" json:"proxyUrl,omitempty"`
-	Timeout     TimeoutSpec              `yaml:"timeout,omitempty" json:"timeout,omitempty"`
-	Cache       CacheSpec                `yaml:"cache,omitempty" json:"cache,omitempty"`
-	Limits      LimitsSpec               `yaml:"limits,omitempty" json:"limits,omitempty"`
-	AutoReset   AutoResetSpec            `yaml:"autoReset,omitempty" json:"autoReset,omitempty"`
-	Endpoints   map[string]*EndpointSpec `yaml:"endpoints" json:"endpoints"`
-	Models      map[string]*ModelSpec    `yaml:"models" json:"models"`
+	Timeout       TimeoutSpec              `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+	Cache         CacheSpec                `yaml:"cache,omitempty" json:"cache,omitempty"`
+	Limits        LimitsSpec               `yaml:"limits,omitempty" json:"limits,omitempty"`
+	AutoReset     AutoResetSpec            `yaml:"autoReset,omitempty" json:"autoReset,omitempty"`
+	QuotaReminder QuotaReminderSpec        `yaml:"quotaReminder,omitempty" json:"quotaReminder,omitempty"`
+	Endpoints     map[string]*EndpointSpec `yaml:"endpoints" json:"endpoints"`
+	Models        map[string]*ModelSpec    `yaml:"models" json:"models"`
 }
 
 // IsEnabled reports whether the plan is active (defaults to true when omitted).
@@ -198,10 +199,71 @@ func (c CacheSpec) TTLDuration() time.Duration {
 // coupons on its own. Reset coupons are provider-private; no coupon
 // identifier ever leaves the quota package.
 type AutoResetSpec struct {
-	Enabled        bool     `yaml:"enabled,omitempty" json:"enabled,omitempty"`
-	Scopes         []string `yaml:"scopes,omitempty" json:"scopes,omitempty"`
-	ExpiringWithin string   `yaml:"expiringWithin,omitempty" json:"expiringWithin,omitempty"`
-	MinInterval    string   `yaml:"minInterval,omitempty" json:"minInterval,omitempty"`
+	Enabled        bool          `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	Scopes         []string      `yaml:"scopes,omitempty" json:"scopes,omitempty"`
+	ExpiringWithin string        `yaml:"expiringWithin,omitempty" json:"expiringWithin,omitempty"`
+	MinInterval    string        `yaml:"minInterval,omitempty" json:"minInterval,omitempty"`
+	Safeguard      SafeguardSpec `yaml:"safeguard,omitempty" json:"safeguard,omitempty"`
+}
+
+// Defaults for the opt-in pre-expiry auto-reset safeguard.
+const (
+	DefaultSafeguardLeadTime     = 30 * time.Minute
+	DefaultSafeguardMinUsedPct   = 80.0
+	DefaultQuotaReminderLeadTime = 24 * time.Hour
+)
+
+// SafeguardSpec opts into proactive redemption before a reset coupon expires.
+// It is disabled by default and only applies when autoReset is also enabled.
+// The usage threshold is evaluated against the window the coupon resets, so a
+// weekly coupon is never spent merely to recover a five-hour window while the
+// weekly window still has plenty of quota left.
+type SafeguardSpec struct {
+	Enabled    bool    `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	LeadTime   string  `yaml:"leadTime,omitempty" json:"leadTime,omitempty"`
+	MinUsedPct float64 `yaml:"minUsedPct,omitempty" json:"minUsedPct,omitempty"`
+}
+
+// LeadTimeDuration returns the pre-expiry trigger horizon, defaulting to 30m.
+func (s SafeguardSpec) LeadTimeDuration() time.Duration {
+	if s.LeadTime == "" {
+		return DefaultSafeguardLeadTime
+	}
+	if d, err := ParseDuration(s.LeadTime); err == nil && d > 0 {
+		return d
+	}
+	return DefaultSafeguardLeadTime
+}
+
+// MinUsedPercent returns the usage percentage required to spend an expiring
+// coupon, defaulting to 80%. Values outside (0,100) fall back to the default
+// (config validation rejects them before they reach a live snapshot).
+func (s SafeguardSpec) MinUsedPercent() float64 {
+	if s.MinUsedPct <= 0 {
+		return DefaultSafeguardMinUsedPct
+	}
+	if s.MinUsedPct >= 100 {
+		return 99
+	}
+	return s.MinUsedPct
+}
+
+// QuotaReminderSpec configures proactive expiry notifications for a plan.
+// Events are emitted once per coupon (or underutilized window) when its
+// expiry enters the lead time.
+type QuotaReminderSpec struct {
+	LeadTime string `yaml:"leadTime,omitempty" json:"leadTime,omitempty"`
+}
+
+// LeadTimeDuration returns the reminder horizon, defaulting to 24h.
+func (r QuotaReminderSpec) LeadTimeDuration() time.Duration {
+	if r.LeadTime == "" {
+		return DefaultQuotaReminderLeadTime
+	}
+	if d, err := ParseDuration(r.LeadTime); err == nil && d > 0 {
+		return d
+	}
+	return DefaultQuotaReminderLeadTime
 }
 
 // AutoResetScopeFiveHour and AutoResetScopeWeekly name the redeemable windows.

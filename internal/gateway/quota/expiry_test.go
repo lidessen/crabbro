@@ -15,10 +15,13 @@ func TestWeeklyFallbackAndReminders(t *testing.T) {
 	if s.autoResetEligible("p", "weekly", now) {
 		t.Fatal("weekly coupon spent prematurely")
 	}
+	// An expiring weekly coupon is not a licence to reset a five-hour window
+	// while the weekly window still has plenty of quota left.
 	expiry = now.Add(2 * time.Hour)
-	if !s.autoResetEligible("p", "weekly", now) {
-		t.Fatal("expiring coupon should be eligible")
+	if s.autoResetEligible("p", "weekly", now) {
+		t.Fatal("weekly coupon spent while weekly quota remained")
 	}
+	// Only heavy weekly consumption makes the fallback worthwhile.
 	expiry = now.Add(4 * time.Hour)
 	weekly = 90
 	if !s.autoResetEligible("p", "weekly", now) {

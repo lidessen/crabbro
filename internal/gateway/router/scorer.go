@@ -551,19 +551,7 @@ func (r *Router) evalTargets(snap *config.Snapshot, rt *config.Route, sig Signal
 			if q, ok := r.Quotas.Get(plan.ID); ok && !q.Stale {
 				healthy := r.Health == nil || r.Health.Snapshot(plan.ID, now).Healthy
 				if healthy {
-					if q.ResetsRemaining > 0 && q.SoonestResetExpiry != nil && q.SoonestResetExpiry.After(now) && q.SoonestResetExpiry.Sub(now) <= 24*time.Hour {
-						quotaScore += 0.2
-					}
-					for _, w := range q.Windows {
-						horizon := 24 * time.Hour
-						if w.Name == "Weekly" {
-							horizon = 48 * time.Hour
-						}
-						if w.ResetAt != nil && w.ResetAt.After(now) && w.ResetAt.Sub(now) <= horizon && w.Trend != nil && (w.Trend.Status == "underutilized" || (w.Trend.ProjectedEndPct != nil && *w.Trend.ProjectedEndPct < 60)) && (w.UsagePct == nil || *w.UsagePct < 100) {
-							quotaScore += 0.2
-							break
-						}
-					}
+					quotaScore += expiringQuotaBoost(q, now)
 				}
 			}
 		}
@@ -789,6 +777,142 @@ func (r *Router) computeQuotaScore(plan *config.Plan, now time.Time) (urgency fl
 		return maxWeightedSurplus, blockedHard, blockedSoft
 	}
 	return 0.0, blockedHard, blockedSoft
+}
+
+const (
+	expiryBoostMax         = 0.2
+	expiryBoostHorizon     = 24 * time.Hour
+	expiryBoostWeekHorizon = 48 * time.Hour
+	quotaExhaustedUsagePct = 99.0
+)
+
+// expiringQuotaBoost scores burnable quota that is about to disappear. It is
+// additive on top of QuotaUrgency and scales both by time-to-expiry (closer
+// expiry means more urgency) and by remaining usable quota (quota already
+// spent cannot be rescued). An exhausted five-hour window always scores zero:
+// no amount of priority can burn quota that is not there, and boosting it
+// would only starve healthy plans.
+func expiringQuotaBoost(q *quota.RemoteQuota, now time.Time) float64 {
+	if q == nil || q.Stale || fiveHourExhausted(q) {
+		return 0
+	}
+	boost := 0.0
+	if q.ResetsRemaining > 0 && q.SoonestResetExpiry != nil {
+		if factor := expiryTimeFactor(*q.SoonestResetExpiry, now, expiryBoostHorizon); factor > 0 {
+			if b := expiryBoostMax * factor * remainingUsableRatio(q); b > boost {
+				boost = b
+			}
+		}
+	}
+	for _, w := range q.Windows {
+		if w.ResetAt == nil || w.Trend == nil {
+			continue
+		}
+		horizon := expiryBoostHorizon
+		if w.Name == "Weekly" {
+			horizon = expiryBoostWeekHorizon
+		}
+		if expiryTimeFactor(*w.ResetAt, now, horizon) <= 0 {
+			continue
+		}
+		underutilized := w.Trend.Status == "underutilized" || (w.Trend.ProjectedEndPct != nil && *w.Trend.ProjectedEndPct < 60)
+		if !underutilized || (w.UsagePct != nil && *w.UsagePct >= quotaExhaustedUsagePct) {
+			continue
+		}
+		factor := expiryTimeFactor(*w.ResetAt, now, horizon)
+		if b := expiryBoostMax * factor * windowRemainingRatio(w); b > boost {
+			boost = b
+		}
+	}
+	return boost
+}
+
+// expiryTimeFactor maps a future expiry onto [0,1]; 0 means outside the
+// horizon or already expired.
+func expiryTimeFactor(expiry, now time.Time, horizon time.Duration) float64 {
+	if horizon <= 0 || !expiry.After(now) {
+		return 0
+	}
+	left := expiry.Sub(now)
+	if left > horizon {
+		return 0
+	}
+	return clamp01(1 - float64(left)/float64(horizon))
+}
+
+func isFiveHourWindow(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "5 hours", "5 hour", "5h", "5-hour", "five hour", "five hours", "fivehour":
+		return true
+	}
+	return false
+}
+
+// fiveHourUsagePct returns the provider-reported five-hour usage. When the
+// provider reports no named windows, the aggregate usage is the only signal.
+func fiveHourUsagePct(q *quota.RemoteQuota) (float64, bool) {
+	if q == nil {
+		return 0, false
+	}
+	for _, w := range q.Windows {
+		if !isFiveHourWindow(w.Name) {
+			continue
+		}
+		if w.UsagePct != nil {
+			return clampRange(*w.UsagePct, 0, 100), true
+		}
+		if w.Trend != nil && w.Trend.RemainingPct != nil {
+			return clampRange(100-*w.Trend.RemainingPct, 0, 100), true
+		}
+	}
+	if len(q.Windows) == 0 && q.UsagePct != nil {
+		return clampRange(*q.UsagePct, 0, 100), true
+	}
+	return 0, false
+}
+
+// fiveHourExhausted reports whether the plan's five-hour window has no usable
+// quota left (the provider's quota_exhausted state).
+func fiveHourExhausted(q *quota.RemoteQuota) bool {
+	if q == nil {
+		return false
+	}
+	for _, w := range q.Windows {
+		if !isFiveHourWindow(w.Name) {
+			continue
+		}
+		if w.Trend != nil && w.Trend.Status == "exhausted" {
+			return true
+		}
+		if w.UsagePct != nil && *w.UsagePct >= quotaExhaustedUsagePct {
+			return true
+		}
+	}
+	return len(q.Windows) == 0 && q.UsagePct != nil && *q.UsagePct >= quotaExhaustedUsagePct
+}
+
+// remainingUsableRatio returns the fraction of the five-hour window still
+// available. Unknown usage is treated as fully available so time-to-expiry
+// alone can still break ties.
+func remainingUsableRatio(q *quota.RemoteQuota) float64 {
+	used, ok := fiveHourUsagePct(q)
+	if !ok {
+		return 1
+	}
+	return clamp01(1 - used/100)
+}
+
+func windowRemainingRatio(w quota.QuotaWindow) float64 {
+	switch {
+	case w.UsagePct != nil:
+		return clamp01(1 - *w.UsagePct/100)
+	case w.Trend != nil && w.Trend.RemainingPct != nil:
+		return clamp01(*w.Trend.RemainingPct / 100)
+	case w.Trend != nil && w.Trend.ProjectedEndPct != nil:
+		return clamp01(1 - *w.Trend.ProjectedEndPct/100)
+	default:
+		return 1
+	}
 }
 
 // ComputeWindowUsage calculates current remainingRatio, timeLeftRatio, and surplus

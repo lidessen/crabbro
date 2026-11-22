@@ -2,16 +2,18 @@ package quota
 
 import (
 	"context"
-	"github.com/lidessen/crabbro/pkg/api"
 	"math"
 	"net/http"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/lidessen/crabbro/internal/gateway/config"
 	"github.com/lidessen/crabbro/internal/secret"
+	"github.com/lidessen/crabbro/pkg/api"
 )
 
 // Syncer owns in-memory provider snapshots.
@@ -26,6 +28,14 @@ type Syncer struct {
 	// OnAutoReset is invoked after every verified automatic redemption. The
 	// gateway uses it to clear plan cooling and emit a sanitized event.
 	OnAutoReset func(planID, scope string, out ResetOutcome)
+	// OnExpiryReminder is invoked once per coupon (or underutilized window)
+	// when its expiry enters the plan's configured reminder lead time.
+	OnExpiryReminder func(reminder QuotaReminder)
+
+	leads map[string]time.Duration // per-plan reminder lead time
+
+	reminderMu sync.Mutex
+	reminded   map[string]struct{} // emitted reminder keys, collision-free per coupon/window
 
 	clockMu sync.Mutex
 	clock   func() time.Time
@@ -42,9 +52,11 @@ func New(secrets *secret.Store, rootDir string) *Syncer {
 				return http.ErrUseLastResponse
 			},
 		},
-		values: map[string]RemoteQuota{},
-		resets: gate,
-		clock:  time.Now,
+		values:   map[string]RemoteQuota{},
+		resets:   gate,
+		leads:    map[string]time.Duration{},
+		reminded: map[string]struct{}{},
+		clock:    time.Now,
 	}
 }
 
@@ -84,18 +96,127 @@ func (s *Syncer) Get(id string) (*RemoteQuota, bool) {
 	for i := range q.Windows {
 		q.Windows[i].Trend = windowTrend(q.Windows[i], now)
 	}
-	q.Reminders = nil
-	if !q.Stale {
-		if q.ResetsRemaining > 0 && q.SoonestResetExpiry != nil && q.SoonestResetExpiry.After(now) && q.SoonestResetExpiry.Sub(now) <= 24*time.Hour {
-			q.Reminders = append(q.Reminders, api.QuotaReminder{PlanID: id, Kind: "expiring_coupon", Message: "Reset coupon expires soon", ExpiresAt: *q.SoonestResetExpiry})
+	q.Reminders = quotaReminders(id, &q, now, s.reminderLead(id))
+	return &q, true
+}
+
+// reminderLead returns the plan's configured reminder horizon. Plans synced
+// before this field existed (and direct test fixtures) use the 24h default.
+func (s *Syncer) reminderLead(planID string) time.Duration {
+	s.mu.RLock()
+	lead := s.leads[planID]
+	s.mu.RUnlock()
+	if lead <= 0 {
+		return config.DefaultQuotaReminderLeadTime
+	}
+	return lead
+}
+
+// quotaReminders derives the current expiry reminders from one snapshot.
+// It is a pure view used both by Get and by event emission; event dedupe
+// happens in checkExpiryReminders.
+func quotaReminders(planID string, q *RemoteQuota, now time.Time, lead time.Duration) []api.QuotaReminder {
+	if q == nil || q.Stale || lead <= 0 {
+		return nil
+	}
+	cutoff := now.Add(lead)
+	var out []api.QuotaReminder
+	for _, cp := range q.Resets {
+		if cp.ExpiresAt == nil || !cp.ExpiresAt.After(now) || cp.ExpiresAt.After(cutoff) {
+			continue
 		}
-		for _, w := range q.Windows {
-			if (w.Name == "Weekly" || w.Name == "Monthly") && w.Trend != nil && w.Trend.Status == "underutilized" && w.ResetAt != nil && w.ResetAt.After(now) && w.ResetAt.Sub(now) <= 24*time.Hour {
-				q.Reminders = append(q.Reminders, api.QuotaReminder{PlanID: id, Kind: "underutilized_window", Message: w.Name + " quota resets soon", ExpiresAt: *w.ResetAt, RemainingPct: w.Trend.RemainingPct})
-			}
+		out = append(out, api.QuotaReminder{
+			PlanID:    planID,
+			Kind:      "expiring_coupon",
+			Scope:     cp.Scope,
+			Message:   "Reset coupon expires soon",
+			ExpiresAt: *cp.ExpiresAt,
+		})
+	}
+	// Preserve the aggregate-expiry reminder for snapshots that do not carry
+	// per-coupon scope (the scope is unknown in that case).
+	if len(q.Resets) == 0 && q.ResetsRemaining > 0 && q.SoonestResetExpiry != nil &&
+		q.SoonestResetExpiry.After(now) && !q.SoonestResetExpiry.After(cutoff) {
+		out = append(out, api.QuotaReminder{
+			PlanID:    planID,
+			Kind:      "expiring_coupon",
+			Message:   "Reset coupon expires soon",
+			ExpiresAt: *q.SoonestResetExpiry,
+		})
+	}
+	for _, w := range q.Windows {
+		if (w.Name != "Weekly" && w.Name != "Monthly") || w.Trend == nil || w.Trend.Status != "underutilized" {
+			continue
+		}
+		if w.ResetAt == nil || !w.ResetAt.After(now) || w.ResetAt.After(cutoff) {
+			continue
+		}
+		out = append(out, api.QuotaReminder{
+			PlanID:       planID,
+			Kind:         "underutilized_window",
+			Scope:        w.Name,
+			Message:      w.Name + " quota resets soon",
+			ExpiresAt:    *w.ResetAt,
+			RemainingPct: w.Trend.RemainingPct,
+		})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if !out[i].ExpiresAt.Equal(out[j].ExpiresAt) {
+			return out[i].ExpiresAt.Before(out[j].ExpiresAt)
+		}
+		if out[i].Kind != out[j].Kind {
+			return out[i].Kind < out[j].Kind
+		}
+		return out[i].Scope < out[j].Scope
+	})
+	return out
+}
+
+// reminderKey identifies one sanitized reminder without provider coupon
+// identifiers. Two coupons with the same scope and expiry are
+// indistinguishable through the privacy boundary and intentionally collapse.
+func reminderKey(r api.QuotaReminder) string {
+	return r.PlanID + "\x00" + r.Kind + "\x00" + r.Scope + "\x00" + strconv.FormatInt(r.ExpiresAt.UTC().UnixNano(), 10)
+}
+
+// checkExpiryReminders emits at most one event per coupon/window and prunes
+// entries that no longer appear in fresh snapshots, so a long-running daemon
+// does not leak state. Callers must pass a fresh (non-stale) snapshot.
+func (s *Syncer) checkExpiryReminders(planID string, q *RemoteQuota, now time.Time, lead time.Duration) []api.QuotaReminder {
+	current := quotaReminders(planID, q, now, lead)
+	s.reminderMu.Lock()
+	if s.reminded == nil {
+		s.reminded = map[string]struct{}{}
+	}
+	prefix := planID + "\x00"
+	currentKeys := make(map[string]struct{}, len(current))
+	for _, r := range current {
+		currentKeys[reminderKey(r)] = struct{}{}
+	}
+	for key := range s.reminded {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		if _, ok := currentKeys[key]; !ok {
+			delete(s.reminded, key)
 		}
 	}
-	return &q, true
+	fresh := make([]api.QuotaReminder, 0, len(current))
+	for _, r := range current {
+		key := reminderKey(r)
+		if _, seen := s.reminded[key]; seen {
+			continue
+		}
+		s.reminded[key] = struct{}{}
+		fresh = append(fresh, r)
+	}
+	s.reminderMu.Unlock()
+	if s.OnExpiryReminder != nil {
+		for _, r := range fresh {
+			s.OnExpiryReminder(r)
+		}
+	}
+	return fresh
 }
 
 // Refresh fetches configured providers concurrently and waits for this refresh to finish.
@@ -159,9 +280,13 @@ func (s *Syncer) syncPlan(ctx context.Context, p *config.Plan, hook bool) {
 		q.SyncSource = "live-api"
 	}
 	s.values[id] = q
+	s.leads[id] = p.QuotaReminder.LeadTimeDuration()
 	s.mu.Unlock()
-	if err == nil && hook {
-		s.maybeAutoReset(p, q)
+	if err == nil {
+		s.checkExpiryReminders(id, &q, s.now(), p.QuotaReminder.LeadTimeDuration())
+		if hook {
+			s.maybeAutoReset(p, q)
+		}
 	}
 }
 

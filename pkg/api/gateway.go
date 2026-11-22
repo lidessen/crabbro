@@ -154,6 +154,7 @@ type RemoteResetCoupon struct {
 type QuotaReminder struct {
 	PlanID       string    `json:"planId"`
 	Kind         string    `json:"kind"`
+	Scope        string    `json:"scope,omitempty"`
 	Message      string    `json:"message"`
 	ExpiresAt    time.Time `json:"expiresAt"`
 	RemainingPct *float64  `json:"remainingPct,omitempty"`

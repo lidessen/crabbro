@@ -129,6 +129,19 @@ func ValidatePlanBytes(filename, expectedID string, data []byte) (*Plan, []share
 			diags = append(diags, shared.Diagnostic{File: filename, Path: "$.autoReset.minInterval", Message: "invalid reset minimum interval"})
 		}
 	}
+	if plan.AutoReset.Safeguard.LeadTime != "" {
+		if d, err := ParseDuration(plan.AutoReset.Safeguard.LeadTime); err != nil || d <= 0 {
+			diags = append(diags, shared.Diagnostic{File: filename, Path: "$.autoReset.safeguard.leadTime", Message: "invalid safeguard lead time"})
+		}
+	}
+	if v := plan.AutoReset.Safeguard.MinUsedPct; v != 0 && (v < 1 || v > 99) {
+		diags = append(diags, shared.Diagnostic{File: filename, Path: "$.autoReset.safeguard.minUsedPct", Message: "safeguard minUsedPct must be between 1 and 99"})
+	}
+	if plan.QuotaReminder.LeadTime != "" {
+		if d, err := ParseDuration(plan.QuotaReminder.LeadTime); err != nil || d <= 0 {
+			diags = append(diags, shared.Diagnostic{File: filename, Path: "$.quotaReminder.leadTime", Message: "invalid quota reminder lead time"})
+		}
+	}
 	if len(diags) > 0 {
 		return nil, diags
 	}

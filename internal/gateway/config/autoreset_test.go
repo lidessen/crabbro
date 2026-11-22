@@ -50,6 +50,58 @@ func TestAutoResetSpecDefaults(t *testing.T) {
 	}
 }
 
+func TestSafeguardAndReminderDefaults(t *testing.T) {
+	var guard SafeguardSpec
+	if guard.Enabled {
+		t.Fatal("safeguard must be off by default")
+	}
+	if guard.LeadTimeDuration() != 30*time.Minute || guard.MinUsedPercent() != 80 {
+		t.Fatalf("safeguard defaults = %v / %v", guard.LeadTimeDuration(), guard.MinUsedPercent())
+	}
+	custom := SafeguardSpec{Enabled: true, LeadTime: "45m", MinUsedPct: 65}
+	if custom.LeadTimeDuration() != 45*time.Minute || custom.MinUsedPercent() != 65 {
+		t.Fatalf("safeguard parsing = %v / %v", custom.LeadTimeDuration(), custom.MinUsedPercent())
+	}
+	broken := SafeguardSpec{LeadTime: "soon", MinUsedPct: -1}
+	if broken.LeadTimeDuration() != 30*time.Minute || broken.MinUsedPercent() != 80 {
+		t.Fatal("broken safeguard values must fall back to defaults")
+	}
+
+	var reminder QuotaReminderSpec
+	if reminder.LeadTimeDuration() != 24*time.Hour {
+		t.Fatalf("default reminder lead = %v", reminder.LeadTimeDuration())
+	}
+	if got := (QuotaReminderSpec{LeadTime: "2h"}).LeadTimeDuration(); got != 2*time.Hour {
+		t.Fatalf("reminder lead = %v", got)
+	}
+	if got := (QuotaReminderSpec{LeadTime: "0s"}).LeadTimeDuration(); got != 24*time.Hour {
+		t.Fatalf("broken reminder lead = %v", got)
+	}
+}
+
+func TestSafeguardAndReminderValidation(t *testing.T) {
+	withGuard := strings.Replace(autoResetPlanYAML, "  minInterval: 5m", "  minInterval: 5m\n  safeguard:\n    enabled: true\n    leadTime: 30m\n    minUsedPct: 80", 1)
+	if _, diags := ValidatePlanBytes("zcode.yaml", "zcode", []byte(withGuard)); len(diags) != 0 {
+		t.Fatalf("valid safeguard rejected: %v", diags)
+	}
+	badLead := strings.Replace(withGuard, "leadTime: 30m", "leadTime: soon", 1)
+	if _, diags := ValidatePlanBytes("zcode.yaml", "zcode", []byte(badLead)); len(diags) == 0 || !strings.Contains(diags[0].Path, "safeguard.leadTime") {
+		t.Fatalf("bad safeguard lead diagnostics = %v", diags)
+	}
+	badPct := strings.Replace(withGuard, "minUsedPct: 80", "minUsedPct: 0.5", 1)
+	if _, diags := ValidatePlanBytes("zcode.yaml", "zcode", []byte(badPct)); len(diags) == 0 || !strings.Contains(diags[0].Path, "safeguard.minUsedPct") {
+		t.Fatalf("bad safeguard threshold diagnostics = %v", diags)
+	}
+	withReminder := strings.Replace(autoResetPlanYAML, "  minInterval: 5m", "  minInterval: 5m\nquotaReminder:\n  leadTime: 6h", 1)
+	if _, diags := ValidatePlanBytes("zcode.yaml", "zcode", []byte(withReminder)); len(diags) != 0 {
+		t.Fatalf("valid quotaReminder rejected: %v", diags)
+	}
+	badReminder := strings.Replace(withReminder, "leadTime: 6h", "leadTime: never", 1)
+	if _, diags := ValidatePlanBytes("zcode.yaml", "zcode", []byte(badReminder)); len(diags) == 0 || !strings.Contains(diags[0].Path, "quotaReminder.leadTime") {
+		t.Fatalf("bad quotaReminder diagnostics = %v", diags)
+	}
+}
+
 func TestAutoResetValidation(t *testing.T) {
 	plan, diags := ValidatePlanBytes("zcode.yaml", "zcode", []byte(autoResetPlanYAML))
 	if len(diags) != 0 {

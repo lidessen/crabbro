@@ -250,6 +250,78 @@ func TestExpiringCouponBoost(t *testing.T) {
 	}
 }
 
+func TestExpiringQuotaBoostScalesWithTimeAndRemainingQuota(t *testing.T) {
+	now := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+	pct := func(v float64) *float64 { return &v }
+	at := func(d time.Duration) *time.Time { t := now.Add(d); return &t }
+
+	quotaAt := func(usage float64, left time.Duration) *quota.RemoteQuota {
+		return &quota.RemoteQuota{UsagePct: pct(usage), ResetsRemaining: 1, SoonestResetExpiry: at(left)}
+	}
+	near := expiringQuotaBoost(quotaAt(10, time.Hour), now)
+	far := expiringQuotaBoost(quotaAt(10, 12*time.Hour), now)
+	spent := expiringQuotaBoost(quotaAt(85, time.Hour), now)
+	if !(near > far && far > 0) {
+		t.Fatalf("boost must grow with time-to-expiry: near=%f far=%f", near, far)
+	}
+	if !(near > spent && spent >= 0) {
+		t.Fatalf("boost must shrink with used quota: fresh=%f spent=%f", near, spent)
+	}
+	if got := expiringQuotaBoost(quotaAt(10, -time.Hour), now); got != 0 {
+		t.Fatalf("expired coupon boosted by %f", got)
+	}
+	if got := expiringQuotaBoost(quotaAt(10, 25*time.Hour), now); got != 0 {
+		t.Fatalf("coupon outside horizon boosted by %f", got)
+	}
+
+	// An exhausted five-hour window is quota_exhausted: no boost at all,
+	// even when a coupon expires immediately.
+	exhausted := &quota.RemoteQuota{
+		Windows:            []api.RemoteQuotaWindow{{Name: "5 hours", UsagePct: pct(100)}},
+		ResetsRemaining:    1,
+		SoonestResetExpiry: at(time.Minute),
+	}
+	if got := expiringQuotaBoost(exhausted, now); got != 0 {
+		t.Fatalf("quota_exhausted plan boosted by %f", got)
+	}
+}
+
+func TestExpiringCouponBoostBeatsPriorityButNotQuotaExhaustion(t *testing.T) {
+	r, snap, _, _ := setupRouterFixture(t)
+	now := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+	r.Now = func() time.Time { return now }
+	// glm-coding starts at a worse priority (20 vs 10), so it only wins when
+	// the expiry boost is actually applied.
+	expiry := now.Add(12 * time.Hour)
+	usage := 10.0
+	r.Quotas = quotaFixture{"glm-coding": {ResetsRemaining: 1, SoonestResetExpiry: &expiry, UsagePct: &usage}}
+	sig := ExtractSignals("", config.ProtocolAnthropic, config.FamilyGenerative, "coding-main", "", []byte(`{"model":"coding-main","messages":[{"role":"user","content":"hello"}]}`))
+	sel, err := r.Select(context.Background(), snap, sig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sel.Candidates[0].Plan.ID != "glm-coding" {
+		t.Fatalf("expiring coupon did not overcome priority: %+v", sel.Decision.Candidates)
+	}
+
+	// Same coupon, but the five-hour window is exhausted: glm-coding must not
+	// receive the boost and keeps losing on priority.
+	exhausted := 100.0
+	r.Quotas = quotaFixture{"glm-coding": {
+		Windows:            []api.RemoteQuotaWindow{{Name: "5 hours", UsagePct: &exhausted}},
+		ResetsRemaining:    1,
+		SoonestResetExpiry: &expiry,
+		UsagePct:           &exhausted,
+	}}
+	sel, err = r.Select(context.Background(), snap, sig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sel.Candidates[0].Plan.ID != "kimi-coding" {
+		t.Fatalf("quota_exhausted plan was boosted: %+v", sel.Decision.Candidates)
+	}
+}
+
 func TestUnderutilizedWindowBoost(t *testing.T) {
 	r, snap, _, _ := setupRouterFixture(t)
 	now := time.Now().UTC()

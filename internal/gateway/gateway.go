@@ -124,6 +124,19 @@ func New(opt Options, secrets *secret.Store, sink capture.ExchangeSink) (*Gatewa
 			}
 		}
 	}
+	// Expiry reminders are emitted at most once per coupon/window and reuse
+	// the existing event surface; only sanitized fields cross the boundary.
+	qs.OnExpiryReminder = func(r quota.QuotaReminder) {
+		if gw == nil || gw.Sink == nil {
+			return
+		}
+		gw.Sink.Emit(shared.EventGatewayQuotaExpiring, "", map[string]any{
+			"plan":      r.PlanID,
+			"kind":      r.Kind,
+			"scope":     r.Scope,
+			"expiresAt": r.ExpiresAt.UTC().Format(time.RFC3339),
+		})
+	}
 	// Upstream exhaustion/rate-limit cooling raises the opt-in auto-reset
 	// evaluation on a detached context so request handling never blocks.
 	exec.AutoResetSignal = func(planID string) {
