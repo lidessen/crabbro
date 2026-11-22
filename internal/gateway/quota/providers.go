@@ -168,9 +168,9 @@ func fetch(ctx context.Context, c *http.Client, p *config.Plan, key string) (Rem
 				continue
 			}
 			var pct *float64
-			if u, ok := number(w["usage"]); ok {
+			if u, ok := number(w["usage"]); ok && u > 0 {
 				if rem, ok := number(w["remaining"]); ok {
-					pct = percent(u, u+rem)
+					pct = percent(math.Max(0, u-rem), u)
 				}
 			}
 			if pct == nil {
@@ -218,18 +218,29 @@ func fetch(ctx context.Context, c *http.Client, p *config.Plan, key string) (Rem
 			}
 		}
 	case "commandcode":
-		limits := object(m["windowLimits"])
+		c := object(m["data"])
+		if c == nil {
+			c = m
+		}
+		limits := object(c["windowLimits"])
 		for _, entry := range []struct{ k, n string }{{"fiveHour", "5 hours"}, {"weekly", "Weekly"}} {
 			if x := object(limits[entry.k]); x != nil {
 				q.Windows = append(q.Windows, QuotaWindow{Name: entry.n, UsagePct: percent(x["used"], x["cap"]), ResetAt: timestamp(x["resetAt"])})
 			}
 		}
-		total := 0.0
-		found := false
-		for _, k := range []string{"monthlyCredits", "purchasedCredits", "freeCredits"} {
-			if n, ok := number(m[k]); ok && n >= 0 && n < 1e12 {
-				total += n
-				found = true
+		credits := object(c["credits"])
+		if credits == nil {
+			credits = c
+		}
+		total, found := number(credits["totalBalance"])
+		found = found && total >= 0 && total < 1e12
+		if !found {
+			total = 0
+			for _, k := range []string{"monthlyCredits", "extraUsageBalance", "purchasedCredits", "freeCredits"} {
+				if n, ok := number(credits[k]); ok && n >= 0 && n < 1e12 {
+					total += n
+					found = true
+				}
 			}
 		}
 		if found {
