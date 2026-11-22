@@ -118,3 +118,32 @@ func TestUnsafeLabels(t *testing.T) {
 		}
 	}
 }
+
+func TestAdditionalProviderQuotas(t *testing.T) {
+	tests := []struct {
+		name, path, payload string
+		pct                 float64
+		windows             int
+	}{
+		{"kimi-code-cn", "/coding/v1/usages", `{"usage":{"limit":"100","used":"29","resetTime":"2026-10-02T12:58:51Z"},"limits":[{"window":{"duration":300,"timeUnit":"TIME_UNIT_MINUTE"},"detail":{"limit":"100","used":"88"}}]}`, 88, 2},
+		{"minimax-cn", "/v1/token_plan/remains", `{"model_remains":[{"model_name":"general","current_interval_total_count":100,"current_interval_usage_count":75,"current_weekly_total_count":100,"current_weekly_usage_count":50}]}`, 25, 2},
+		{"opencode-go", "/zen/go/v1/usage", `{"usage":{"rolling":{"percent":25,"resetsAt":"2026-10-02T12:58:51Z"},"weekly":{"percent":50},"monthly":{"percent":75}}}`, 25, 3},
+		{"zenmux", "/api/v1/management/subscription/detail", `{"success":true,"data":{"plan":{"tier":"ultra"},"quota_5_hour":{"max_flows":800,"used_flows":200},"quota_7_day":{"max_flows":1000,"used_flows":500}}}`, 25, 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != tt.path || r.Header.Get("Authorization") != "Bearer test-key" {
+					t.Errorf("unexpected request: %s", r.URL.Path)
+				}
+				fmt.Fprint(w, tt.payload)
+			}))
+			defer server.Close()
+			u, _ := url.Parse(server.URL)
+			q, err := fetch(context.Background(), &http.Client{Transport: rewriteTransport{u}}, &config.Plan{ID: tt.name}, "test-key")
+			if err != nil || len(q.Windows) != tt.windows || q.UsagePct == nil || *q.UsagePct != tt.pct {
+				t.Fatalf("quota = %+v, error = %v", q, err)
+			}
+		})
+	}
+}

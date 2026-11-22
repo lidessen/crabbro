@@ -87,7 +87,7 @@ func percent(used, cap any) *float64 {
 }
 func provider(p *config.Plan) string {
 	s := strings.ToLower(p.ID + " " + p.Credential)
-	for _, n := range []string{"zcode", "commandcode", "vercel", "deepseek"} {
+	for _, n := range []string{"zcode", "commandcode", "vercel", "deepseek", "kimi-code-cn", "minimax-cn", "opencode-go", "zenmux"} {
 		if strings.Contains(s, n) {
 			return n
 		}
@@ -158,6 +158,14 @@ func fetch(ctx context.Context, c *http.Client, p *config.Plan, key string) (Rem
 		endpoint = "https://ai-gateway.vercel.sh/v1/credits"
 	case "deepseek":
 		endpoint = "https://api.deepseek.com/user/balance"
+	case "kimi-code-cn":
+		endpoint = "https://api.kimi.com/coding/v1/usages"
+	case "minimax-cn":
+		endpoint = "https://www.minimaxi.com/v1/token_plan/remains"
+	case "opencode-go":
+		endpoint = "https://opencode.ai/zen/go/v1/usage"
+	case "zenmux":
+		endpoint = "https://zenmux.ai/api/v1/management/subscription/detail"
 	default:
 		return q, errors.New("unsupported provider")
 	}
@@ -261,6 +269,61 @@ func fetch(ctx context.Context, c *http.Client, p *config.Plan, key string) (Rem
 			q.Balance = safe(fmt.Sprintf("$%.2f", v))
 		}
 		q.ResetAt = timestamp(tp["resets_at"])
+	case "kimi-code-cn":
+		if x := object(m["usage"]); x != nil {
+			q.Windows = append(q.Windows, QuotaWindow{Name: "Weekly", UsagePct: percent(x["used"], x["limit"]), ResetAt: timestamp(x["resetTime"])})
+		}
+		list, _ := m["limits"].([]any)
+		for _, item := range list {
+			x := object(item)
+			window := object(x["window"])
+			duration, _ := number(window["duration"])
+			if duration == 300 && window["timeUnit"] == "TIME_UNIT_MINUTE" {
+				d := object(x["detail"])
+				q.Windows = append([]QuotaWindow{{Name: "5 hours", UsagePct: percent(d["used"], d["limit"]), ResetAt: timestamp(d["resetTime"])}}, q.Windows...)
+			}
+		}
+	case "opencode-go":
+		u := object(m["usage"])
+		for _, entry := range []struct{ key, name string }{{"rolling", "5 hours"}, {"weekly", "Weekly"}, {"monthly", "Monthly"}} {
+			if x := object(u[entry.key]); x != nil {
+				if n, ok := number(x["percent"]); ok && n >= 0 && n <= 100 {
+					q.Windows = append(q.Windows, QuotaWindow{Name: entry.name, UsagePct: &n, ResetAt: timestamp(x["resetsAt"])})
+				}
+			}
+		}
+	case "minimax-cn":
+		rows, _ := m["model_remains"].([]any)
+		for _, row := range rows {
+			x := object(row)
+			if x["model_name"] != "general" {
+				continue
+			}
+			for _, entry := range []struct{ prefix, name string }{{"current_interval", "5 hours"}, {"current_weekly", "Weekly"}} {
+				total, ok := number(x[entry.prefix+"_total_count"])
+				remaining, ok2 := number(x[entry.prefix+"_usage_count"])
+				if ok && ok2 && total > 0 && remaining >= 0 && remaining <= total {
+					q.Windows = append(q.Windows, QuotaWindow{Name: entry.name, UsagePct: percent(total-remaining, total)})
+				}
+			}
+			break
+		}
+	case "zenmux":
+		if m["success"] != true {
+			return q, errors.New("provider request failed")
+		}
+		d := object(m["data"])
+		if tier, ok := object(d["plan"])["tier"].(string); ok && !strings.Contains(tier, key) {
+			q.PlanTier = safe(tier)
+		}
+		for _, entry := range []struct{ key, name string }{{"quota_5_hour", "5 hours"}, {"quota_7_day", "Weekly"}} {
+			if x := object(d[entry.key]); x != nil {
+				if pct := percent(x["used_flows"], x["max_flows"]); pct != nil {
+					q.Windows = append(q.Windows, QuotaWindow{Name: entry.name, UsagePct: pct})
+				}
+			}
+		}
+
 	case "deepseek":
 		items, _ := m["balance_infos"].([]any)
 		if len(items) > 0 {
@@ -273,6 +336,9 @@ func fetch(ctx context.Context, c *http.Client, p *config.Plan, key string) (Rem
 				q.Balance = safe(fmt.Sprintf("%s %.2f", currency, n))
 			}
 		}
+	}
+	if (kind == "kimi-code-cn" || kind == "minimax-cn" || kind == "opencode-go" || kind == "zenmux") && len(q.Windows) == 0 {
+		return q, errors.New("invalid provider response")
 	}
 	if len(q.Windows) > 0 {
 		q.UsagePct = q.Windows[0].UsagePct

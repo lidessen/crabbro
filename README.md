@@ -154,6 +154,8 @@ crabbro gw quotas refresh
 crabbro gw quotas reset glm-coding --scope fiveHour --dry-run
 ```
 
+Remote quota availability depends on provider credentials and APIs. Xiaomi MiMo Token Plan has no verified quota endpoint accepting its inference API key; Google and OpenAI API-key plans likewise have no supported account quota endpoint here (N/A). ZenMux subscription details require a management API key, which may differ from an inference key. MiniMax quota counters and Kimi usage endpoints may change or report inconsistent values; unknown responses are not treated as fresh quota.
+
 The `find`, `rules draft`, and plugin `decision.ask` helpers use the gateway's enabled `decision` route automatically (returning `decision API is not configured` when none is configured). See [docs/design/gateway.md](docs/design/gateway.md) for the full schema, `Quality × Cache × Quota` scoring, TTL-decay cache gravity, semantic tiering, and failover model.
 
 ## CLI reference
