@@ -621,7 +621,7 @@ func chooseEndpoint(rt *config.Route, plan *config.Plan, tgt config.Target, ms *
 		if !rt.Policy.CrossProtocolAllowed() {
 			return "", nil, "cross-protocol bridging disabled"
 		}
-		for _, p := range []string{config.ProtocolTypeSafeJev, config.ProtocolOpenAIDecisions} {
+		for _, p := range []string{config.ProtocolTypeSafeJev, config.ProtocolOpenAIDecisions, config.ProtocolGeminiDecisions} {
 			if ep := plan.Endpoints[p]; ep != nil && allowed(p) {
 				return p, ep, ""
 			}

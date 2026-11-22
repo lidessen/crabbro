@@ -22,7 +22,7 @@ type HeaderSnapshot struct {
 }
 
 type aimdState struct {
-	factor float64
+	factor  float64
 	last429 time.Time
 }
 

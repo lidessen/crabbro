@@ -72,7 +72,8 @@
         "anthropic": { "$ref": "#/$defs/endpoint" },
         "gemini": { "$ref": "#/$defs/endpoint" },
         "typesafe-jev": { "$ref": "#/$defs/endpoint" },
-        "openai-decisions": { "$ref": "#/$defs/endpoint" }
+        "openai-decisions": { "$ref": "#/$defs/endpoint" },
+        "gemini-decisions": { "$ref": "#/$defs/endpoint" }
       }
     },
     "models": {
@@ -84,7 +85,7 @@
     }
   },
   "$defs": {
-    "protocol": { "enum": ["openai-chat", "openai-responses", "anthropic", "gemini", "typesafe-jev", "openai-decisions"] },
+    "protocol": { "enum": ["openai-chat", "openai-responses", "anthropic", "gemini", "typesafe-jev", "openai-decisions", "gemini-decisions"] },
     "duration": {
       "type": "string",
       "pattern": "^[0-9]+(ms|s|m|h|d)$"

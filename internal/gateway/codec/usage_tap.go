@@ -43,6 +43,16 @@ func ExtractUsageJSON(proto string, body []byte) shared.TokenUsage {
 		if json.Unmarshal(body, &doc) == nil && doc.UsageMetadata != nil {
 			return doc.UsageMetadata.toTokenUsage()
 		}
+	case config.ProtocolGeminiDecisions:
+		var doc struct {
+			Usage struct {
+				Input  int64 `json:"total_input_tokens"`
+				Output int64 `json:"total_output_tokens"`
+			} `json:"usage"`
+		}
+		if json.Unmarshal(body, &doc) == nil {
+			return shared.TokenUsage{InputTokens: doc.Usage.Input, OutputTokens: doc.Usage.Output}
+		}
 	case config.ProtocolTypeSafeJev:
 		var doc struct {
 			Usage *struct {

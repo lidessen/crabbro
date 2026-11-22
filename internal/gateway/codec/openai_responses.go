@@ -14,10 +14,10 @@ type oaResponsesCodec struct{}
 
 func (oaResponsesCodec) DecodeRequest(body []byte, ingress IngressInfo) (*ir.GenRequest, error) {
 	var raw struct {
-		Model           string          `json:"model"`
-		Instructions    string          `json:"instructions"`
-		Input           json.RawMessage `json:"input"`
-		Tools           []struct {
+		Model        string          `json:"model"`
+		Instructions string          `json:"instructions"`
+		Input        json.RawMessage `json:"input"`
+		Tools        []struct {
 			Type        string         `json:"type"`
 			Name        string         `json:"name"`
 			Description string         `json:"description"`
@@ -321,11 +321,11 @@ func (oaResponsesCodec) DecodeResponse(body []byte) (*ir.GenResponse, error) {
 			Reason string `json:"reason"`
 		} `json:"incomplete_details"`
 		Output []struct {
-			Type    string `json:"type"`
-			CallID  string `json:"call_id"`
-			Name    string `json:"name"`
+			Type      string `json:"type"`
+			CallID    string `json:"call_id"`
+			Name      string `json:"name"`
 			Arguments string `json:"arguments"`
-			Summary []struct {
+			Summary   []struct {
 				Text string `json:"text"`
 			} `json:"summary"`
 			Content []struct {
@@ -614,16 +614,16 @@ func (oaResponsesCodec) NewStreamEncoder(requestedModel string, dst io.Writer) s
 }
 
 type oaRespStreamEnc struct {
-	dst        io.Writer
-	id, model  string
-	sentStart  bool
-	sentText   bool
-	ended      bool
-	usage      shared.TokenUsage
-	textBuf    strings.Builder
-	toolIDs    map[int]string
-	toolName   map[int]string
-	toolArgs   map[int]*strings.Builder
+	dst       io.Writer
+	id, model string
+	sentStart bool
+	sentText  bool
+	ended     bool
+	usage     shared.TokenUsage
+	textBuf   strings.Builder
+	toolIDs   map[int]string
+	toolName  map[int]string
+	toolArgs  map[int]*strings.Builder
 }
 
 func (e *oaRespStreamEnc) ensureStart() error {

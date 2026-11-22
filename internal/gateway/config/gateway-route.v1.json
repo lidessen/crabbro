@@ -99,7 +99,7 @@
       "pattern": "^[0-9]+(ms|s|m|h|d)$"
     },
     "protocol": {
-      "enum": ["openai-chat", "openai-responses", "anthropic", "gemini", "typesafe-jev", "openai-decisions"]
+      "enum": ["openai-chat", "openai-responses", "anthropic", "gemini", "typesafe-jev", "openai-decisions", "gemini-decisions"]
     },
     "tier": {
       "enum": ["fast", "strong", "frontier"]

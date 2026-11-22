@@ -67,6 +67,15 @@ func BuildUpstreamURL(baseURL, proto, action, targetModel, cleanQuery string, st
 		default:
 			suffix = "/v1/chat/completions"
 		}
+	case config.ProtocolGeminiDecisions:
+		switch {
+		case strings.HasSuffix(basePath, "/decisions"):
+			suffix = basePath
+		case hasNonRootPath:
+			suffix = basePath + "/decisions"
+		default:
+			suffix = "/v1beta/decisions"
+		}
 	case config.ProtocolOpenAIDecisions:
 		switch {
 		case strings.HasSuffix(basePath, "/decisions"):
@@ -174,7 +183,7 @@ func InjectUpstreamAuth(h http.Header, ep *config.EndpointSpec, proto, secretVal
 	case config.ProtocolAnthropic:
 		headerName = "x-api-key"
 		prefix = ""
-	case config.ProtocolGemini:
+	case config.ProtocolGemini, config.ProtocolGeminiDecisions:
 		headerName = "x-goog-api-key"
 		prefix = ""
 	}

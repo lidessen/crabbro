@@ -16,9 +16,9 @@ type anthropicCodec struct{}
 
 func (anthropicCodec) DecodeRequest(body []byte, ingress IngressInfo) (*ir.GenRequest, error) {
 	var raw struct {
-		Model         string          `json:"model"`
-		System        json.RawMessage `json:"system"`
-		Messages      []struct {
+		Model    string          `json:"model"`
+		System   json.RawMessage `json:"system"`
+		Messages []struct {
 			Role    string          `json:"role"`
 			Content json.RawMessage `json:"content"`
 		} `json:"messages"`

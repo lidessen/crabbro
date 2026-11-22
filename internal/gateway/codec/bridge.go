@@ -94,9 +94,12 @@ func (b *Bridge) BuildUpstreamBody(cand router.Candidate, ingress IngressInfo, r
 			copyReq := *dreq
 			copyReq.Model = cand.Target.Model
 			var body []byte
-			if cand.EndpointProto == config.ProtocolOpenAIDecisions {
+			switch cand.EndpointProto {
+			case config.ProtocolOpenAIDecisions:
 				body, err = EncodeOpenAIDecisionsRequest(&copyReq)
-			} else {
+			case config.ProtocolGeminiDecisions:
+				body, err = EncodeGeminiDecisionRequest(&copyReq, cand.Target.Model)
+			default:
 				body, err = EncodeDecisionRequest(&copyReq)
 			}
 			if err != nil {
@@ -267,6 +270,9 @@ func (b *Bridge) DecodeDecisionResponse(cand router.Candidate, state any, body [
 	st, ok := state.(*bridgeState)
 	if !ok || st.origDecisionReq == nil {
 		return nil, fmt.Errorf("missing original decision request state")
+	}
+	if cand.EndpointProto == config.ProtocolGeminiDecisions {
+		return DecodeGeminiDecisionResponse(body, st.origDecisionReq, cand.Target.Model)
 	}
 	if cand.EndpointProto == config.ProtocolOpenAIDecisions {
 		return DecodeOpenAIDecisionsResponse(body, st.origDecisionReq)

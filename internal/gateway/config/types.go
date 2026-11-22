@@ -21,6 +21,7 @@ const (
 	ProtocolGemini          = "gemini"
 	ProtocolTypeSafeJev     = "typesafe-jev"
 	ProtocolOpenAIDecisions = "openai-decisions"
+	ProtocolGeminiDecisions = "gemini-decisions"
 
 	FamilyGenerative = "generative"
 	FamilyDecision   = "decision"
@@ -52,11 +53,12 @@ var AllProtocols = []string{
 	ProtocolGemini,
 	ProtocolTypeSafeJev,
 	ProtocolOpenAIDecisions,
+	ProtocolGeminiDecisions,
 }
 
 // ProtocolFamily returns the semantic family ("generative" or "decision") for proto.
 func ProtocolFamily(proto string) string {
-	if proto == ProtocolTypeSafeJev || proto == ProtocolOpenAIDecisions {
+	if proto == ProtocolTypeSafeJev || proto == ProtocolOpenAIDecisions || proto == ProtocolGeminiDecisions {
 		return FamilyDecision
 	}
 	for _, p := range AllProtocols {
