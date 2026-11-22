@@ -547,11 +547,23 @@ func (r *Router) evalTargets(snap *config.Snapshot, rt *config.Route, sig Signal
 			continue
 		}
 
-		if r.Quotas != nil && (rt.Policy.EffectivePreset() == config.PresetBalanced || rt.Policy.EffectivePreset() == config.PresetBurnExpiring) {
-			if q, ok := r.Quotas.Get(plan.ID); ok && !q.Stale && q.ResetsRemaining > 0 && q.SoonestResetExpiry != nil {
-				left := q.SoonestResetExpiry.Sub(now)
-				if left > 0 && left <= 72*time.Hour && q.UsagePct != nil && *q.UsagePct < 50 {
-					quotaScore += 0.2 * (1 - left.Hours()/72) * (1 - *q.UsagePct/100)
+		if r.Quotas != nil {
+			if q, ok := r.Quotas.Get(plan.ID); ok && !q.Stale {
+				healthy := r.Health == nil || r.Health.Snapshot(plan.ID, now).Healthy
+				if healthy {
+					if q.ResetsRemaining > 0 && q.SoonestResetExpiry != nil && q.SoonestResetExpiry.After(now) && q.SoonestResetExpiry.Sub(now) <= 24*time.Hour {
+						quotaScore += 0.2
+					}
+					for _, w := range q.Windows {
+						horizon := 24 * time.Hour
+						if w.Name == "Weekly" {
+							horizon = 48 * time.Hour
+						}
+						if w.ResetAt != nil && w.ResetAt.After(now) && w.ResetAt.Sub(now) <= horizon && w.Trend != nil && (w.Trend.Status == "underutilized" || (w.Trend.ProjectedEndPct != nil && *w.Trend.ProjectedEndPct < 60)) && (w.UsagePct == nil || *w.UsagePct < 100) {
+							quotaScore += 0.2
+							break
+						}
+					}
 				}
 			}
 		}

@@ -47,8 +47,11 @@ func cmdGateway(cfg *clientConfig, args []string) error {
 			}
 			for _, p := range out.Plans {
 				health := "healthy"
-				if !p.Healthy && p.CooldownUntil != nil {
-					health = fmt.Sprintf("cooling(%s until %s)", p.CooldownScope, p.CooldownUntil.Local().Format("15:04:05"))
+				if !p.Healthy {
+					health = "unhealthy"
+				}
+				if p.CooldownUntil != nil && p.CooldownUntil.After(time.Now()) {
+					health = fmt.Sprintf("cooling(%s, %s remaining)", p.CooldownScope, time.Until(*p.CooldownUntil).Round(time.Second))
 				}
 				sec := "missing"
 				if p.HasSecret {
@@ -63,6 +66,12 @@ func cmdGateway(cfg *clientConfig, args []string) error {
 				}
 				fmt.Printf("%-18s enabled=%t secret=%-7s health=%-24s endpoints=%s models=%s\n",
 					p.ID, p.Enabled, sec, health, strings.Join(p.Endpoints, ","), strings.Join(p.Models, ","))
+				if p.LastError != "" {
+					fmt.Printf("  error: %s\n", p.LastError)
+				}
+				if p.HistoricalLastError != "" {
+					fmt.Printf("  historical error: %s\n", p.HistoricalLastError)
+				}
 				fmt.Printf("  direct: %s\n", direct)
 				if ar := p.AutoReset; ar != nil {
 					horizon := ar.ExpiringWithin
@@ -321,7 +330,22 @@ func gwQuotas(cfg *clientConfig, args []string) error {
 				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", p.ID, w.Name, pct(w.UsagePct), elapsed, projected, reset, status, details)
 			}
 		}
-		return tw.Flush()
+		if err := tw.Flush(); err != nil {
+			return err
+		}
+		printed := false
+		for _, p := range out.Plans {
+			if p.Enabled && p.RemoteQuota != nil {
+				for _, reminder := range p.RemoteQuota.Reminders {
+					if !printed {
+						fmt.Println("REMINDERS:")
+						printed = true
+					}
+					fmt.Printf("  %s: %s (%s)\n", reminder.PlanID, reminder.Message, reminder.ExpiresAt.Format(time.RFC3339))
+				}
+			}
+		}
+		return nil
 	}
 	switch args[0] {
 	case "refresh":

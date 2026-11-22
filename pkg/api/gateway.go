@@ -150,8 +150,18 @@ type RemoteResetCoupon struct {
 	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
 }
 
+// QuotaReminder describes quota that is approaching expiry.
+type QuotaReminder struct {
+	PlanID       string    `json:"planId"`
+	Kind         string    `json:"kind"`
+	Message      string    `json:"message"`
+	ExpiresAt    time.Time `json:"expiresAt"`
+	RemainingPct *float64  `json:"remainingPct,omitempty"`
+}
+
 // RemoteQuotaJSON is a sanitized provider-reported snapshot.
 type RemoteQuotaJSON struct {
+	Reminders          []QuotaReminder     `json:"reminders,omitempty"`
 	PlanTier           string              `json:"planTier,omitempty"`
 	Balance            string              `json:"balance,omitempty"`
 	UsagePct           *float64            `json:"usagePct,omitempty"`
@@ -190,25 +200,26 @@ type GatewayQuotaResetResponse struct {
 
 // GatewayPlanStatus is a redacted view of one configured plan and its live state.
 type GatewayPlanStatus struct {
-	RemoteQuota    *RemoteQuotaJSON     `json:"remoteQuota,omitempty"`
-	AutoReset      *PlanAutoResetSpec   `json:"autoReset,omitempty"`
-	DirectEnabled  bool                 `json:"directEnabled"`
-	DirectProfiles []string             `json:"directProfiles,omitempty"`
-	ID             string               `json:"id"`
-	Enabled        bool                 `json:"enabled"`
-	Description    string               `json:"description,omitempty"`
-	Credential     string               `json:"credential"`
-	HasSecret      bool                 `json:"hasSecret"`
-	Endpoints      []string             `json:"endpoints"`
-	Models         []string             `json:"models"`
-	Healthy        bool                 `json:"healthy"`
-	CooldownUntil  *time.Time           `json:"cooldownUntil,omitempty"`
-	CooldownScope  string               `json:"cooldownScope,omitempty"`
-	LastError      string               `json:"lastError,omitempty"`
-	InFlight       int                  `json:"inFlight"`
-	ErrorEWMA      float64              `json:"errorEwma,omitempty"`
-	LatencyEWMAMs  float64              `json:"latencyEwmaMs,omitempty"`
-	Windows        []GatewayWindowUsage `json:"windows,omitempty"`
+	RemoteQuota         *RemoteQuotaJSON     `json:"remoteQuota,omitempty"`
+	AutoReset           *PlanAutoResetSpec   `json:"autoReset,omitempty"`
+	DirectEnabled       bool                 `json:"directEnabled"`
+	DirectProfiles      []string             `json:"directProfiles,omitempty"`
+	ID                  string               `json:"id"`
+	Enabled             bool                 `json:"enabled"`
+	Description         string               `json:"description,omitempty"`
+	Credential          string               `json:"credential"`
+	HasSecret           bool                 `json:"hasSecret"`
+	Endpoints           []string             `json:"endpoints"`
+	Models              []string             `json:"models"`
+	Healthy             bool                 `json:"healthy"`
+	CooldownUntil       *time.Time           `json:"cooldownUntil,omitempty"`
+	CooldownScope       string               `json:"cooldownScope,omitempty"`
+	LastError           string               `json:"lastError,omitempty"`
+	HistoricalLastError string               `json:"historicalLastError,omitempty"`
+	InFlight            int                  `json:"inFlight"`
+	ErrorEWMA           float64              `json:"errorEwma,omitempty"`
+	LatencyEWMAMs       float64              `json:"latencyEwmaMs,omitempty"`
+	Windows             []GatewayWindowUsage `json:"windows,omitempty"`
 }
 
 // GatewayPlanListResponse is returned by GET /v1/gateway/plans.

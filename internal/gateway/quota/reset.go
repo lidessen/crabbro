@@ -183,7 +183,7 @@ func (s *Syncer) AutoReset(ctx context.Context, plans map[string]*config.Plan, p
 		s.syncPlan(ctx, p, false)
 	}
 	for _, scope := range eligible {
-		if !policy.AllowsAutoResetScope(scope) || !s.scopeExhausted(planID, scope) {
+		if !policy.AllowsAutoResetScope(scope) || !s.autoResetEligible(planID, scope, now) {
 			continue
 		}
 		out, err := s.redeem(ctx, p, scope, false, &policy)
@@ -246,6 +246,32 @@ func (s *Syncer) scopeExhausted(planID, scope string) bool {
 	return false
 }
 
+// autoResetEligible permits a weekly coupon for an exhausted five-hour window
+// only when weekly consumption is high or that coupon is about to expire.
+func (s *Syncer) autoResetEligible(planID, scope string, now time.Time) bool {
+	if s.scopeExhausted(planID, scope) {
+		return true
+	}
+	if scope != "weekly" || !s.scopeExhausted(planID, "fiveHour") {
+		return false
+	}
+	q, ok := s.Get(planID)
+	if !ok || q.Stale {
+		return false
+	}
+	for _, w := range q.Windows {
+		if w.Name == "Weekly" && w.UsagePct != nil && *w.UsagePct >= 90 {
+			return true
+		}
+	}
+	for _, cp := range q.Resets {
+		if cp.Scope == "weekly" && cp.ExpiresAt != nil && cp.ExpiresAt.After(now) && cp.ExpiresAt.Sub(now) <= 2*time.Hour {
+			return true
+		}
+	}
+	return false
+}
+
 // maybeAutoReset launches the opt-in evaluation when a freshly synced
 // snapshot shows an exhausted configured window.
 func (s *Syncer) maybeAutoReset(p *config.Plan, q RemoteQuota) {
@@ -258,7 +284,7 @@ func (s *Syncer) maybeAutoReset(p *config.Plan, q RemoteQuota) {
 		}
 		name := windowNameForScope(scope)
 		for _, w := range q.Windows {
-			if w.Name == name && w.UsagePct != nil && *w.UsagePct >= exhaustedWindowPct {
+			if w.Name == name && w.UsagePct != nil && *w.UsagePct >= exhaustedWindowPct || scope == "weekly" && s.autoResetEligible(p.ID, scope, s.now()) {
 				s.AutoResetAsync(func() map[string]*config.Plan { return map[string]*config.Plan{p.ID: p} }, p.ID, false)
 				return
 			}
@@ -319,6 +345,20 @@ func (s *Syncer) redeem(ctx context.Context, p *config.Plan, scope string, dryRu
 	for _, cp := range matching[1:] {
 		if cp.expiresAt != nil && (pick.expiresAt == nil || cp.expiresAt.Before(*pick.expiresAt)) {
 			pick = cp
+		}
+	}
+	if policy != nil && pick.scope == "weekly" && !s.scopeExhausted(p.ID, "weekly") {
+		q, ok := s.Get(p.ID)
+		safe := false
+		if ok && !q.Stale {
+			for _, w := range q.Windows {
+				if w.Name == "Weekly" && w.UsagePct != nil && *w.UsagePct >= 90 {
+					safe = true
+				}
+			}
+		}
+		if !safe && (pick.expiresAt == nil || !pick.expiresAt.After(now) || pick.expiresAt.Sub(now) > 2*time.Hour) {
+			return out, ErrResetNoCoupons
 		}
 	}
 	out.Scope = pick.scope

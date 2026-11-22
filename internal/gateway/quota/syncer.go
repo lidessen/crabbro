@@ -84,6 +84,17 @@ func (s *Syncer) Get(id string) (*RemoteQuota, bool) {
 	for i := range q.Windows {
 		q.Windows[i].Trend = windowTrend(q.Windows[i], now)
 	}
+	q.Reminders = nil
+	if !q.Stale {
+		if q.ResetsRemaining > 0 && q.SoonestResetExpiry != nil && q.SoonestResetExpiry.After(now) && q.SoonestResetExpiry.Sub(now) <= 24*time.Hour {
+			q.Reminders = append(q.Reminders, api.QuotaReminder{PlanID: id, Kind: "expiring_coupon", Message: "Reset coupon expires soon", ExpiresAt: *q.SoonestResetExpiry})
+		}
+		for _, w := range q.Windows {
+			if (w.Name == "Weekly" || w.Name == "Monthly") && w.Trend != nil && w.Trend.Status == "underutilized" && w.ResetAt != nil && w.ResetAt.After(now) && w.ResetAt.Sub(now) <= 24*time.Hour {
+				q.Reminders = append(q.Reminders, api.QuotaReminder{PlanID: id, Kind: "underutilized_window", Message: w.Name + " quota resets soon", ExpiresAt: *w.ResetAt, RemainingPct: w.Trend.RemainingPct})
+			}
+		}
+	}
 	return &q, true
 }
 

@@ -12,6 +12,7 @@ import (
 	"github.com/lidessen/crabbro/internal/gateway/quota"
 	"github.com/lidessen/crabbro/internal/secret"
 	"github.com/lidessen/crabbro/internal/shared"
+	"github.com/lidessen/crabbro/pkg/api"
 )
 
 func setupRouterFixture(t *testing.T) (*Router, *config.Snapshot, *ledger.Store, *secret.Store) {
@@ -246,5 +247,23 @@ func TestExpiringCouponBoost(t *testing.T) {
 	}
 	if sel.Candidates[0].Plan.ID != "glm-coding" {
 		t.Fatalf("coupon did not win: %+v", sel.Decision.Candidates)
+	}
+}
+
+func TestUnderutilizedWindowBoost(t *testing.T) {
+	r, snap, _, _ := setupRouterFixture(t)
+	now := time.Now().UTC()
+	r.Now = func() time.Time { return now }
+	snap.Routes[0].Targets[1].Priority = snap.Routes[0].Targets[0].Priority
+	reset := now.Add(36 * time.Hour)
+	projected := 30.0
+	r.Quotas = quotaFixture{"glm-coding": {Windows: []api.RemoteQuotaWindow{{Name: "Weekly", ResetAt: &reset, Trend: &api.WindowTrend{ProjectedEndPct: &projected}}}}}
+	sig := ExtractSignals("", config.ProtocolAnthropic, config.FamilyGenerative, "coding-main", "", []byte(`{"model":"coding-main","messages":[{"role":"user","content":"hello"}]}`))
+	sel, err := r.Select(context.Background(), snap, sig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sel.Candidates[0].Plan.ID != "glm-coding" {
+		t.Fatalf("window did not win: %+v", sel.Decision.Candidates)
 	}
 }

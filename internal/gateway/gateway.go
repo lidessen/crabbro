@@ -493,7 +493,18 @@ func (g *Gateway) Plans() shared.GatewayPlanListResponse {
 			Healthy:       hs.Healthy,
 			CooldownUntil: hs.CooldownUntil,
 			CooldownScope: hs.CooldownScope,
-			LastError:     hs.LastError,
+			LastError: func() string {
+				if !hs.Healthy {
+					return hs.LastError
+				}
+				return ""
+			}(),
+			HistoricalLastError: func() string {
+				if hs.Healthy {
+					return hs.LastError
+				}
+				return ""
+			}(),
 			InFlight:      hs.InFlight,
 			ErrorEWMA:     hs.ErrorEWMA,
 			LatencyEWMAMs: hs.LatencyEWMAMs,
