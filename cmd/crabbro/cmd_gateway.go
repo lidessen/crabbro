@@ -18,24 +18,24 @@ import (
 
 func cmdGateway(cfg *clientConfig, args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: crabbro gw <status|plans|routes|quotas|usage|cooldown-clear|preview|reload>")
+		return fmt.Errorf("usage: crabbro gateway <status|plans|routes|quotas|usage|cooldown-clear|preview|reload>")
 	}
 	switch args[0] {
 	case "status":
-		return gwGetJSON(cfg, args[1:], "/v1/gateway/status", func(raw []byte) {
+		return gatewayGetJSON(cfg, args[1:], "/v1/gateway/status", func(raw []byte) {
 			var st shared.GatewayStatusResponse
 			if json.Unmarshal(raw, &st) != nil {
 				fmt.Println(string(raw))
 				return
 			}
-			fmt.Printf("enabled=%t addr=%s gen=%d plans=%d routes=%d healthy=%d cooling=%d\n",
+			fmt.Printf("enabled=%t addr=%s generation=%d plans=%d routes=%d healthy=%d cooling=%d\n",
 				st.Enabled, st.ListenAddr, st.SnapshotGeneration, st.PlanCount, st.RouteCount, st.HealthyPlans, st.CoolingPlans)
 			for _, d := range st.Diagnostics {
 				fmt.Printf("  diag %s %s: %s\n", d.File, d.Path, d.Message)
 			}
 		})
 	case "plans":
-		return gwPlansJSON(cfg, args[1:], func(raw []byte) {
+		return gatewayPlansJSON(cfg, args[1:], func(raw []byte) {
 			var out shared.GatewayPlanListResponse
 			if json.Unmarshal(raw, &out) != nil {
 				fmt.Println(string(raw))
@@ -98,14 +98,14 @@ func cmdGateway(cfg *clientConfig, args []string) error {
 					}
 				}
 				for _, w := range p.Windows {
-					fmt.Printf("  window %-8s (%s %s) tokens=%d/%d reqs=%d/%d rem=%.0f%% surplus=%+.2f src=%s\n",
+					fmt.Printf("  window %-8s (%s %s) tokens=%d/%d requests=%d/%d remaining=%.0f%% surplus=%+.2f source=%s\n",
 						w.Name, w.Duration, w.Mode, w.UsedTokens, w.MaxTokens, w.UsedRequests, w.MaxRequests,
 						w.RemainingRatio*100, w.Surplus, w.Source)
 				}
 			}
 		})
 	case "routes":
-		return gwGetJSON(cfg, args[1:], "/v1/gateway/routes", func(raw []byte) {
+		return gatewayGetJSON(cfg, args[1:], "/v1/gateway/routes", func(raw []byte) {
 			var out shared.GatewayRouteListResponse
 			if json.Unmarshal(raw, &out) != nil {
 				fmt.Println(string(raw))
@@ -125,9 +125,9 @@ func cmdGateway(cfg *clientConfig, args []string) error {
 			}
 		})
 	case "quotas":
-		return gwQuotas(cfg, args[1:])
+		return gatewayQuotas(cfg, args[1:])
 	case "usage":
-		fs := flag.NewFlagSet("gw usage", flag.ContinueOnError)
+		fs := flag.NewFlagSet("gateway usage", flag.ContinueOnError)
 		window := fs.String("window", "24h", "Rolling duration window (e.g. 1h, 24h, 7d)")
 		plan := fs.String("plan", "", "Filter by plan ID")
 		pretty := fs.Bool("pretty", false, "Human-readable output")
@@ -143,7 +143,7 @@ func cmdGateway(cfg *clientConfig, args []string) error {
 		if !*pretty {
 			return printAPI(cfg, http.MethodGet, path, nil)
 		}
-		raw, err := gwFetch(cfg, http.MethodGet, path, nil)
+		raw, err := gatewayFetch(cfg, http.MethodGet, path, nil)
 		if err != nil {
 			return err
 		}
@@ -152,22 +152,22 @@ func cmdGateway(cfg *clientConfig, args []string) error {
 			fmt.Println(string(raw))
 			return nil
 		}
-		fmt.Printf("window=%s total_reqs=%d errors=%d total_tokens=%d in=%d out=%d cache_read=%d avg_ttft=%.0fms\n",
+		fmt.Printf("window=%s total_requests=%d errors=%d total_tokens=%d in=%d out=%d cache_read=%d avg_ttft=%.0fms\n",
 			out.Window, out.Totals.Requests, out.Totals.Errors, out.Totals.TotalTokens,
 			out.Totals.InputTokens, out.Totals.OutputTokens, out.Totals.CacheReadTokens, out.Totals.AvgTTFTMs)
 		for _, b := range out.Buckets {
-			fmt.Printf("  %-18s %-24s reqs=%d err=%d tokens=%d hit=%.0f%% ttft=%.0fms\n",
+			fmt.Printf("  %-18s %-24s requests=%d errors=%d tokens=%d hit=%.0f%% ttft=%.0fms\n",
 				b.Plan, b.Model, b.Requests, b.Errors, b.TotalTokens, b.CacheHitRatio*100, b.AvgTTFTMs)
 		}
 		return nil
 	case "cooldown-clear":
 		if len(args) < 2 {
-			return fmt.Errorf("usage: crabbro gw cooldown-clear <plan>")
+			return fmt.Errorf("usage: crabbro gateway cooldown-clear <plan>")
 		}
 		path := "/v1/gateway/plans/" + url.PathEscape(args[1]) + "/reset-cooldown"
 		return printAPI(cfg, http.MethodPost, path, nil)
 	case "preview":
-		fs := flag.NewFlagSet("gw preview", flag.ContinueOnError)
+		fs := flag.NewFlagSet("gateway preview", flag.ContinueOnError)
 		profile := fs.String("profile", "", "Profile name")
 		proto := fs.String("protocol", "anthropic", "Ingress protocol (openai-chat|openai-responses|anthropic|gemini|typesafe-jev|openai-decisions)")
 		model := fs.String("model", "", "Requested model name")
@@ -182,23 +182,23 @@ func cmdGateway(cfg *clientConfig, args []string) error {
 			return err
 		}
 		if *model == "" {
-			return fmt.Errorf("--model is required for gw preview")
+			return fmt.Errorf("--model is required for gateway preview")
 		}
 		body, _ := json.Marshal(shared.GatewayPreviewRequest{
-			Profile:        *profile,
-			Protocol:       *proto,
-			Model:          *model,
-			EstInputTokens: *tokens,
-			TurnPhase:      *turnPhase,
-			SessionKey:     *sessionKey,
-			Tools:          *tools,
-			Vision:         *vision,
-			Thinking:       *thinking,
+			Profile:              *profile,
+			Protocol:             *proto,
+			Model:                *model,
+			EstimatedInputTokens: *tokens,
+			TurnPhase:            *turnPhase,
+			SessionKey:           *sessionKey,
+			Tools:                *tools,
+			Vision:               *vision,
+			Thinking:             *thinking,
 		})
 		if !*pretty {
 			return printAPI(cfg, http.MethodPost, "/v1/gateway/preview", bytes.NewReader(body))
 		}
-		raw, err := gwFetch(cfg, http.MethodPost, "/v1/gateway/preview", bytes.NewReader(body))
+		raw, err := gatewayFetch(cfg, http.MethodPost, "/v1/gateway/preview", bytes.NewReader(body))
 		if err != nil {
 			return err
 		}
@@ -207,11 +207,11 @@ func cmdGateway(cfg *clientConfig, args []string) error {
 			fmt.Println(string(raw))
 			return nil
 		}
-		fmt.Printf("matched=%t route=%s family=%s chosen=%s err=%s\n", out.Matched, out.RouteID, out.Family, out.Chosen, out.Error)
+		fmt.Printf("matched=%t route=%s family=%s chosen=%s error=%s\n", out.Matched, out.RouteID, out.Family, out.Chosen, out.Error)
 		if out.Decision != nil {
 			fmt.Printf("  resolution=%s\n", out.Decision.Resolution)
 			for _, c := range out.Decision.Candidates {
-				fmt.Printf("  %-18s model=%-22s proto=%-16s eligible=%t total=%.3f (Q=%.2f C=%.2f U=%.2f P=%.2f H=%.2f) %s\n",
+				fmt.Printf("  %-18s model=%-22s protocol=%-14s eligible=%t total=%.3f (Q=%.2f C=%.2f U=%.2f P=%.2f H=%.2f) %s\n",
 					c.Plan, c.Model, c.Protocol, c.Eligible, c.Scores.Total,
 					c.Scores.Quality, c.Scores.Cache, c.Scores.Quota, c.Scores.Protocol, c.Scores.Health, c.RejectReason)
 			}
@@ -220,13 +220,13 @@ func cmdGateway(cfg *clientConfig, args []string) error {
 	case "reload":
 		return printAPI(cfg, http.MethodPost, "/v1/gateway/reload", nil)
 	default:
-		return fmt.Errorf("unknown gw subcommand: %s", args[0])
+		return fmt.Errorf("unknown gateway subcommand: %s", args[0])
 	}
 }
 
 // reorderFlags moves flag tokens ahead of positional arguments so invocations
-// like `gw quotas reset zcode --scope fiveHour` parse the same way as
-// `gw quotas reset --scope fiveHour zcode`.
+// like `gateway quotas reset zcode --scope fiveHour` parse the same way as
+// `gateway quotas reset --scope fiveHour zcode`.
 func reorderFlags(fs *flag.FlagSet, args []string) []string {
 	boolFlags := map[string]bool{}
 	fs.VisitAll(func(f *flag.Flag) {
@@ -255,13 +255,13 @@ func reorderFlags(fs *flag.FlagSet, args []string) []string {
 	return append(flags, positional...)
 }
 
-// gwQuotas implements `crabbro gw quotas <refresh|reset>`.
-func gwQuotas(cfg *clientConfig, args []string) error {
+// gatewayQuotas implements `crabbro gateway quotas <refresh|reset>`.
+func gatewayQuotas(cfg *clientConfig, args []string) error {
 	if len(args) == 0 || args[0] == "trend" || args[0] == "--json" {
 		if len(args) > 0 && args[0] == "trend" {
 			args = args[1:]
 		}
-		fs := flag.NewFlagSet("gw quotas", flag.ContinueOnError)
+		fs := flag.NewFlagSet("gateway quotas", flag.ContinueOnError)
 		asJSON := fs.Bool("json", false, "JSON output")
 		if err := fs.Parse(args); err != nil {
 			return err
@@ -272,7 +272,7 @@ func gwQuotas(cfg *clientConfig, args []string) error {
 		if *asJSON {
 			return printAPI(cfg, http.MethodGet, "/v1/gateway/plans", nil)
 		}
-		raw, err := gwFetch(cfg, http.MethodGet, "/v1/gateway/plans", nil)
+		raw, err := gatewayFetch(cfg, http.MethodGet, "/v1/gateway/plans", nil)
 		if err != nil {
 			return err
 		}
@@ -351,7 +351,7 @@ func gwQuotas(cfg *clientConfig, args []string) error {
 	case "refresh":
 		return printAPI(cfg, http.MethodPost, "/v1/gateway/quotas/refresh", nil)
 	case "reset":
-		fs := flag.NewFlagSet("gw quotas reset", flag.ContinueOnError)
+		fs := flag.NewFlagSet("gateway quotas reset", flag.ContinueOnError)
 		scope := fs.String("scope", "", "Reset window scope (fiveHour|weekly; default soonest-expiring)")
 		dryRun := fs.Bool("dry-run", false, "Select a coupon without redeeming it")
 		pretty := fs.Bool("pretty", false, "Human-readable output")
@@ -362,7 +362,7 @@ func gwQuotas(cfg *clientConfig, args []string) error {
 			return fmt.Errorf("--scope must be fiveHour or weekly")
 		}
 		if fs.NArg() < 1 {
-			return fmt.Errorf("usage: crabbro gw quotas reset <plan> [--scope fiveHour|weekly] [--dry-run]")
+			return fmt.Errorf("usage: crabbro gateway quotas reset <plan> [--scope fiveHour|weekly] [--dry-run]")
 		}
 		body, _ := json.Marshal(shared.GatewayQuotaResetRequest{
 			Plan:   fs.Arg(0),
@@ -372,7 +372,7 @@ func gwQuotas(cfg *clientConfig, args []string) error {
 		if !*pretty {
 			return printAPI(cfg, http.MethodPost, "/v1/gateway/quotas/reset", bytes.NewReader(body))
 		}
-		raw, err := gwFetch(cfg, http.MethodPost, "/v1/gateway/quotas/reset", bytes.NewReader(body))
+		raw, err := gatewayFetch(cfg, http.MethodPost, "/v1/gateway/quotas/reset", bytes.NewReader(body))
 		if err != nil {
 			return err
 		}
@@ -405,12 +405,12 @@ func gwQuotas(cfg *clientConfig, args []string) error {
 		}
 		return nil
 	default:
-		return fmt.Errorf("unknown gw quotas subcommand: %s", args[0])
+		return fmt.Errorf("unknown gateway quotas subcommand: %s", args[0])
 	}
 }
 
-func gwPlansJSON(cfg *clientConfig, args []string, render func([]byte)) error {
-	fs := flag.NewFlagSet("gw plans", flag.ContinueOnError)
+func gatewayPlansJSON(cfg *clientConfig, args []string, render func([]byte)) error {
+	fs := flag.NewFlagSet("gateway plans", flag.ContinueOnError)
 	pretty := fs.Bool("pretty", false, "Human-readable output")
 	refresh := fs.Bool("refresh", false, "Refresh provider quotas")
 	if err := fs.Parse(args); err != nil {
@@ -423,7 +423,7 @@ func gwPlansJSON(cfg *clientConfig, args []string, render func([]byte)) error {
 	if !*pretty {
 		return printAPI(cfg, method, path, nil)
 	}
-	raw, err := gwFetch(cfg, method, path, nil)
+	raw, err := gatewayFetch(cfg, method, path, nil)
 	if err != nil {
 		return err
 	}
@@ -431,8 +431,8 @@ func gwPlansJSON(cfg *clientConfig, args []string, render func([]byte)) error {
 	return nil
 }
 
-func gwGetJSON(cfg *clientConfig, args []string, path string, render func([]byte)) error {
-	fs := flag.NewFlagSet("gw", flag.ContinueOnError)
+func gatewayGetJSON(cfg *clientConfig, args []string, path string, render func([]byte)) error {
+	fs := flag.NewFlagSet("gateway", flag.ContinueOnError)
 	pretty := fs.Bool("pretty", false, "Human-readable output")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -440,7 +440,7 @@ func gwGetJSON(cfg *clientConfig, args []string, path string, render func([]byte
 	if !*pretty {
 		return printAPI(cfg, http.MethodGet, path, nil)
 	}
-	raw, err := gwFetch(cfg, http.MethodGet, path, nil)
+	raw, err := gatewayFetch(cfg, http.MethodGet, path, nil)
 	if err != nil {
 		return err
 	}
@@ -448,7 +448,7 @@ func gwGetJSON(cfg *clientConfig, args []string, path string, render func([]byte
 	return nil
 }
 
-func gwFetch(cfg *clientConfig, method, path string, body io.Reader) ([]byte, error) {
+func gatewayFetch(cfg *clientConfig, method, path string, body io.Reader) ([]byte, error) {
 	resp, err := doRequest(cfg, method, path, body)
 	if err != nil {
 		return nil, err

@@ -70,7 +70,7 @@ func run() error {
 		return cmdPlugin(cfg, flag.Args()[1:])
 	case "secrets":
 		return cmdSecrets(cfg, flag.Args()[1:])
-	case "gw":
+	case "gateway":
 		return cmdGateway(cfg, flag.Args()[1:])
 	case "sources":
 		return cmdSources(cfg, flag.Args()[1:])
@@ -101,7 +101,7 @@ Commands:
   record stop               Stop the current recording session
   record status             Show the current recording session
   requests list             List captured requests
-    --method --host --path --status --q --tag --since --limit
+    --method --host --path --status --query --tag --since --limit
   requests search           Same filters as list
   requests get <id>         Get a single request (prefix ok if unique)
   requests show <id>        Alias of get
@@ -118,9 +118,9 @@ Commands:
   plugin inspect <id>       Read tools and uses (starts the worker)
   plugin invoke <p> <i> <t> Call a tool
   secrets list|set|delete   Manage mode-0600 credentials under ~/.crabbro/secrets/
-  gw status|plans|routes    Inspect multi-protocol LLM & Decision gateway
-  gw usage|preview|reload   View quota usage, dry-run router, or reload config
-  gw cooldown-clear <plan>  Clear an active plan cooldown
+  gateway status|plans|routes    Inspect multi-protocol LLM & Decision gateway
+  gateway usage|preview|reload  View quota usage, dry-run router, or reload config
+  gateway cooldown-clear <plan> Clear an active plan cooldown
   config status             List rule, scope, or gateway config files and drafts
   rules list                List rules
   rules validate <file>     Check a YAML rule without loading it
@@ -142,15 +142,15 @@ Commands:
   mitm enable               Enable HTTPS MITM interception
   mitm disable              Disable HTTPS MITM interception
   mitm status               Show MITM status and domain patterns
-  mitm cert [--output <f>]  Download the root CA certificate
+  mitm cert [--output <file>] Download the root CA certificate
   mitm install-ca           Install the root CA into the system trust store
   mitm uninstall-ca         Remove the root CA from the system trust store
   mitm allow list           List allowed domain patterns
   mitm allow add <pattern>  Add a domain to the allowlist
-  mitm allow remove <pat>   Remove a domain from the allowlist
+  mitm allow remove <pattern> Remove a domain from the allowlist
   mitm deny list            List denied domain patterns
   mitm deny add <pattern>   Add a domain to the denylist
-  mitm deny remove <pat>    Remove a domain from the denylist
+  mitm deny remove <pattern> Remove a domain from the denylist
 
 Global options:
   --uds-path    Unix domain socket path (default: ~/.crabbro/proxy.sock)

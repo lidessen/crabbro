@@ -11,7 +11,7 @@ import (
 	"github.com/lidessen/crabbro/pkg/api"
 )
 
-// TestGatewayQuotasResetCommand covers `crabbro gw quotas reset` flag parsing,
+// TestGatewayQuotasResetCommand covers `crabbro gateway quotas reset` flag parsing,
 // request shaping, and sanitized rendering.
 func TestGatewayQuotasResetCommand(t *testing.T) {
 	var mu sync.Mutex

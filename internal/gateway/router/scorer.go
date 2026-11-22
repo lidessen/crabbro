@@ -317,23 +317,23 @@ func (r *Router) Preview(ctx context.Context, snap *config.Snapshot, req shared.
 			phase = PhaseColdStart
 		}
 	}
-	est := req.EstInputTokens
+	est := req.EstimatedInputTokens
 	if est <= 0 {
 		est = 1000
 	}
 	sig := Signals{
-		Profile:        req.Profile,
-		Protocol:       proto,
-		Family:         fam,
-		RequestedModel: req.Model,
-		SessionKey:     req.SessionKey,
-		TurnPhase:      phase,
-		MessageCount:   2,
-		RequestedTier:  inferTierFromModel(req.Model),
-		EstInputTokens: est,
-		NeedTools:      req.Tools,
-		NeedVision:     req.Vision,
-		NeedThinking:   req.Thinking,
+		Profile:              req.Profile,
+		Protocol:             proto,
+		Family:               fam,
+		RequestedModel:       req.Model,
+		SessionKey:           req.SessionKey,
+		TurnPhase:            phase,
+		MessageCount:         2,
+		RequestedTier:        inferTierFromModel(req.Model),
+		EstimatedInputTokens: est,
+		NeedTools:            req.Tools,
+		NeedVision:           req.Vision,
+		NeedThinking:         req.Thinking,
 	}
 	if phase == PhaseColdStart {
 		sig.MessageCount = 1
@@ -514,17 +514,17 @@ func (r *Router) evalTargets(snap *config.Snapshot, rt *config.Route, sig Signal
 			out = append(out, cand)
 			continue
 		}
-		if tgt.MinContextTokens > 0 && sig.EstInputTokens < tgt.MinContextTokens {
+		if tgt.MinContextTokens > 0 && sig.EstimatedInputTokens < tgt.MinContextTokens {
 			cand.RejectReason = "below target minContextTokens"
 			out = append(out, cand)
 			continue
 		}
-		if tgt.MaxContextTokens > 0 && sig.EstInputTokens > tgt.MaxContextTokens {
+		if tgt.MaxContextTokens > 0 && sig.EstimatedInputTokens > tgt.MaxContextTokens {
 			cand.RejectReason = "exceeds target maxContextTokens"
 			out = append(out, cand)
 			continue
 		}
-		if ms.ContextWindow > 0 && sig.EstInputTokens > ms.ContextWindow {
+		if ms.ContextWindow > 0 && sig.EstimatedInputTokens > ms.ContextWindow {
 			cand.RejectReason = "exceeds model contextWindow"
 			out = append(out, cand)
 			continue
@@ -721,8 +721,8 @@ func computeCacheGravity(warmPlan, warmModel, candPlan, candModel string, warm S
 		return 0.0
 	}
 	overlap := 1.0
-	if warm.WarmPrefixTokens > 0 && sig.EstInputTokens > 0 {
-		overlap = clamp01(float64(warm.WarmPrefixTokens) / float64(sig.EstInputTokens))
+	if warm.WarmPrefixTokens > 0 && sig.EstimatedInputTokens > 0 {
+		overlap = clamp01(float64(warm.WarmPrefixTokens) / float64(sig.EstimatedInputTokens))
 	}
 	freshness := math.Max(0.15, 1.0-float64(age)/float64(ttl))
 	return overlap * freshness

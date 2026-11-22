@@ -13,7 +13,7 @@
 - Problem: Agents and developers need an inspectable, programmable local HTTP proxy and unified multi-provider LLM/Decision gateway without mutating third-party CLI configurations.
 - Target state: One cohesive local daemon (`crabbrod`) serving a CLI (`crabbro`) and native desktop UI (`crabbro-ui`), cleanly separating forward proxy capture/rules (`:8080`) from the LLM & Decision gateway (`:8081`) over shared core infrastructure.
 - Non-goals: OAuth/cookie scraping for consumer web subscriptions, auto-editing external configs (`~/.claude/settings.json`), non-text media modalities, or running forward-proxy rewrite rules over gateway SSE streams.
-- Success criteria: Captured flows and gateway attempts are deterministically inspectable, replayable, secret-scrubbed, and explainable (`crabbro gw preview`, `verify replay`).
+- Success criteria: Captured flows and gateway attempts are deterministically inspectable, replayable, secret-scrubbed, and explainable (`crabbro gateway preview`, `verify replay`).
 
 ## 2. Architecture
 
@@ -41,7 +41,7 @@ internal/secret | ExchangeSink (ring/history.db) | usage.db | internal/decision 
 ## 3. Primary Work
 
 - Maintain and harden the shared core + peer proxy/gateway data planes in `crabbrod`.
-- Provide agent-first JSON CLI ergonomics (`requests`, `find`, `rules from/draft/test`, `verify replay`, `gw status/preview/usage`, `config draft/validate/commit`).
+- Provide agent-first JSON CLI ergonomics (`requests`, `find`, `rules from/draft/test`, `verify replay`, `gateway status/preview/usage`, `config draft/validate/commit`).
 - Keep the MyGo native desktop UI aligned with the `/v1` snapshot-then-follow contract.
 
 ## 4. Work Methods
@@ -61,7 +61,7 @@ internal/secret | ExchangeSink (ring/history.db) | usage.db | internal/decision 
 | `crabbro daemon start/stop`, `status`, `doctor` | Daemon lifecycle and environment checks | Available | [README.md](README.md#cli-reference) |
 | `crabbro record`, `requests`, `find`, `verify replay` | Traffic capture, natural-language query, and replay verification | Available | [README.md](README.md#agent-workflow) |
 | `crabbro rules`, `config`, `mitm` | Declarative YAML rules, atomic config commits, MITM CA | Available | [docs/design/rules.md](docs/design/rules.md) |
-| `crabbro gw`, `secrets` | Multi-protocol LLM/Decision gateway routing, quotas, secrets | Available | [docs/design/gateway.md](docs/design/gateway.md) |
+| `crabbro gateway`, `secrets` | Multi-protocol LLM/Decision gateway routing, quotas, secrets | Available | [docs/design/gateway.md](docs/design/gateway.md) |
 | `scripts/install.sh` | Build CLI, daemon, and `Crabbro.app` (macOS) / CLI (Linux) | Available | [scripts/install.sh](scripts/install.sh) |
 
 ## 6. Changes, Risks & Health

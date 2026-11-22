@@ -24,7 +24,7 @@ The view is `cmd/crabbro-ui`, in this module (`go` 1.27, which MyGo needs). A My
 | `Status` | `GET /v1/status` |
 | `Activity`, `Trajectory` | `GET /v1/trajectory?session=&cursor=&limit=` |
 | `ListRequests` | `GET /v1/requests` |
-| `SearchRequests` | `GET /v1/requests?q=` |
+| `SearchRequests` | `GET /v1/requests?query=` |
 | `GetRequest` | `GET /v1/requests/{id}?include=headers,body,rule-trace` |
 | `ListSources` | `GET /v1/sources` |
 | `GetSource` | `GET /v1/sources/{id}` |

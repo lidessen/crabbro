@@ -29,7 +29,7 @@ type Signals struct {
 	TurnPhase            string
 	MessageCount         int
 	RequestedTier        string
-	EstInputTokens       int
+	EstimatedInputTokens int
 	NeedTools            bool
 	NeedVision           bool
 	NeedThinking         bool
@@ -40,12 +40,12 @@ type Signals struct {
 // ExtractSignals inspects headers and JSON payload bytes without calling any external model.
 func ExtractSignals(profile, proto, family, requestedModel, sessionHint string, body []byte) Signals {
 	sig := Signals{
-		Profile:        profile,
-		Protocol:       proto,
-		Family:         family,
-		RequestedModel: requestedModel,
-		RequestedTier:  inferTierFromModel(requestedModel),
-		EstInputTokens: max(1, int(float64(len(body))/3.5)),
+		Profile:              profile,
+		Protocol:             proto,
+		Family:               family,
+		RequestedModel:       requestedModel,
+		RequestedTier:        inferTierFromModel(requestedModel),
+		EstimatedInputTokens: max(1, int(float64(len(body))/3.5)),
 	}
 	if family == config.FamilyDecision || proto == config.ProtocolTypeSafeJev {
 		sig.TurnPhase = PhaseDecisionCall
@@ -80,7 +80,7 @@ func ExtractSignals(profile, proto, family, requestedModel, sessionHint string, 
 	switch {
 	case isToolLoop:
 		sig.TurnPhase = PhaseToolLoop
-	case !sig.NeedTools && sig.EstInputTokens < 4000 && (sig.RequestedTier == config.TierFast || looksAuxPrompt(lastUser)):
+	case !sig.NeedTools && sig.EstimatedInputTokens < 4000 && (sig.RequestedTier == config.TierFast || looksAuxPrompt(lastUser)):
 		sig.TurnPhase = PhaseAuxSubcall
 	case sig.MessageCount <= 1:
 		sig.TurnPhase = PhaseColdStart
@@ -88,7 +88,7 @@ func ExtractSignals(profile, proto, family, requestedModel, sessionHint string, 
 		sig.TurnPhase = PhaseNewUserTurn
 	}
 
-	sig.SummaryText = buildSummary(sysPrefix, lastUser, sig.NeedTools, sig.EstInputTokens)
+	sig.SummaryText = buildSummary(sysPrefix, lastUser, sig.NeedTools, sig.EstimatedInputTokens)
 	return sig
 }
 

@@ -431,7 +431,7 @@ func filterRequests(all []*shared.Request, q map[string]string) ([]*shared.Reque
 		}
 		status = n
 	}
-	needle := strings.ToLower(q["q"])
+	needle := strings.ToLower(q["query"])
 	tag := q["tag"]
 	session := q["session"]
 	kindFilter := strings.ToLower(q["kind"])

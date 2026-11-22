@@ -210,7 +210,7 @@ func TestExpiringSurplusBeatsDeficitAndSemanticTieringRespectsBoundary(t *testin
 
 	// Preview helper works cleanly.
 	prev := r.Preview(context.Background(), snap, shared.GatewayPreviewRequest{
-		Protocol: config.ProtocolAnthropic, Model: "coding-main", EstInputTokens: 2000,
+		Protocol: config.ProtocolAnthropic, Model: "coding-main", EstimatedInputTokens: 2000,
 	})
 	if !prev.Matched || prev.RouteID != "coding-main" || prev.Chosen == "" {
 		t.Fatalf("Preview = %+v", prev)

@@ -877,7 +877,7 @@ func (e *Executor) recordSuccess(sel *router.Selection, cand router.Candidate, u
 	if e.Router != nil && e.Router.Sessions != nil && sel.Signals.SessionKey != "" {
 		warm := usage.CacheReadTokens + usage.InputTokens
 		if warm <= 0 {
-			warm = int64(sel.Signals.EstInputTokens)
+			warm = int64(sel.Signals.EstimatedInputTokens)
 		}
 		e.Router.Sessions.Update(router.SessionCacheEntry{
 			SessionKey:       sel.Signals.SessionKey,

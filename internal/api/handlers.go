@@ -170,7 +170,7 @@ func (s *Server) handleRequests(w http.ResponseWriter, r *http.Request) {
 		"host":      q.Get("host"),
 		"path":      q.Get("path"),
 		"status":    q.Get("status"),
-		"q":         q.Get("q"),
+		"query":     q.Get("query"),
 		"tag":       q.Get("tag"),
 		"session":   q.Get("session"),
 		"type":      q.Get("type"),

@@ -143,15 +143,15 @@ crabbro config draft ./coding-route.yaml --gateway-route
 crabbro config commit coding-route --gateway-route
 
 # Inspect runtime status, rolling quota windows, dry-run routing, and usage ledger
-crabbro gw status --pretty
-crabbro gw plans --pretty
-crabbro gw routes --pretty
-crabbro gw preview --protocol anthropic --model coding-main --tools --pretty
-crabbro gw usage --window 24h --pretty
+crabbro gateway status --pretty
+crabbro gateway plans --pretty
+crabbro gateway routes --pretty
+crabbro gateway preview --protocol anthropic --model coding-main --tools --pretty
+crabbro gateway usage --window 24h --pretty
 
 # Redeem a provider reset coupon (opt-in autoReset policy lives on the plan)
-crabbro gw quotas refresh
-crabbro gw quotas reset glm-coding --scope fiveHour --dry-run
+crabbro gateway quotas refresh
+crabbro gateway quotas reset glm-coding --scope fiveHour --dry-run
 ```
 
 Remote quota availability depends on provider credentials and APIs. Xiaomi MiMo Token Plan has no verified quota endpoint accepting its inference API key; Google and OpenAI API-key plans likewise have no supported account quota endpoint here (N/A). ZenMux subscription details require a management API key, which may differ from an inference key. MiniMax quota counters and Kimi usage endpoints may change or report inconsistent values; unknown responses are not treated as fresh quota.
@@ -184,8 +184,8 @@ reads the token file itself.
 | `find "QUERY" [--pretty]` | Decision-route natural-language search |
 | `verify replay ID [--expect-status N] [--expect-body-contains TEXT]` | Replay through the proxy |
 | `secrets list\|set\|delete` | Manage mode-`0600` credentials in `~/.crabbro/secrets/` |
-| `gw status\|plans\|routes\|usage\|quotas\|preview\|cooldown-clear\|reload` | Gateway status, quotas, dry-run routing, and reload |
-| `gw quotas refresh` / `gw quotas reset <plan> [--scope fiveHour\|weekly] [--dry-run]` | Refresh provider quota snapshots; redeem at most one reset coupon (opt-in `autoReset` policy per plan) |
+| `gateway status\|plans\|routes\|usage\|quotas\|preview\|cooldown-clear\|reload` | Gateway status, quotas, dry-run routing, and reload |
+| `gateway quotas refresh` / `gateway quotas reset <plan> [--scope fiveHour\|weekly] [--dry-run]` | Refresh provider quota snapshots; redeem at most one reset coupon (opt-in `autoReset` policy per plan) |
 | `config status\|draft\|validate\|commit\|discard` | Safe staging for rules, scope, `--gateway-plan`, and `--gateway-route` |
 | `rules list\|get\|create\|enable\|disable\|delete\|test` | Rule CRUD and fixture test |
 | `rules from ID [--action mock\|block\|header\|rewrite\|tag] [--name N] [--apply=false]` | Scaffold from a capture and create it |
@@ -198,7 +198,7 @@ reads the token file itself.
 | `mitm allow\|deny list\|add\|remove` | Domain patterns |
 
 `requests list` filters: `--since` (request id, RFC3339, or a duration like `5m`),
-`--limit`, `--method`, `--host`, `--path`, `--status`, `--q`, `--tag`, `--session`.
+`--limit`, `--method`, `--host`, `--path`, `--status`, `--query`, `--tag`, `--session`.
 
 `crabbrod` flags: `--proxy-addr`, `--uds-path`, `--tcp-addr`, `--ring-buffer-size`,
 `--fixture-dir`, `--mitm`, `--mitm-allow`, `--mitm-deny`, `--decision-provider`,

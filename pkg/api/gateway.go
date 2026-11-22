@@ -293,15 +293,15 @@ type GatewayUsageResponse struct {
 
 // GatewayPreviewRequest is the body for POST /v1/gateway/preview.
 type GatewayPreviewRequest struct {
-	Profile        string `json:"profile,omitempty"`
-	Protocol       string `json:"protocol"`
-	Model          string `json:"model"`
-	EstInputTokens int    `json:"estInputTokens,omitempty"`
-	TurnPhase      string `json:"turnPhase,omitempty"`
-	SessionKey     string `json:"sessionKey,omitempty"`
-	Tools          bool   `json:"tools,omitempty"`
-	Vision         bool   `json:"vision,omitempty"`
-	Thinking       bool   `json:"thinking,omitempty"`
+	Profile              string `json:"profile,omitempty"`
+	Protocol             string `json:"protocol"`
+	Model                string `json:"model"`
+	EstimatedInputTokens int    `json:"estimatedInputTokens,omitempty"`
+	TurnPhase            string `json:"turnPhase,omitempty"`
+	SessionKey           string `json:"sessionKey,omitempty"`
+	Tools                bool   `json:"tools,omitempty"`
+	Vision               bool   `json:"vision,omitempty"`
+	Thinking             bool   `json:"thinking,omitempty"`
 }
 
 // GatewayPreviewResponse is returned by POST /v1/gateway/preview.

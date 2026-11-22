@@ -230,7 +230,7 @@ func countEvents(events []string, typ string) int {
 }
 
 // TestGatewayResetQuotaControlPath covers the operator path used by
-// POST /v1/gateway/quotas/reset and `crabbro gw quotas reset`.
+// POST /v1/gateway/quotas/reset and `crabbro gateway quotas reset`.
 func TestGatewayResetQuotaControlPath(t *testing.T) {
 	var mu sync.Mutex
 	useCalls := 0

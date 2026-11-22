@@ -17,7 +17,7 @@ func TestPreExpirySafeguardIsScopeLocal(t *testing.T) {
 	s.SetClock(func() time.Time { return now })
 	pct := func(v float64) *float64 { return &v }
 	at := func(d time.Duration) *time.Time { t := now.Add(d); return &t }
-	spec := config.SafeguardSpec{Enabled: true, LeadTime: "30m", MinUsedPct: 80}
+	spec := config.SafeguardSpec{Enabled: true, LeadTime: "30m", MinUsedPercent: 80}
 
 	seed := func(q RemoteQuota) {
 		s.mu.Lock()
@@ -85,7 +85,7 @@ func TestPreExpirySafeguardEndToEnd(t *testing.T) {
 	policy := config.AutoResetSpec{
 		Enabled:   true,
 		Scopes:    []string{ScopeWeekly},
-		Safeguard: config.SafeguardSpec{Enabled: true, LeadTime: "30m", MinUsedPct: 80},
+		Safeguard: config.SafeguardSpec{Enabled: true, LeadTime: "30m", MinUsedPercent: 80},
 	}
 	pct := func(v float64) *float64 { return &v }
 	expiry := now.Add(21 * time.Minute) // inside the 30m lead
@@ -144,7 +144,7 @@ func TestPreExpirySafeguardEndToEnd(t *testing.T) {
 		p := zcodePlan(server.URL, config.AutoResetSpec{
 			Enabled:   true,
 			Scopes:    []string{ScopeFiveHour},
-			Safeguard: config.SafeguardSpec{Enabled: true, LeadTime: "30m", MinUsedPct: 80},
+			Safeguard: config.SafeguardSpec{Enabled: true, LeadTime: "30m", MinUsedPercent: 80},
 		})
 		s.mu.Lock()
 		s.values["zcode"] = RemoteQuota{
@@ -169,7 +169,7 @@ func TestWeeklyGuardRefusalReturnsDistinctSentinel(t *testing.T) {
 	policy := config.AutoResetSpec{
 		Enabled:   true,
 		Scopes:    []string{ScopeWeekly},
-		Safeguard: config.SafeguardSpec{Enabled: true, LeadTime: "30m", MinUsedPct: 80},
+		Safeguard: config.SafeguardSpec{Enabled: true, LeadTime: "30m", MinUsedPercent: 80},
 	}
 	pct := func(v float64) *float64 { return &v }
 

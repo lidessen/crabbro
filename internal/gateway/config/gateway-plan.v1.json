@@ -81,7 +81,7 @@
           "properties": {
             "enabled": { "type": "boolean" },
             "leadTime": { "$ref": "#/$defs/duration" },
-            "minUsedPct": { "type": "number", "minimum": 1, "maximum": 99 }
+            "minUsedPercent": { "type": "number", "minimum": 1, "maximum": 99 }
           }
         }
       }

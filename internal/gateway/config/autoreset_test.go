@@ -55,15 +55,15 @@ func TestSafeguardAndReminderDefaults(t *testing.T) {
 	if guard.Enabled {
 		t.Fatal("safeguard must be off by default")
 	}
-	if guard.LeadTimeDuration() != 30*time.Minute || guard.MinUsedPercent() != 80 {
-		t.Fatalf("safeguard defaults = %v / %v", guard.LeadTimeDuration(), guard.MinUsedPercent())
+	if guard.LeadTimeDuration() != 30*time.Minute || guard.EffectiveMinUsedPercent() != 80 {
+		t.Fatalf("safeguard defaults = %v / %v", guard.LeadTimeDuration(), guard.EffectiveMinUsedPercent())
 	}
-	custom := SafeguardSpec{Enabled: true, LeadTime: "45m", MinUsedPct: 65}
-	if custom.LeadTimeDuration() != 45*time.Minute || custom.MinUsedPercent() != 65 {
-		t.Fatalf("safeguard parsing = %v / %v", custom.LeadTimeDuration(), custom.MinUsedPercent())
+	custom := SafeguardSpec{Enabled: true, LeadTime: "45m", MinUsedPercent: 65}
+	if custom.LeadTimeDuration() != 45*time.Minute || custom.EffectiveMinUsedPercent() != 65 {
+		t.Fatalf("safeguard parsing = %v / %v", custom.LeadTimeDuration(), custom.EffectiveMinUsedPercent())
 	}
-	broken := SafeguardSpec{LeadTime: "soon", MinUsedPct: -1}
-	if broken.LeadTimeDuration() != 30*time.Minute || broken.MinUsedPercent() != 80 {
+	broken := SafeguardSpec{LeadTime: "soon", MinUsedPercent: -1}
+	if broken.LeadTimeDuration() != 30*time.Minute || broken.EffectiveMinUsedPercent() != 80 {
 		t.Fatal("broken safeguard values must fall back to defaults")
 	}
 
@@ -80,7 +80,7 @@ func TestSafeguardAndReminderDefaults(t *testing.T) {
 }
 
 func TestSafeguardAndReminderValidation(t *testing.T) {
-	withGuard := strings.Replace(autoResetPlanYAML, "  minInterval: 5m", "  minInterval: 5m\n  safeguard:\n    enabled: true\n    leadTime: 30m\n    minUsedPct: 80", 1)
+	withGuard := strings.Replace(autoResetPlanYAML, "  minInterval: 5m", "  minInterval: 5m\n  safeguard:\n    enabled: true\n    leadTime: 30m\n    minUsedPercent: 80", 1)
 	if _, diags := ValidatePlanBytes("zcode.yaml", "zcode", []byte(withGuard)); len(diags) != 0 {
 		t.Fatalf("valid safeguard rejected: %v", diags)
 	}
@@ -88,8 +88,8 @@ func TestSafeguardAndReminderValidation(t *testing.T) {
 	if _, diags := ValidatePlanBytes("zcode.yaml", "zcode", []byte(badLead)); len(diags) == 0 || !strings.Contains(diags[0].Path, "safeguard.leadTime") {
 		t.Fatalf("bad safeguard lead diagnostics = %v", diags)
 	}
-	badPct := strings.Replace(withGuard, "minUsedPct: 80", "minUsedPct: 0.5", 1)
-	if _, diags := ValidatePlanBytes("zcode.yaml", "zcode", []byte(badPct)); len(diags) == 0 || !strings.Contains(diags[0].Path, "safeguard.minUsedPct") {
+	badPct := strings.Replace(withGuard, "minUsedPercent: 80", "minUsedPercent: 0.5", 1)
+	if _, diags := ValidatePlanBytes("zcode.yaml", "zcode", []byte(badPct)); len(diags) == 0 || !strings.Contains(diags[0].Path, "safeguard.minUsedPercent") {
 		t.Fatalf("bad safeguard threshold diagnostics = %v", diags)
 	}
 	withReminder := strings.Replace(autoResetPlanYAML, "  minInterval: 5m", "  minInterval: 5m\nquotaReminder:\n  leadTime: 6h", 1)

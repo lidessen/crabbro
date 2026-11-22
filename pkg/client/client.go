@@ -265,7 +265,7 @@ func (q RequestQuery) values() url.Values {
 	set("host", q.Host)
 	set("path", q.Path)
 	set("status", q.Status)
-	set("q", q.Query)
+	set("query", q.Query)
 	set("tag", q.Tag)
 	set("session", q.Session)
 	set("type", q.Type)

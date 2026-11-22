@@ -33,7 +33,7 @@ Cross-references: [NETWORK_PIPELINE_DESIGN.md](../../NETWORK_PIPELINE_DESIGN.md)
 - Preserve vendor-native features (`cache_control`, extended `thinking` signatures, reasoning items, provider beta headers) losslessly on same-protocol routes.
 - Prevent prompt-cache thrashing across tool loops and warm multi-turn sessions while still draining soon-to-expire plan quotas and honoring model quality requirements.
 - Unify all LLM observability (forward-proxy traffic and gateway attempts, token/cache accounting, routing score breakdowns) in the same `requests`, `listen`, and MyGo desktop UI surfaces.
-- Make routing deterministic, offline-testable (`crabbro gw preview`), and explainable in JSON traces.
+- Make routing deterministic, offline-testable (`crabbro gateway preview`), and explainable in JSON traces.
 
 ### Non-goals
 
@@ -288,14 +288,14 @@ Computed purely from request headers, route config, and JSON payload inspection 
    - Stable hash of `(profile, ingressProtocol, systemPromptPrefix[0:1024], firstUserMessagePrefix[0:512])`
 2. **Turn phase (`TurnPhase`) classification**:
    - `DecisionCall`: `family == "decision"` (stateless, latency-sensitive).
-   - `AuxSubcall`: heuristic match for auxiliary low-stakes subcalls (e.g., Claude Code's small haiku title/summary/compaction prompts: no tools declared and `estInputTokens < 4000`, or requested model matches a fast-tier pattern).
+   - `AuxSubcall`: heuristic match for auxiliary low-stakes subcalls (e.g., Claude Code's small haiku title/summary/compaction prompts: no tools declared and `estimatedInputTokens < 4000`, or requested model matches a fast-tier pattern).
    - `ToolLoop`: trailing message is a `tool_result` / `tool` / `function_call_output` (agent mid-loop continuation; user did not speak).
    - `ColdStart`: first turn (`len(messages) <= 2` or no prior warm entry in `SessionCacheStore`).
    - `NewUserTurn`: subsequent user prompt in an existing session.
 3. **Baseline demand & capability flags**:
    - `requestedTier`: inferred from requested model name (`haiku`/`mini`/`flash` -> `fast`, `sonnet`/`coder` -> `strong`, `opus`/`pro`/`max` -> `frontier`; defaults to `strong` for virtual aliases like `coding-main`).
    - `requiredCapabilities`: `{tools, vision, thinking, structuredOutput}` detected from payload fields.
-   - `estInputTokens`: fast byte-length estimate (`utf8Bytes / 3.5` plus image token allowances).
+   - `estimatedInputTokens`: fast byte-length estimate (`utf8Bytes / 3.5` plus image token allowances).
 4. **Warm cache lookup**:
    - Query in-memory `SessionCacheStore` (bounded LRU, e.g. 4,096 active sessions) for `(sessionKey)`: last `(planID, model)`, `warmPrefixTokens` (from last `cacheReadTokens + inputTokens` or prefix hash match), and `age = now - lastSuccessAt`.
 
@@ -307,7 +307,7 @@ Computed purely from request headers, route config, and JSON payload inspection 
 - `turnPhase` is `ColdStart` OR (`turnPhase == NewUserTurn` and `cacheGravity < semanticTiering.maxCacheGravity`, meaning cache is cold or naturally expired)
 
 Execution rules:
-- Sends a compact sanitized summary (<= 2 KiB: system role summary + latest user turn + tool count + `estInputTokens`, never full repo dumps) to `semanticTiering.decisionRoute` with `decision` question `tier` (`choice: ["fast", "strong", "frontier"]`).
+- Sends a compact sanitized summary (<= 2 KiB: system role summary + latest user turn + tool count + `estimatedInputTokens`, never full repo dumps) to `semanticTiering.decisionRoute` with `decision` question `tier` (`choice: ["fast", "strong", "frontier"]`).
 - Bounded by `semanticTiering.timeout` (default `800ms`), strictly **fail-open**: on timeout/error or `confidence < minConfidence`, demand stays at `requestedTier`.
 - Even on high confidence, `demand.tier` blends conservatively (never downgrading `frontier` requests when tools + thinking are active unless `confidence >= 0.85`).
 
@@ -327,7 +327,7 @@ Every surviving candidate `c = (plan, endpoint, model)` receives a normalized sc
 ```text
 Score(c) =
     w.quality  * QualityMatch(c.model, demand)
-  + w.cache    * CacheGravity(c, sessionState, turnPhase, estInputTokens)
+  + w.cache    * CacheGravity(c, sessionState, turnPhase, estimatedInputTokens)
   + w.quota    * QuotaUrgency(c.plan)
   + w.protocol * NativeProtocolBonus(c.endpoint, ingressProtocol)
   + PriorityBias(c.target)
@@ -340,7 +340,7 @@ Let `ttl = firstNonZero(route.policy.cacheTtlOverride, model.cacheTtl, plan.cach
 - If `c.(plan, model)` != `sessionState.(lastPlan, lastModel)` or `age >= ttl`: `CacheGravity = 0.0` (cache already expired upstream — **rebalancing is free**).
 - If `turnPhase == ToolLoop` and `age < ttl`: `CacheGravity = +10.0` (structural hard pin so tool loops never break reasoning/cache mid-turn unless the candidate fails hard constraints).
 - Otherwise (`NewUserTurn` while `age < ttl`):
-  `overlapRatio = clamp(sessionState.warmPrefixTokens / max(estInputTokens, 1), 0, 1)`
+  `overlapRatio = clamp(sessionState.warmPrefixTokens / max(estimatedInputTokens, 1), 0, 1)`
   `freshness = 1.0 - (age / ttl)` (exponential or linear decay; linear `1 - age/ttl` with a floor of `0.15` while `< ttl` keeps behavior predictable)
   `CacheGravity = overlapRatio * freshness` (in `[0, 1]`).
 
@@ -468,7 +468,7 @@ The gateway constructs its own transport pool distinct from `internal/proxy`:
 Some coding plans (BigModel `zcode`) grant reset coupons that restore an exhausted window. Crabbro treats them as a provider-private resource owned by `internal/gateway/quota`:
 
 - **Sync:** every quota refresh reads `GET /api/biz/customer-package-reset/list?targetType=PERSONAL`. Entries carry `recordId`, `grantType`, `available`, and `expireTime` — a naive `"2006-01-02 15:04:05"` wall clock in `Asia/Shanghai` (`+08:00`) that is parsed with a fixed zone and normalized to UTC. Snapshots expose only `scope`, `expiresAt`, `resetsRemaining`, and `soonestResetExpiry`; `recordId`/`grantType` never leave the package (no JSON output, log line, event, or UI field).
-- **Explicit redemption:** `POST /v1/gateway/quotas/reset` (CLI `crabbro gw quotas reset <plan> [--scope fiveHour|weekly] [--dry-run]`) re-reads `/list`, picks the soonest-expiring available coupon for the scope, redeems **at most one** coupon via `POST /api/biz/customer-package-reset/use` with a fresh UUID `requestId`, refreshes the plan quota snapshot, and clears plan cooling so traffic resumes immediately. An empty scope picks the soonest-expiring coupon across both windows.
+- **Explicit redemption:** `POST /v1/gateway/quotas/reset` (CLI `crabbro gateway quotas reset <plan> [--scope fiveHour|weekly] [--dry-run]`) re-reads `/list`, picks the soonest-expiring available coupon for the scope, redeems **at most one** coupon via `POST /api/biz/customer-package-reset/use` with a fresh UUID `requestId`, refreshes the plan quota snapshot, and clears plan cooling so traffic resumes immediately. An empty scope picks the soonest-expiring coupon across both windows.
 - **Opt-in auto-redeem:** plans may declare
 
   ```yaml
@@ -480,10 +480,10 @@ Some coding plans (BigModel `zcode`) grant reset coupons that restore an exhaust
     safeguard:               # opt-in pre-expiry redemption; default off
       enabled: true
       leadTime: 30m          # redeem when the scope's coupon expires inside this lead
-      minUsedPct: 80         # ...and the same window is at least this used
+      minUsedPercent: 80     # ...and the same window is at least this used
   ```
 
-  When enabled, the gateway redeems a coupon only after it observes the matching window exhausted (provider-reported usage `>= 99%`) — either from a quota refresh or from an upstream `quota_exhausted` / `rate_limit` classification (which re-fetches the windows first). The pre-expiry safeguard additionally redeems when the scope's soonest coupon is inside `leadTime` **and** that scope's window (`fiveHour` or `weekly`) is at least `minUsedPct` used, so a weekly coupon is never spent merely to recover a five-hour window while weekly quota remains plentiful. Redemption is guarded by a per-plan single-flight mutex plus the per-`(plan, scope)` `minInterval`, always re-reads `/list` before `/use`, and **never blindly retries** an ambiguous or failed `/use`: the attempt fails closed to the normal cooling/failover path. A verified success refreshes the quota snapshot, clears plan cooling, and emits `gateway_quota_reset` carrying only the plan and scope.
+  When enabled, the gateway redeems a coupon only after it observes the matching window exhausted (provider-reported usage `>= 99%`) — either from a quota refresh or from an upstream `quota_exhausted` / `rate_limit` classification (which re-fetches the windows first). The pre-expiry safeguard additionally redeems when the scope's soonest coupon is inside `leadTime` **and** that scope's window (`fiveHour` or `weekly`) is at least `minUsedPercent` used, so a weekly coupon is never spent merely to recover a five-hour window while weekly quota remains plentiful. Redemption is guarded by a per-plan single-flight mutex plus the per-`(plan, scope)` `minInterval`, always re-reads `/list` before `/use`, and **never blindly retries** an ambiguous or failed `/use`: the attempt fails closed to the normal cooling/failover path. A verified success refreshes the quota snapshot, clears plan cooling, and emits `gateway_quota_reset` carrying only the plan and scope.
 
 - **Expiry reminders:** plans may configure `quotaReminder.leadTime` (default `24h`). When a coupon or an underutilized weekly/monthly window enters that horizon, the gateway emits one `gateway_quota_expiring` event per coupon/window (deduplicated by scope and expiry). The sanitized `reminders` list in the quota snapshot uses the same lead time; provider coupon identifiers never appear in either surface.
 
@@ -698,14 +698,14 @@ Add secret and gateway control endpoints:
 | `POST` | `/v1/gateway/plans/{id}/reset-cooldown` | Clear active cooldown on a plan immediately |
 | `GET` | `/v1/gateway/routes` | Loaded routes and match precedence |
 | `GET` | `/v1/gateway/usage?window=5h&plan=...` | Aggregated tokens, cache hit ratios, error counts from `usage.db` |
-| `POST` | `/v1/gateway/preview` | Dry-run router scoring (`profile`, `protocol`, `model`, `estInputTokens`, `turnPhase`, optional `sessionKey`) without sending upstream bytes |
+| `POST` | `/v1/gateway/preview` | Dry-run router scoring (`profile`, `protocol`, `model`, `estimatedInputTokens`, `turnPhase`, optional `sessionKey`) without sending upstream bytes |
 | `POST` | `/v1/gateway/reload` | Reload plans and routes from disk into a new `Snapshot` |
 
 ### 9.2 CLI commands
 
 JSON output by default; `--pretty` for operator tables:
 - `crabbro secrets set <name>` (reads from stdin or `--from-env VAR`, never a plain CLI value flag in `ps`), `secrets list`, `secrets delete <name>`.
-- `crabbro gw status`, `crabbro gw plans`, `crabbro gw routes`, `crabbro gw usage [--window 5h|24h|7d]`, `crabbro gw quotas refresh`, `crabbro gw quotas reset <plan> [--scope fiveHour|weekly] [--dry-run]`, `crabbro gw cooldown-clear <plan>`, `crabbro gw preview --protocol anthropic --model coding-main --tokens 42000`.
+- `crabbro gateway status`, `crabbro gateway plans`, `crabbro gateway routes`, `crabbro gateway usage [--window 5h|24h|7d]`, `crabbro gateway quotas refresh`, `crabbro gateway quotas reset <plan> [--scope fiveHour|weekly] [--dry-run]`, `crabbro gateway cooldown-clear <plan>`, `crabbro gateway preview --protocol anthropic --model coding-main --tokens 42000`.
 - `crabbro config draft|validate|commit|discard --gateway-plan <id>` / `--gateway-route <id>`.
 - `crabbrod` startup flags: `--gateway-addr` (default `127.0.0.1:8081`, `"off"` disables), `--gateway-token`, `--gateway-capture` (`preview | metadata-only | off`, default `preview`), `--gateway-max-request-body` (default `32MiB`), `--gateway-usage-retention` (default `90d`).
 
@@ -739,7 +739,7 @@ Using only `pkg/api` and `pkg/client` (no `internal/` imports):
 - Implement `internal/gateway/ledger` (`usage.db` SQLite store + rolling window + rate-limit header calibration).
 - Implement `internal/gateway/router` (4-stage `SignalExtractor`, hard filters, `Quality × Cache × Quota` scorer, `SessionCacheStore`, `preview`).
 - Implement `internal/gateway/executor` (32 MiB request buffer, pre-commit retry loop, **First-SSE-Event Peek**, cooldowns, per-plan `proxyUrl` transports) and same-protocol Fast Path + `UsageTap` for `anthropic`, `openai-chat`, `openai-responses`, `gemini`, `typesafe-jev`, and `openai-decisions`.
-- **Exit criteria:** Multi-plan failover, fake-200 SSE peek failover, cache-preserving sticky routing, and `crabbro requests show` / `crabbro gw usage` verified end-to-end with mock upstreams.
+- **Exit criteria:** Multi-plan failover, fake-200 SSE peek failover, cache-preserving sticky routing, and `crabbro requests show` / `crabbro gateway usage` verified end-to-end with mock upstreams.
 
 ### Phase 3: Cross-Protocol Bridges and `internal/decision` Unification
 - Implement `internal/gateway/ir` (`GenIR` + `DecisionIR`) and full bidirectional codecs for `openai-chat`, `openai-responses`, `anthropic`, and `gemini`, plus one-way `DecisionIR -> GenIR` emulation and thinking-signature isolation.

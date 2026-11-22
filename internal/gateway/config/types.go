@@ -102,13 +102,13 @@ func ParseDuration(raw string) (time.Duration, error) {
 
 // Plan configures one API-key coding plan or decision backend.
 type Plan struct {
-	Version     int                      `yaml:"version" json:"version"`
-	ID          string                   `yaml:"id" json:"id"`
-	Enabled     *bool                    `yaml:"enabled,omitempty" json:"enabled,omitempty"`
-	Direct      *DirectSpec              `yaml:"direct,omitempty" json:"direct,omitempty"`
-	Description string                   `yaml:"description,omitempty" json:"description,omitempty"`
-	Credential  string                   `yaml:"credential" json:"credential"`
-	ProxyURL    string                   `yaml:"proxyUrl,omitempty" json:"proxyUrl,omitempty"`
+	Version       int                      `yaml:"version" json:"version"`
+	ID            string                   `yaml:"id" json:"id"`
+	Enabled       *bool                    `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	Direct        *DirectSpec              `yaml:"direct,omitempty" json:"direct,omitempty"`
+	Description   string                   `yaml:"description,omitempty" json:"description,omitempty"`
+	Credential    string                   `yaml:"credential" json:"credential"`
+	ProxyURL      string                   `yaml:"proxyUrl,omitempty" json:"proxyUrl,omitempty"`
 	Timeout       TimeoutSpec              `yaml:"timeout,omitempty" json:"timeout,omitempty"`
 	Cache         CacheSpec                `yaml:"cache,omitempty" json:"cache,omitempty"`
 	Limits        LimitsSpec               `yaml:"limits,omitempty" json:"limits,omitempty"`
@@ -208,9 +208,9 @@ type AutoResetSpec struct {
 
 // Defaults for the opt-in pre-expiry auto-reset safeguard.
 const (
-	DefaultSafeguardLeadTime     = 30 * time.Minute
-	DefaultSafeguardMinUsedPct   = 80.0
-	DefaultQuotaReminderLeadTime = 24 * time.Hour
+	DefaultSafeguardLeadTime       = 30 * time.Minute
+	DefaultSafeguardMinUsedPercent = 80.0
+	DefaultQuotaReminderLeadTime   = 24 * time.Hour
 )
 
 // SafeguardSpec opts into proactive redemption before a reset coupon expires.
@@ -219,9 +219,9 @@ const (
 // weekly coupon is never spent merely to recover a five-hour window while the
 // weekly window still has plenty of quota left.
 type SafeguardSpec struct {
-	Enabled    bool    `yaml:"enabled,omitempty" json:"enabled,omitempty"`
-	LeadTime   string  `yaml:"leadTime,omitempty" json:"leadTime,omitempty"`
-	MinUsedPct float64 `yaml:"minUsedPct,omitempty" json:"minUsedPct,omitempty"`
+	Enabled        bool    `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	LeadTime       string  `yaml:"leadTime,omitempty" json:"leadTime,omitempty"`
+	MinUsedPercent float64 `yaml:"minUsedPercent,omitempty" json:"minUsedPercent,omitempty"`
 }
 
 // LeadTimeDuration returns the pre-expiry trigger horizon, defaulting to 30m.
@@ -235,17 +235,17 @@ func (s SafeguardSpec) LeadTimeDuration() time.Duration {
 	return DefaultSafeguardLeadTime
 }
 
-// MinUsedPercent returns the usage percentage required to spend an expiring
-// coupon, defaulting to 80%. Values outside (0,100) fall back to the default
-// (config validation rejects them before they reach a live snapshot).
-func (s SafeguardSpec) MinUsedPercent() float64 {
-	if s.MinUsedPct <= 0 {
-		return DefaultSafeguardMinUsedPct
+// EffectiveMinUsedPercent returns the usage percentage required to spend an
+// expiring coupon, defaulting to 80%. Values outside (0,100) fall back to the
+// default (config validation rejects them before they reach a live snapshot).
+func (s SafeguardSpec) EffectiveMinUsedPercent() float64 {
+	if s.MinUsedPercent <= 0 {
+		return DefaultSafeguardMinUsedPercent
 	}
-	if s.MinUsedPct >= 100 {
+	if s.MinUsedPercent >= 100 {
 		return 99
 	}
-	return s.MinUsedPct
+	return s.MinUsedPercent
 }
 
 // QuotaReminderSpec configures proactive expiry notifications for a plan.

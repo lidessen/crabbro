@@ -319,7 +319,9 @@ func soonestCouponExpiry(q *RemoteQuota, scope string, now time.Time) (time.Time
 }
 
 // preExpirySafeguardEligible implements the opt-in rule
-//   soonestCouponExpiry(scope) < leadTime AND used(scope) >= minUsedPct
+//
+//	soonestCouponExpiry(scope) < leadTime AND used(scope) >= minUsedPercent
+//
 // The usage threshold is evaluated against the same window the coupon resets.
 // This is what prevents an expiring weekly coupon from burning itself merely
 // to recover a five-hour window while weekly quota remains plentiful.
@@ -339,7 +341,7 @@ func (s *Syncer) preExpirySafeguardEligible(planID, scope string, spec config.Sa
 	if !ok {
 		return false
 	}
-	return used >= spec.MinUsedPercent()
+	return used >= spec.EffectiveMinUsedPercent()
 }
 
 // maybeAutoReset launches the opt-in evaluation when a freshly synced
@@ -424,7 +426,7 @@ func (s *Syncer) redeem(ctx context.Context, p *config.Plan, scope string, dryRu
 		minUsed := weeklyRecoveryMinPct
 		guard := policy.Safeguard
 		if guard.Enabled && pick.expiresAt != nil && pick.expiresAt.After(now) && pick.expiresAt.Sub(now) <= guard.LeadTimeDuration() {
-			minUsed = guard.MinUsedPercent()
+			minUsed = guard.EffectiveMinUsedPercent()
 		}
 		q, ok := s.Get(p.ID)
 		used, hasUsage := 0.0, false

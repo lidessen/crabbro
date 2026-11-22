@@ -40,7 +40,7 @@ func cmdRequestsList(cfg *clientConfig, args []string) error {
 	host := fs.String("host", "", "Filter by host substring")
 	pathFilter := fs.String("path", "", "Filter by path prefix")
 	status := fs.Int("status", 0, "Filter by response status")
-	q := fs.String("q", "", "Substring match on method or URL")
+	query := fs.String("query", "", "Substring match on method or URL")
 	tag := fs.String("tag", "", "Filter by tag")
 	session := fs.String("session", "", "Filter by recording session id")
 	typ := fs.String("type", "", "Filter by resource type (xhr, script, image, ...)")
@@ -70,8 +70,8 @@ func cmdRequestsList(cfg *clientConfig, args []string) error {
 	if *status > 0 {
 		params = append(params, fmt.Sprintf("status=%d", *status))
 	}
-	if *q != "" {
-		params = append(params, "q="+*q)
+	if *query != "" {
+		params = append(params, "query="+*query)
 	}
 	if *tag != "" {
 		params = append(params, "tag="+*tag)
