@@ -47,7 +47,7 @@ func classifiedFailure(kind string, retryable, contextOnly bool, scope string, d
 }
 
 // ClassifyHTTPFailure implements the failure & cooldown matrix from docs/design/gateway.md §7.3.
-func ClassifyHTTPFailure(status int, body []byte, h http.Header, planID string, health *router.HealthStore) FailureClass {
+func ClassifyHTTPFailure(status int, body []byte, h http.Header, planID string, health *router.HealthStore, refs ...string) FailureClass {
 	// The body is inspected only to choose a class. No slice of it is ever
 	// copied into FailureClass.Summary.
 	lower := strings.ToLower(string(body))
@@ -56,22 +56,26 @@ func ClassifyHTTPFailure(status int, body []byte, h http.Header, planID string, 
 	case http.StatusTooManyRequests:
 		dur := parseRetryAfter(h)
 		if dur <= 0 && health != nil {
-			dur = health.NextRateLimitBackoff(planID)
+			if len(refs) > 0 {
+				dur = health.NextKeyBackoff(planID, refs[0])
+			} else {
+				dur = health.NextRateLimitBackoff(planID)
+			}
 		}
 		if dur <= 0 {
 			dur = 15 * time.Second
 		}
 		if strings.Contains(lower, "insufficient_quota") || strings.Contains(lower, "quota exceeded") || strings.Contains(lower, "credit balance") {
 			dur = maxDuration(dur, 5*time.Minute)
-			return classifiedFailure(ErrKindQuotaExhausted, true, false, "plan", dur, "plan:"+dur.String(), "quota exhausted (429)")
+			return classifiedFailure(ErrKindQuotaExhausted, true, false, "key", dur, "key:"+dur.String(), "quota exhausted (429)")
 		}
-		return classifiedFailure(ErrKindRateLimit, true, false, "plan", dur, "plan:"+dur.String(), "rate limited (429)")
+		return classifiedFailure(ErrKindRateLimit, true, false, "key", dur, "key:"+dur.String(), "rate limited (429)")
 	case http.StatusPaymentRequired:
-		return classifiedFailure(ErrKindQuotaExhausted, true, false, "plan", 5*time.Minute, "plan:5m", "payment or quota required (402)")
+		return classifiedFailure(ErrKindQuotaExhausted, true, false, "key", 5*time.Minute, "key:5m", "payment or quota required (402)")
 	case http.StatusUnauthorized:
-		return classifiedFailure(ErrKindAuthError, true, false, "plan", 10*time.Minute, "plan:10m", "upstream auth error (401)")
+		return classifiedFailure(ErrKindAuthError, true, false, "key", 10*time.Minute, "key:10m", "upstream auth error (401)")
 	case http.StatusForbidden:
-		return classifiedFailure(ErrKindAuthError, true, false, "plan", 10*time.Minute, "plan:10m", "upstream permission denied (403)")
+		return classifiedFailure(ErrKindAuthError, true, false, "key", 10*time.Minute, "key:10m", "upstream permission denied (403)")
 	case http.StatusNotFound:
 		return classifiedFailure(ErrKindModelUnavailable, true, false, "model", 10*time.Minute, "model:10m", "model or endpoint not found (404)")
 	case http.StatusBadRequest, http.StatusUnprocessableEntity:
@@ -83,7 +87,7 @@ func ClassifyHTTPFailure(status int, body []byte, h http.Header, planID string, 
 			return classifiedFailure(ErrKindModelUnavailable, true, false, "model", 10*time.Minute, "model:10m", "model capability or endpoint unavailable")
 		}
 		if strings.Contains(lower, "credit balance is too low") || strings.Contains(lower, "insufficient_quota") {
-			return classifiedFailure(ErrKindQuotaExhausted, true, false, "plan", 5*time.Minute, "plan:5m", "quota exhausted")
+			return classifiedFailure(ErrKindQuotaExhausted, true, false, "key", 5*time.Minute, "key:5m", "quota exhausted")
 		}
 		return classifiedFailure(ErrKindClientBadRequest, false, false, "", 0, "", "upstream invalid request ("+strconv.Itoa(status)+")")
 	default:
@@ -104,19 +108,23 @@ func ClassifyHTTPFailure(status int, body []byte, h http.Header, planID string, 
 // The code and message are inspected only to choose a class. Upstream free
 // text is never copied into FailureClass.Summary: a malicious or buggy
 // upstream can put API keys, prompts, or response dumps in either field.
-func ClassifySSEFailure(code, msg, planID string, health *router.HealthStore) FailureClass {
+func ClassifySSEFailure(code, msg, planID string, health *router.HealthStore, refs ...string) FailureClass {
 	combined := strings.ToLower(code + " " + msg)
 	switch {
 	case strings.Contains(combined, "rate_limit") || strings.Contains(combined, "too many requests") || strings.Contains(combined, "429"):
 		dur := 15 * time.Second
 		if health != nil {
-			dur = health.NextRateLimitBackoff(planID)
+			if len(refs) > 0 {
+				dur = health.NextKeyBackoff(planID, refs[0])
+			} else {
+				dur = health.NextRateLimitBackoff(planID)
+			}
 		}
-		return classifiedFailure(ErrKindRateLimit, true, false, "plan", dur, "plan:"+dur.String(), "upstream SSE error (rate_limit)")
+		return classifiedFailure(ErrKindRateLimit, true, false, "key", dur, "key:"+dur.String(), "upstream SSE error (rate_limit)")
 	case strings.Contains(combined, "quota") || strings.Contains(combined, "credit") || strings.Contains(combined, "balance"):
-		return classifiedFailure(ErrKindQuotaExhausted, true, false, "plan", 5*time.Minute, "plan:5m", "upstream SSE error (quota_exhausted)")
+		return classifiedFailure(ErrKindQuotaExhausted, true, false, "key", 5*time.Minute, "key:5m", "upstream SSE error (quota_exhausted)")
 	case strings.Contains(combined, "auth") || strings.Contains(combined, "invalid_api_key") || strings.Contains(combined, "permission"):
-		return classifiedFailure(ErrKindAuthError, true, false, "plan", 10*time.Minute, "plan:10m", "upstream SSE error (auth_error)")
+		return classifiedFailure(ErrKindAuthError, true, false, "key", 10*time.Minute, "key:10m", "upstream SSE error (auth_error)")
 	case isContextOverflow(combined):
 		return classifiedFailure(ErrKindContextOverflow, true, true, "", 0, "", "context length exceeded")
 	case strings.Contains(combined, "model_not_found"):

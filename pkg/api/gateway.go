@@ -54,6 +54,7 @@ type RouteDecision struct {
 
 // GatewayAttempt records a single upstream dispatch attempt during failover.
 type GatewayAttempt struct {
+	CredentialRef   string `json:"credentialRef,omitempty"`
 	Plan            string `json:"plan"`
 	Model           string `json:"model"`
 	Protocol        string `json:"protocol"`

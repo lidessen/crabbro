@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/lidessen/crabbro/internal/gateway/codec"
 	"github.com/lidessen/crabbro/internal/gateway/config"
@@ -359,4 +360,40 @@ func TestExecutorSSEPreCommitFailoverAndPostCommitNoRetry(t *testing.T) {
 			t.Fatalf("expected committed partial stream plus mid-stream error: %s", rec.Body.String())
 		}
 	})
+}
+
+func TestCredentialPoolRateLimitFailsOverWithinPlan(t *testing.T) {
+	calls := 0
+	up := newTestUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(anthropicOK))
+	})
+	exec, snap := newExecutorFixture(t, up)
+	plan := snap.Plans["plan-0"]
+	if plan == nil {
+		for _, p := range snap.Plans {
+			plan = p
+			break
+		}
+	}
+	if err := exec.Secrets.Set("second", "another-test-key"); err != nil {
+		t.Fatal(err)
+	}
+	plan.Credentials = &config.CredentialPool{Refs: []string{plan.Credential, "second"}}
+	snap.Routes[0].Policy.MaxAttempts = 2
+	rec := serveAnthropic(t, exec, snap, `{"model":"coding-main","messages":[{"role":"user","content":"hi"}],"max_tokens":10}`)
+	if rec.Code != http.StatusOK || calls != 2 {
+		t.Fatalf("status=%d calls=%d", rec.Code, calls)
+	}
+	if !exec.Router.Health.IsKeyCooling(plan.ID, plan.Credential, time.Now()) || exec.Router.Health.IsKeyCooling(plan.ID, "second", time.Now()) {
+		t.Fatal("incorrect key cooldown")
+	}
+	if cool, _, _ := exec.Router.Health.IsPlanCooling(plan.ID, time.Now()); cool {
+		t.Fatal("plan cooled")
+	}
 }

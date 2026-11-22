@@ -179,6 +179,9 @@ type planState struct {
 	errorEWMA     float64
 	latencyEWMA   float64
 	modelCool     map[string]time.Time
+	keyCool       map[string]time.Time
+	keyStep       map[string]int
+	cursor        uint64
 }
 
 // HealthStore tracks active plan/model cooldowns, concurrency, and EWMA health.
@@ -197,7 +200,7 @@ func NewHealthStore() *HealthStore {
 func (h *HealthStore) ensureLocked(planID string) *planState {
 	st, ok := h.plans[planID]
 	if !ok {
-		st = &planState{modelCool: map[string]time.Time{}}
+		st = &planState{modelCool: map[string]time.Time{}, keyCool: map[string]time.Time{}, keyStep: map[string]int{}}
 		h.plans[planID] = st
 	}
 	return st
@@ -217,6 +220,59 @@ func (h *HealthStore) NextRateLimitBackoff(planID string) time.Duration {
 		st.cooldownStep++
 	}
 	return d
+}
+
+// NextKeyBackoff advances the independent rate-limit backoff for a key.
+func (h *HealthStore) NextKeyBackoff(planID, ref string) time.Duration {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	st := h.ensureLocked(planID)
+	d := 15 * time.Second << st.keyStep[ref]
+	if d > 5*time.Minute {
+		d = 5 * time.Minute
+	}
+	if st.keyStep[ref] < 5 {
+		st.keyStep[ref]++
+	}
+	return d
+}
+func (h *HealthStore) ResetKeyBackoff(planID, ref string) {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	st := h.ensureLocked(planID)
+	delete(st.keyStep, ref)
+}
+func (h *HealthStore) EnterKeyCooldown(planID, ref string, dur time.Duration, now time.Time) {
+	if h == nil || ref == "" || dur <= 0 {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	st := h.ensureLocked(planID)
+	until := now.Add(dur)
+	if until.After(st.keyCool[ref]) {
+		st.keyCool[ref] = until
+	}
+}
+func (h *HealthStore) IsKeyCooling(planID, ref string, now time.Time) bool {
+	if h == nil {
+		return false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	st := h.plans[planID]
+	return st != nil && now.Before(st.keyCool[ref])
+}
+func (h *HealthStore) NextKeyCursor(planID string) uint64 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	st := h.ensureLocked(planID)
+	n := st.cursor
+	st.cursor++
+	return n
 }
 
 // EnterPlanCooldown marks an entire plan unavailable until now+dur.
@@ -303,6 +359,8 @@ func (h *HealthStore) ResetCooldown(planID string) {
 		st.errorEWMA = 0
 		st.latencyEWMA = 0
 		st.modelCool = map[string]time.Time{}
+		st.keyCool = map[string]time.Time{}
+		st.keyStep = map[string]int{}
 	}
 	cb := h.OnChange
 	h.mu.Unlock()

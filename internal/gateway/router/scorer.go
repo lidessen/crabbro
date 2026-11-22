@@ -39,6 +39,8 @@ type DecisionCaller func(ctx context.Context, routeID string, req *ir.DecisionRe
 
 // Candidate represents one ranked target produced by Router.Select.
 type Candidate struct {
+	CredentialRef  string
+	CredentialRefs []string
 	Target         config.Target
 	Plan           *config.Plan
 	Endpoint       *config.EndpointSpec
@@ -558,10 +560,23 @@ func (r *Router) evalTargets(snap *config.Snapshot, rt *config.Route, sig Signal
 			continue
 		}
 		cand.Plan = plan
-		if r.Secrets != nil && !r.Secrets.Has(plan.Credential) {
-			cand.RejectReason = "missing credential " + plan.Credential
+		for _, ref := range plan.CredentialRefs() {
+			if (r.Secrets == nil || r.Secrets.Has(ref)) && (r.Health == nil || !r.Health.IsKeyCooling(plan.ID, ref, now)) {
+				cand.CredentialRefs = append(cand.CredentialRefs, ref)
+			}
+		}
+		if len(cand.CredentialRefs) == 0 {
+			cand.RejectReason = "no available credentials"
 			out = append(out, cand)
 			continue
+		}
+		if plan.CredentialStrategy() == "round-robin" && r.Health != nil {
+			n := int(r.Health.NextKeyCursor(plan.ID) % uint64(len(cand.CredentialRefs)))
+			cand.CredentialRefs = append(append([]string{}, cand.CredentialRefs[n:]...), cand.CredentialRefs[:n]...)
+		} else if plan.CredentialStrategy() == "quota-weighted" {
+			sort.SliceStable(cand.CredentialRefs, func(i, j int) bool {
+				return r.keyRemaining(plan.ID, cand.CredentialRefs[i]) > r.keyRemaining(plan.ID, cand.CredentialRefs[j])
+			})
 		}
 		ms := plan.Models[tgt.Model]
 		if ms == nil {
@@ -635,6 +650,24 @@ func (r *Router) evalTargets(snap *config.Snapshot, rt *config.Route, sig Signal
 		}
 
 		quotaScore, blockedHard, blockedSoft := r.computeQuotaScore(plan, now)
+		// Key-specific snapshots override the shared quota score. Unknown keys
+		// participate with neutral remaining capacity.
+		if r.Quotas != nil {
+			best, hasKeyQuota := 0.0, false
+			for _, ref := range cand.CredentialRefs {
+				remaining := 0.5
+				if q, ok := r.Quotas.Get(plan.ID + "/" + ref); ok && q != nil && !q.Stale && q.UsagePct != nil {
+					remaining = clamp01(1 - *q.UsagePct/100)
+					hasKeyQuota = true
+				}
+				if remaining > best {
+					best = remaining
+				}
+			}
+			if hasKeyQuota {
+				quotaScore = best - 0.5
+			}
+		}
 		if blockedHard {
 			cand.RejectReason = "hard quota window exhausted"
 			out = append(out, cand)
@@ -1305,4 +1338,18 @@ func clampRange(v, lo, hi float64) float64 {
 		return hi
 	}
 	return v
+}
+
+// keyRemaining uses a key-specific snapshot when present, falling back to the plan snapshot.
+func (r *Router) keyRemaining(planID, ref string) float64 {
+	if r.Quotas != nil {
+		q, ok := r.Quotas.Get(planID + "/" + ref)
+		if !ok {
+			q, ok = r.Quotas.Get(planID)
+		}
+		if ok && q != nil && !q.Stale && q.UsagePct != nil {
+			return clamp01(1 - *q.UsagePct/100)
+		}
+	}
+	return 0.5
 }

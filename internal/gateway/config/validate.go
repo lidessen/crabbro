@@ -145,6 +145,9 @@ func ValidatePlanBytes(filename, expectedID string, data []byte) (*Plan, []share
 	if len(diags) > 0 {
 		return nil, diags
 	}
+	if plan.Credentials != nil {
+		plan.Credential = plan.Credentials.Refs[0]
+	}
 	return &plan, nil
 }
 

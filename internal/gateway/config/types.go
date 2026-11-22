@@ -107,7 +107,8 @@ type Plan struct {
 	Enabled       *bool                    `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 	Direct        *DirectSpec              `yaml:"direct,omitempty" json:"direct,omitempty"`
 	Description   string                   `yaml:"description,omitempty" json:"description,omitempty"`
-	Credential    string                   `yaml:"credential" json:"credential"`
+	Credential    string                   `yaml:"credential,omitempty" json:"credential,omitempty"`
+	Credentials   *CredentialPool          `yaml:"credentials,omitempty" json:"credentials,omitempty"`
 	ProxyURL      string                   `yaml:"proxyUrl,omitempty" json:"proxyUrl,omitempty"`
 	Timeout       TimeoutSpec              `yaml:"timeout,omitempty" json:"timeout,omitempty"`
 	Cache         CacheSpec                `yaml:"cache,omitempty" json:"cache,omitempty"`
@@ -116,6 +117,31 @@ type Plan struct {
 	QuotaReminder QuotaReminderSpec        `yaml:"quotaReminder,omitempty" json:"quotaReminder,omitempty"`
 	Endpoints     map[string]*EndpointSpec `yaml:"endpoints" json:"endpoints"`
 	Models        map[string]*ModelSpec    `yaml:"models" json:"models"`
+}
+
+// CredentialPool declares an ordered set of secret references.
+type CredentialPool struct {
+	Strategy string   `yaml:"strategy,omitempty" json:"strategy,omitempty"`
+	Refs     []string `yaml:"refs" json:"refs"`
+}
+
+func (p *Plan) CredentialRefs() []string {
+	if p == nil {
+		return nil
+	}
+	if p.Credentials != nil {
+		return p.Credentials.Refs
+	}
+	if p.Credential != "" {
+		return []string{p.Credential}
+	}
+	return nil
+}
+func (p *Plan) CredentialStrategy() string {
+	if p != nil && p.Credentials != nil && p.Credentials.Strategy != "" {
+		return p.Credentials.Strategy
+	}
+	return "priority"
 }
 
 // IsEnabled reports whether the plan is active (defaults to true when omitted).
