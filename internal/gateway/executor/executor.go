@@ -641,8 +641,11 @@ func (e *Executor) ExecuteDecision(ctx context.Context, snap *config.Snapshot, r
 
 	var attempts []shared.GatewayAttempt
 	var lastErr error
-	for i := 0; i < maxAttempts; i++ {
-		cand := sel.Candidates[i]
+	upstreamAttempts := 0
+	for _, cand := range sel.Candidates {
+		if upstreamAttempts >= maxAttempts {
+			break
+		}
 		if e.candidateCooling(cand) {
 			continue
 		}
@@ -692,6 +695,7 @@ func (e *Executor) ExecuteDecision(ctx context.Context, snap *config.Snapshot, r
 		if e.health() != nil {
 			e.health().AcquireInFlight(cand.Plan.ID)
 		}
+		upstreamAttempts++
 		resp, err := tr.RoundTrip(upReq)
 		timer.Stop()
 		if e.health() != nil {
@@ -1190,7 +1194,7 @@ func expandCredentialCandidates(candidates []router.Candidate) []router.Candidat
 			refs = cand.Plan.CredentialRefs()
 		}
 		for _, ref := range refs {
-			key := cand.Plan.ID + "\x00" + ref
+			key := cand.Plan.ID + "\x00" + cand.Target.Model + "\x00" + cand.EndpointProto + "\x00" + ref
 			if seen[key] {
 				continue
 			}

@@ -1,7 +1,12 @@
 package router
 
 import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -52,5 +57,31 @@ func TestKeyPoolOrderingAndAvailability(t *testing.T) {
 	r.Health.ResetCooldown(p.ID)
 	if got := pick().CredentialRefs; len(got) != 2 {
 		t.Fatalf("reset: %v", got)
+	}
+}
+
+func TestQuotaWeightedUsesSyncedCredentialSnapshots(t *testing.T) {
+	r, snap, _, sec := setupRouterFixture(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		remaining := 20
+		if strings.Contains(req.Header.Get("Authorization"), "second-value") {
+			remaining = 90
+		}
+		fmt.Fprintf(w, `{"code":0,"data":{"limits":[{"unit":3,"usage":100,"remaining":%d}]}}`, remaining)
+	}))
+	defer server.Close()
+	if err := sec.Set("second", "second-value"); err != nil {
+		t.Fatal(err)
+	}
+	p := snap.Plans["kimi-coding"]
+	p.ID = "zcode"
+	p.Endpoints[config.ProtocolAnthropic].BaseURL = server.URL
+	p.Credentials = &config.CredentialPool{Strategy: "quota-weighted", Refs: []string{"k1", "second"}}
+	syncer := quota.New(sec, t.TempDir())
+	syncer.Refresh(context.Background(), map[string]*config.Plan{p.ID: p})
+	r.Quotas = syncer
+	got := r.evalTargets(snap, snap.Routes[0], Signals{Protocol: config.ProtocolAnthropic}, config.TierStrong, SessionCacheEntry{}, false, time.Now(), false)[0].CredentialRefs
+	if !reflect.DeepEqual(got, []string{"second", "k1"}) {
+		t.Fatalf("quota order: %v", got)
 	}
 }

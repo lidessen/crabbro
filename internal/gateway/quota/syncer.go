@@ -289,53 +289,72 @@ func (s *Syncer) syncPlan(ctx context.Context, p *config.Plan, hook bool) {
 	if s == nil || p == nil || !p.IsEnabled() || provider(p) == "" {
 		return
 	}
-	id := p.ID
-	key, err := s.secrets.Get(p.Credential)
-	var q RemoteQuota
-	if err == nil && key != "" {
-		q, err = fetch(ctx, s.client, p, key)
-	} else {
-		err = http.ErrNoCookie
+
+	refs := p.CredentialRefs()
+	if len(refs) == 0 {
+		refs = []string{""}
 	}
-	if ctx.Err() != nil {
+	var selected RemoteQuota
+	var selectedRef string
+	selectedSet, selectedHealthy := false, false
+	for _, ref := range refs {
+		id := p.ID + "/" + ref
+		key, err := s.secrets.Get(ref)
+		var q RemoteQuota
+		if err == nil && key != "" {
+			q, err = fetch(ctx, s.client, p, key)
+		} else {
+			err = http.ErrNoCookie
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		s.mu.Lock()
+		if err != nil {
+			status, syncFault := sanitizedSyncError(err)
+			if !syncFault {
+				s.mu.Unlock()
+				continue
+			}
+			q = s.values[id]
+			// Preserve snapshots created before per-key storage was introduced.
+			if q.SyncedAt == nil && len(refs) == 1 {
+				q = s.values[p.ID]
+			}
+			q.Stale = true
+			q.LastError = status
+			if q.SyncedAt != nil {
+				q.SyncSource = "cached"
+			}
+		} else {
+			now := time.Now().UTC()
+			q.SyncedAt = &now
+			q.SyncSource = "live-api"
+			trendNow := s.now()
+			for i := range q.Windows {
+				q.Windows[i].Trend = windowTrend(q.Windows[i], trendNow)
+			}
+		}
+		s.values[id] = q
+		s.leads[id] = p.QuotaReminder.LeadTimeDuration()
+		s.mu.Unlock()
+		if !selectedSet || (!selectedHealthy && err == nil) {
+			selected, selectedRef, selectedSet, selectedHealthy = q, ref, true, err == nil
+		}
+	}
+	if !selectedSet {
 		return
 	}
 	s.mu.Lock()
-	if err != nil {
-		status, syncFault := sanitizedSyncError(err)
-		if !syncFault {
-			// No quota endpoint exists for this provider mapping (e.g. the
-			// zenmux-jev relay): it is a configuration fact, not a failed
-			// sync, so keep the previous snapshot as-is.
-			s.mu.Unlock()
-			return
-		}
-		q = s.values[id]
-		q.Stale = true
-		q.LastError = status
-		if q.SyncedAt != nil {
-			q.SyncSource = "cached"
-		}
-	} else {
-		now := time.Now().UTC()
-		q.SyncedAt = &now
-		q.SyncSource = "live-api"
-		// fetch never populates Trend, yet quotaReminders — and the
-		// gateway_quota_expiring event path behind syncPlan — requires it to
-		// recognize underutilized windows. Derive it exactly like Get does so
-		// the stored snapshot and the emitted events agree.
-		trendNow := s.now()
-		for i := range q.Windows {
-			q.Windows[i].Trend = windowTrend(q.Windows[i], trendNow)
-		}
-	}
-	s.values[id] = q
-	s.leads[id] = p.QuotaReminder.LeadTimeDuration()
+	s.values[p.ID] = selected
+	s.leads[p.ID] = p.QuotaReminder.LeadTimeDuration()
 	s.mu.Unlock()
-	if err == nil {
-		s.checkExpiryReminders(id, &q, s.now(), p.QuotaReminder.LeadTimeDuration())
+	if selectedHealthy {
+		s.checkExpiryReminders(p.ID, &selected, s.now(), p.QuotaReminder.LeadTimeDuration())
 		if hook {
-			s.maybeAutoReset(p, q)
+			resetPlan := *p
+			resetPlan.Credential = selectedRef
+			s.maybeAutoReset(&resetPlan, selected)
 		}
 	}
 }

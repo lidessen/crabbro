@@ -149,3 +149,34 @@ func TestAdditionalProviderQuotas(t *testing.T) {
 		})
 	}
 }
+
+func TestSyncCredentialPool(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		remaining := 20
+		if strings.Contains(r.Header.Get("Authorization"), "second-value") {
+			remaining = 90
+		}
+		fmt.Fprintf(w, `{"code":0,"data":{"limits":[{"unit":3,"usage":100,"remaining":%d}]}}`, remaining)
+	}))
+	defer server.Close()
+	store := secret.New(t.TempDir())
+	for ref, value := range map[string]string{"first": "first-value", "second": "second-value"} {
+		if err := store.Set(ref, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := New(store, t.TempDir())
+	u, _ := url.Parse(server.URL)
+	s.client.Transport = rewriteTransport{u}
+	p := &config.Plan{ID: "zcode", Credentials: &config.CredentialPool{Refs: []string{"missing", "first", "second"}}}
+	s.Refresh(context.Background(), map[string]*config.Plan{p.ID: p})
+	for id, want := range map[string]float64{"zcode/first": 80, "zcode/second": 10, "zcode": 80} {
+		q, ok := s.Get(id)
+		if !ok || q.Stale || q.UsagePct == nil || *q.UsagePct != want {
+			t.Fatalf("%s: %+v", id, q)
+		}
+	}
+	if q, ok := s.Get("zcode/missing"); !ok || !q.Stale {
+		t.Fatalf("missing: %+v", q)
+	}
+}

@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/lidessen/crabbro/internal/gateway/codec"
 	"github.com/lidessen/crabbro/internal/gateway/config"
+	"github.com/lidessen/crabbro/internal/gateway/ir"
 	"github.com/lidessen/crabbro/internal/gateway/router"
 	"github.com/lidessen/crabbro/internal/secret"
 )
@@ -395,5 +397,67 @@ func TestCredentialPoolRateLimitFailsOverWithinPlan(t *testing.T) {
 	}
 	if cool, _, _ := exec.Router.Health.IsPlanCooling(plan.ID, time.Now()); cool {
 		t.Fatal("plan cooled")
+	}
+}
+
+func TestExpandCredentialCandidatesPreservesModelAndProtocol(t *testing.T) {
+	p := &config.Plan{ID: "p", Credential: "key"}
+	candidates := []router.Candidate{
+		{Plan: p, Target: config.Target{Model: "a"}, EndpointProto: "one"},
+		{Plan: p, Target: config.Target{Model: "b"}, EndpointProto: "one"},
+		{Plan: p, Target: config.Target{Model: "a"}, EndpointProto: "two"},
+		{Plan: p, Target: config.Target{Model: "a"}, EndpointProto: "one"},
+	}
+	if got := expandCredentialCandidates(candidates); len(got) != 3 {
+		t.Fatalf("candidates: %+v", got)
+	}
+}
+
+func TestSamePlanModelFailover(t *testing.T) {
+	var upCalls atomic.Int32
+	up := newTestUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		if upCalls.Add(1) == 1 {
+			http.Error(w, "model not found", 404)
+			return
+		}
+		fmt.Fprint(w, anthropicOK)
+	})
+	exec, snap := newExecutorFixture(t, up)
+	p := snap.Plans["plan-0"]
+	p.Models["claude-1"] = p.Models["claude-0"]
+	snap.Routes[0].Targets = append(snap.Routes[0].Targets, config.Target{Plan: p.ID, Model: "claude-1", Priority: 2})
+	snap.Routes[0].Policy.MaxAttempts = 2
+	rec := serveAnthropic(t, exec, snap, `{"model":"coding-main","messages":[{"role":"user","content":"hi"}],"max_tokens":10}`)
+	if rec.Code != 200 || up.hits.Load() != 2 {
+		t.Fatalf("status=%d hits=%d body=%s", rec.Code, up.hits.Load(), rec.Body.String())
+	}
+}
+
+func TestDecisionCoolingDoesNotConsumeAttempt(t *testing.T) {
+	first := newTestUpstream(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(500) })
+	second := newTestUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"model":"ok","answers":{"ok":{"type":"noul","noul":0.8}}}`)
+	})
+	exec, snap := newExecutorFixture(t, first, second)
+	for _, p := range snap.Plans {
+		p.Endpoints = map[string]*config.EndpointSpec{config.ProtocolTypeSafeJev: p.Endpoints[config.ProtocolAnthropic]}
+		for _, model := range p.Models {
+			model.Capabilities.StructuredOutput = true
+		}
+	}
+	p := snap.Plans["plan-0"]
+	if err := exec.Secrets.Set("second", "fixture"); err != nil {
+		t.Fatal(err)
+	}
+	p.Credentials = &config.CredentialPool{Refs: []string{p.Credential, "second"}}
+	rt := snap.Routes[0]
+	rt.ID = "decision"
+	rt.Family = config.FamilyDecision
+	rt.Match.Protocols = []string{config.ProtocolTypeSafeJev}
+	rt.Match.Models = nil
+	rt.Policy.MaxAttempts = 2
+	result, err := exec.ExecuteDecision(context.Background(), snap, "decision", &ir.DecisionRequest{State: "hello", Questions: map[string]ir.DecisionQuestion{"ok": {Type: "noul"}}})
+	if err != nil || result == nil || first.hits.Load() != 1 || second.hits.Load() != 1 {
+		t.Fatalf("result=%+v error=%v hits=%d,%d", result, err, first.hits.Load(), second.hits.Load())
 	}
 }

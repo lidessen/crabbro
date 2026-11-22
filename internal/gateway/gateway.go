@@ -388,6 +388,18 @@ func (g *Gateway) InvokeDecision(ctx context.Context, routeID string, req *ir.De
 	return g.Executor.ExecuteDecision(ctx, g.Config.Snapshot(), routeID, req)
 }
 
+func planHasAnySecret(p *config.Plan, secrets *secret.Store) bool {
+	if secrets == nil {
+		return false
+	}
+	for _, ref := range p.CredentialRefs() {
+		if secrets.Has(ref) {
+			return true
+		}
+	}
+	return false
+}
+
 // DecisionStatus reports whether an enabled decision route exists and its primary target.
 func (g *Gateway) DecisionStatus(routeID string) (configured bool, provider, model, routeName string) {
 	if g == nil || g.Config == nil {
@@ -407,7 +419,7 @@ func (g *Gateway) DecisionStatus(routeID string) (configured bool, provider, mod
 				if pl == nil {
 					continue
 				}
-				if g.Secrets != nil && !g.Secrets.Has(pl.Credential) {
+				if g.Secrets != nil && !planHasAnySecret(pl, g.Secrets) {
 					continue
 				}
 				ep := tgt.EndpointProtocol
@@ -476,7 +488,7 @@ func (g *Gateway) Plans() shared.GatewayPlanListResponse {
 		}
 		sort.Strings(mods)
 		hs := g.Health.Snapshot(id, now)
-		hasSec := g.Secrets != nil && g.Secrets.Has(p.Credential)
+		hasSec := g.Secrets != nil && planHasAnySecret(p, g.Secrets)
 		out = append(out, shared.GatewayPlanStatus{
 			ID:      p.ID,
 			Enabled: p.IsEnabled(),

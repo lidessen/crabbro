@@ -119,3 +119,52 @@ targets:
 	}
 
 }
+
+func TestDecisionStatusWithSecondCredential(t *testing.T) {
+	dir := t.TempDir()
+	sec := secret.New(filepath.Join(dir, "secrets"))
+	if err := sec.Set("working", "fixture"); err != nil {
+		t.Fatal(err)
+	}
+	gw, err := New(Options{RootDir: filepath.Join(dir, "gateway")}, sec, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gw.Stop()
+	plan := `version: 1
+id: pooled
+credentials:
+  refs: [missing, working]
+endpoints:
+  typesafe-jev:
+    baseUrl: http://127.0.0.1:1234
+models:
+  model-a:
+    tier: fast
+`
+	route := `version: 1
+id: decision
+family: decision
+match:
+  protocols: [typesafe-jev]
+policy:
+  preset: strict-failover
+targets:
+  - plan: pooled
+    model: model-a
+    endpointProtocol: typesafe-jev
+`
+	for _, item := range []struct{ k, id, body string }{{config.KindPlan, "pooled", plan}, {config.KindRoute, "decision", route}} {
+		if err := gw.Config.Draft(item.k, item.id, []byte(item.body)); err != nil {
+			t.Fatal(err)
+		}
+		if err := gw.Config.Commit(item.k, item.id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	configured, _, _, _ := gw.DecisionStatus("decision")
+	plans := gw.Plans().Plans
+	if !configured || len(plans) != 1 || !plans[0].HasSecret {
+		t.Fatalf("configured=%v plans=%+v", configured, plans)
+	}
+}
