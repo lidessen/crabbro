@@ -28,6 +28,39 @@ func TestRequestBodyDisplay(t *testing.T) {
 	}
 }
 
+func TestReadableBodyByteOrderMark(t *testing.T) {
+	t.Run("complete JSON formats", func(t *testing.T) {
+		source := "\\ufeff" + `{"model":"test"}`
+		got, filename := readableBody(source, "application/json", false)
+		want := "{\n  \"model\": \"test\"\n}"
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+		if filename != "body.json" {
+			t.Errorf("filename = %q, want body.json", filename)
+		}
+	})
+	t.Run("broken JSON stays as captured", func(t *testing.T) {
+		source := "\\ufeff" + `{"model":`
+		got, filename := readableBody(source, "application/json", false)
+		if got != source {
+			t.Errorf("got %q, want the captured source %q", got, source)
+		}
+		if filename != "body.txt" {
+			t.Errorf("filename = %q, want body.txt", filename)
+		}
+	})
+	t.Run("empty body unchanged", func(t *testing.T) {
+		got, filename := readableBody("", "application/json", false)
+		if got != "" {
+			t.Errorf("got %q, want unchanged empty body", got)
+		}
+		if filename != "body.txt" {
+			t.Errorf("filename = %q, want body.txt", filename)
+		}
+	})
+}
+
 func TestTruncatedPreviewKeepsStringContents(t *testing.T) {
 	source := `{"text":"braces {}, colon: and escaped \" quote","next":[1,2`
 	got, _ := readableBody(source, "application/json", true)

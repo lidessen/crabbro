@@ -653,9 +653,13 @@ func bodyDisplay(source, formatted string, raw bool) string {
 
 // readableBody formats JSON and HTML without loading or executing content.
 // Raw always retains the captured bytes represented by the API's string.
+// A leading byte order mark is not JSON content, so it is skipped before
+// indenting: a complete valid document formats rather than failing on the
+// mark. What is missing or broken stays as captured — nothing is repaired,
+// completed, or fetched beyond the stored preview.
 func readableBody(source, contentType string, truncated bool) (string, string) {
 	var formatted bytes.Buffer
-	if json.Indent(&formatted, []byte(source), "", "  ") == nil {
+	if json.Indent(&formatted, []byte(strings.TrimPrefix(source, "\\ufeff")), "", "  ") == nil {
 		return formatted.String(), "body.json"
 	}
 	trimmed := strings.TrimSpace(source)
