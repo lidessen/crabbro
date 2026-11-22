@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/lidessen/crabbro/internal/gateway/quota"
 	"github.com/lidessen/crabbro/internal/shared"
 )
 
@@ -132,4 +133,38 @@ func (s *Server) handleGatewayQuotaRefresh(w http.ResponseWriter, r *http.Reques
 	}
 	s.Gateway.Quotas.Refresh(r.Context(), s.Gateway.Config.Snapshot().AllPlans)
 	writeJSON(w, http.StatusOK, s.Gateway.Plans())
+}
+
+// handleGatewayQuotaReset redeems at most one reset coupon for one plan via
+// POST /v1/gateway/quotas/reset. The response never contains provider coupon
+// identifiers, only the selected window scope and its sanitized expiry.
+func (s *Server) handleGatewayQuotaReset(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, shared.ErrCodeBadRequest, "method not allowed")
+		return
+	}
+	if s.Gateway == nil {
+		writeError(w, http.StatusBadRequest, shared.ErrCodeBadRequest, "gateway is not enabled")
+		return
+	}
+	var req shared.GatewayQuotaResetRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil || strings.TrimSpace(req.Plan) == "" {
+		writeError(w, http.StatusBadRequest, shared.ErrCodeBadRequest, "invalid JSON body: plan is required")
+		return
+	}
+	if err := quota.NormalizeResetScope(req.Scope); err != nil {
+		writeError(w, http.StatusBadRequest, shared.ErrCodeBadRequest, err.Error())
+		return
+	}
+	out := s.Gateway.ResetQuota(r.Context(), req)
+	if out.Error != "" && isResetPlanError(out.Error) {
+		writeError(w, http.StatusNotFound, shared.ErrCodeNotFound, out.Error)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// isResetPlanError reports whether a redemption error is a missing-plan error.
+func isResetPlanError(msg string) bool {
+	return strings.Contains(msg, "not found")
 }

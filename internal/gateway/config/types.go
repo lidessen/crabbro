@@ -112,6 +112,7 @@ type Plan struct {
 	Timeout     TimeoutSpec              `yaml:"timeout,omitempty" json:"timeout,omitempty"`
 	Cache       CacheSpec                `yaml:"cache,omitempty" json:"cache,omitempty"`
 	Limits      LimitsSpec               `yaml:"limits,omitempty" json:"limits,omitempty"`
+	AutoReset   AutoResetSpec            `yaml:"autoReset,omitempty" json:"autoReset,omitempty"`
 	Endpoints   map[string]*EndpointSpec `yaml:"endpoints" json:"endpoints"`
 	Models      map[string]*ModelSpec    `yaml:"models" json:"models"`
 }
@@ -190,6 +191,82 @@ func (c CacheSpec) TTLDuration() time.Duration {
 		return d
 	}
 	return DefaultCacheTTL
+}
+
+// AutoResetSpec opts a plan into automatic provider reset-coupon redemption.
+// It is strictly opt-in: without enabled=true the gateway never redeems
+// coupons on its own. Reset coupons are provider-private; no coupon
+// identifier ever leaves the quota package.
+type AutoResetSpec struct {
+	Enabled        bool     `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	Scopes         []string `yaml:"scopes,omitempty" json:"scopes,omitempty"`
+	ExpiringWithin string   `yaml:"expiringWithin,omitempty" json:"expiringWithin,omitempty"`
+	MinInterval    string   `yaml:"minInterval,omitempty" json:"minInterval,omitempty"`
+}
+
+// AutoResetScopeFiveHour and AutoResetScopeWeekly name the redeemable windows.
+const (
+	AutoResetScopeFiveHour = "fiveHour"
+	AutoResetScopeWeekly   = "weekly"
+)
+
+// EffectiveAutoResetScopes returns the configured scopes (deduplicated),
+// defaulting to both supported windows when omitted.
+func (a AutoResetSpec) EffectiveAutoResetScopes() []string {
+	var out []string
+	for _, s := range a.Scopes {
+		if s != AutoResetScopeFiveHour && s != AutoResetScopeWeekly {
+			continue
+		}
+		dup := false
+		for _, existing := range out {
+			if existing == s {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			out = append(out, s)
+		}
+	}
+	if len(out) == 0 {
+		return []string{AutoResetScopeFiveHour, AutoResetScopeWeekly}
+	}
+	return out
+}
+
+// AllowsAutoResetScope reports whether scope may be auto-redeemed.
+func (a AutoResetSpec) AllowsAutoResetScope(scope string) bool {
+	for _, s := range a.EffectiveAutoResetScopes() {
+		if s == scope {
+			return true
+		}
+	}
+	return false
+}
+
+// ExpiringWithinDuration returns the coupon expiry horizon. Zero means any
+// available coupon qualifies regardless of when it expires.
+func (a AutoResetSpec) ExpiringWithinDuration() time.Duration {
+	if a.ExpiringWithin == "" {
+		return 0
+	}
+	if d, err := ParseDuration(a.ExpiringWithin); err == nil && d > 0 {
+		return d
+	}
+	return 0
+}
+
+// MinIntervalDuration returns the anti-double-spend cooldown between automatic
+// redemptions, defaulting to 5m.
+func (a AutoResetSpec) MinIntervalDuration() time.Duration {
+	if a.MinInterval == "" {
+		return 5 * time.Minute
+	}
+	if d, err := ParseDuration(a.MinInterval); err == nil && d > 0 {
+		return d
+	}
+	return 5 * time.Minute
 }
 
 // LimitsSpec configures rate and rolling-window budgets for a plan.

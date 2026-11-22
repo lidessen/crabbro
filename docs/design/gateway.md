@@ -461,6 +461,24 @@ The gateway constructs its own transport pool distinct from `internal/proxy`:
 - `Proxy`: `nil` (direct) unless `plan.proxyUrl` is explicitly set; plans sharing the same `proxyUrl` share a cached `*http.Transport`.
 - Downstream `http.Server` sets `ReadHeaderTimeout: 30s` and `IdleTimeout: 120s`, with **no** `WriteTimeout` so long streaming generations are never aborted mid-response.
 
+### 7.5 Provider reset coupons and opt-in auto-reset
+
+Some coding plans (BigModel `zcode`) grant reset coupons that restore an exhausted window. Crabbro treats them as a provider-private resource owned by `internal/gateway/quota`:
+
+- **Sync:** every quota refresh reads `GET /api/biz/customer-package-reset/list?targetType=PERSONAL`. Entries carry `recordId`, `grantType`, `available`, and `expireTime` — a naive `"2006-01-02 15:04:05"` wall clock in `Asia/Shanghai` (`+08:00`) that is parsed with a fixed zone and normalized to UTC. Snapshots expose only `scope`, `expiresAt`, `resetsRemaining`, and `soonestResetExpiry`; `recordId`/`grantType` never leave the package (no JSON output, log line, event, or UI field).
+- **Explicit redemption:** `POST /v1/gateway/quotas/reset` (CLI `crabbro gw quotas reset <plan> [--scope fiveHour|weekly] [--dry-run]`) re-reads `/list`, picks the soonest-expiring available coupon for the scope, redeems **at most one** coupon via `POST /api/biz/customer-package-reset/use` with a fresh UUID `requestId`, refreshes the plan quota snapshot, and clears plan cooling so traffic resumes immediately. An empty scope picks the soonest-expiring coupon across both windows.
+- **Opt-in auto-redeem:** plans may declare
+
+  ```yaml
+  autoReset:
+    enabled: true            # strictly opt-in; default false
+    scopes: [fiveHour]       # default: both fiveHour and weekly
+    expiringWithin: 24h      # only coupons expiring inside this horizon; empty = any
+    minInterval: 5m          # anti-double-spend cooldown between auto redemptions
+  ```
+
+  When enabled, the gateway redeems a coupon only after it observes the matching window exhausted (provider-reported usage `>= 99%`) — either from a quota refresh or from an upstream `quota_exhausted` / `rate_limit` classification (which re-fetches the windows first). Redemption is guarded by a per-plan single-flight mutex plus the per-`(plan, scope)` `minInterval`, always re-reads `/list` before `/use`, and **never blindly retries** an ambiguous or failed `/use`: the attempt fails closed to the normal cooling/failover path. A verified success refreshes the quota snapshot, clears plan cooling, and emits `gateway_quota_reset` carrying only the plan and scope.
+
 ---
 
 ## 8. Configuration files, schemas, and snapshot lifecycle
@@ -667,6 +685,8 @@ Add secret and gateway control endpoints:
 | `GET` / `POST` / `DELETE` | `/v1/secrets` & `/v1/secrets/{name}` | List secret names/metadata (never values), write (`0600`), delete |
 | `GET` | `/v1/gateway/status` | Listener address, active snapshot generation, route/plan counts, health summary |
 | `GET` | `/v1/gateway/plans` | Plan configurations (redacted), current cooldown state, rolling window consumption |
+| `POST` | `/v1/gateway/quotas/refresh` | Re-sync provider quota snapshots (balance, windows, reset coupons) |
+| `POST` | `/v1/gateway/quotas/reset` | Redeem at most one provider reset coupon: `{"plan":"zcode","scope":"fiveHour"\|"weekly","dryRun":bool}`. Picks the soonest-expiring available coupon from a fresh `/list` read, redeems it once with a unique `requestId`, refreshes the plan quota snapshot, and clears plan cooling. Provider coupon identifiers (`recordId`, `grantType`) never appear in responses, logs, or events |
 | `POST` | `/v1/gateway/plans/{id}/reset-cooldown` | Clear active cooldown on a plan immediately |
 | `GET` | `/v1/gateway/routes` | Loaded routes and match precedence |
 | `GET` | `/v1/gateway/usage?window=5h&plan=...` | Aggregated tokens, cache hit ratios, error counts from `usage.db` |
@@ -677,7 +697,7 @@ Add secret and gateway control endpoints:
 
 JSON output by default; `--pretty` for operator tables:
 - `crabbro secrets set <name>` (reads from stdin or `--from-env VAR`, never a plain CLI value flag in `ps`), `secrets list`, `secrets delete <name>`.
-- `crabbro gw status`, `crabbro gw plans`, `crabbro gw routes`, `crabbro gw usage [--window 5h|24h|7d]`, `crabbro gw cooldown-clear <plan>`, `crabbro gw preview --protocol anthropic --model coding-main --tokens 42000`.
+- `crabbro gw status`, `crabbro gw plans`, `crabbro gw routes`, `crabbro gw usage [--window 5h|24h|7d]`, `crabbro gw quotas refresh`, `crabbro gw quotas reset <plan> [--scope fiveHour|weekly] [--dry-run]`, `crabbro gw cooldown-clear <plan>`, `crabbro gw preview --protocol anthropic --model coding-main --tokens 42000`.
 - `crabbro config draft|validate|commit|discard --gateway-plan <id>` / `--gateway-route <id>`.
 - `crabbrod` startup flags: `--gateway-addr` (default `127.0.0.1:8081`, `"off"` disables), `--gateway-token`, `--gateway-capture` (`preview | metadata-only | off`, default `preview`), `--gateway-max-request-body` (default `32MiB`), `--gateway-usage-retention` (default `90d`).
 

@@ -138,6 +138,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/v1/gateway/status", s.handleGatewayStatus)
 	s.mux.HandleFunc("/v1/gateway/plans", s.handleGatewayPlans)
 	s.mux.HandleFunc("/v1/gateway/quotas/refresh", s.handleGatewayQuotaRefresh)
+	s.mux.HandleFunc("/v1/gateway/quotas/reset", s.handleGatewayQuotaReset)
 	s.mux.HandleFunc("/v1/gateway/plans/", s.handleGatewayPlanAction)
 	s.mux.HandleFunc("/v1/gateway/routes", s.handleGatewayRoutes)
 	s.mux.HandleFunc("/v1/gateway/usage", s.handleGatewayUsage)

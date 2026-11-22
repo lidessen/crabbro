@@ -114,6 +114,21 @@ func ValidatePlanBytes(filename, expectedID string, data []byte) (*Plan, []share
 			diags = append(diags, shared.Diagnostic{File: filename, Path: fmt.Sprintf("$.limits.windows[%d].duration", i), Message: "invalid window duration"})
 		}
 	}
+	for i, scope := range plan.AutoReset.Scopes {
+		if scope != AutoResetScopeFiveHour && scope != AutoResetScopeWeekly {
+			diags = append(diags, shared.Diagnostic{File: filename, Path: fmt.Sprintf("$.autoReset.scopes[%d]", i), Message: fmt.Sprintf("unknown reset scope %q (want fiveHour or weekly)", scope)})
+		}
+	}
+	if plan.AutoReset.ExpiringWithin != "" {
+		if d, err := ParseDuration(plan.AutoReset.ExpiringWithin); err != nil || d <= 0 {
+			diags = append(diags, shared.Diagnostic{File: filename, Path: "$.autoReset.expiringWithin", Message: "invalid reset expiry horizon"})
+		}
+	}
+	if plan.AutoReset.MinInterval != "" {
+		if d, err := ParseDuration(plan.AutoReset.MinInterval); err != nil || d <= 0 {
+			diags = append(diags, shared.Diagnostic{File: filename, Path: "$.autoReset.minInterval", Message: "invalid reset minimum interval"})
+		}
+	}
 	if len(diags) > 0 {
 		return nil, diags
 	}

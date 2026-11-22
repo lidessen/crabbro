@@ -132,7 +132,8 @@ type RemoteQuotaWindow struct {
 	ResetAt  *time.Time `json:"resetAt,omitempty"`
 }
 
-// RemoteResetCoupon describes an available reset coupon.
+// RemoteResetCoupon describes an available reset coupon. Provider coupon
+// identifiers (recordId, grantType) are intentionally never part of this view.
 type RemoteResetCoupon struct {
 	Scope     string     `json:"scope"`
 	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
@@ -155,9 +156,31 @@ type RemoteQuotaJSON struct {
 	LastError          string              `json:"lastError,omitempty"`
 }
 
+// GatewayQuotaResetRequest is accepted by POST /v1/gateway/quotas/reset.
+type GatewayQuotaResetRequest struct {
+	Plan   string `json:"plan"`
+	Scope  string `json:"scope,omitempty"`
+	DryRun bool   `json:"dryRun,omitempty"`
+}
+
+// GatewayQuotaResetResponse reports one reset-coupon redemption attempt.
+// Provider coupon identifiers are never included; only the selected window
+// scope and its sanitized expiry are reported back.
+type GatewayQuotaResetResponse struct {
+	Plan             string             `json:"plan"`
+	Scope            string             `json:"scope,omitempty"`
+	DryRun           bool               `json:"dryRun"`
+	Redeemed         bool               `json:"redeemed"`
+	CouponsAvailable int                `json:"couponsAvailable"`
+	CouponExpiresAt  *time.Time         `json:"couponExpiresAt,omitempty"`
+	Error            string             `json:"error,omitempty"`
+	Status           *GatewayPlanStatus `json:"status,omitempty"`
+}
+
 // GatewayPlanStatus is a redacted view of one configured plan and its live state.
 type GatewayPlanStatus struct {
 	RemoteQuota    *RemoteQuotaJSON     `json:"remoteQuota,omitempty"`
+	AutoReset      *PlanAutoResetSpec   `json:"autoReset,omitempty"`
 	DirectEnabled  bool                 `json:"directEnabled"`
 	DirectProfiles []string             `json:"directProfiles,omitempty"`
 	ID             string               `json:"id"`
@@ -180,6 +203,14 @@ type GatewayPlanStatus struct {
 // GatewayPlanListResponse is returned by GET /v1/gateway/plans.
 type GatewayPlanListResponse struct {
 	Plans []GatewayPlanStatus `json:"plans"`
+}
+
+// PlanAutoResetSpec is the sanitized opt-in auto-redeem policy of one plan.
+type PlanAutoResetSpec struct {
+	Enabled        bool     `json:"enabled"`
+	Scopes         []string `json:"scopes,omitempty"`
+	ExpiringWithin string   `json:"expiringWithin,omitempty"`
+	MinInterval    string   `json:"minInterval,omitempty"`
 }
 
 // GatewayRouteTargetStatus summarizes one target inside a route.

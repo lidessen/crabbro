@@ -17,10 +17,48 @@ type Syncer struct {
 	mu      sync.RWMutex
 	values  map[string]RemoteQuota
 	refresh sync.Mutex
+	resets  *resetGate
+
+	// OnAutoReset is invoked after every verified automatic redemption. The
+	// gateway uses it to clear plan cooling and emit a sanitized event.
+	OnAutoReset func(planID, scope string, out ResetOutcome)
+
+	clockMu sync.Mutex
+	clock   func() time.Time
 }
 
 func New(secrets *secret.Store) *Syncer {
-	return &Syncer{secrets: secrets, client: &http.Client{Timeout: 8 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, values: map[string]RemoteQuota{}}
+	return &Syncer{
+		secrets: secrets,
+		client: &http.Client{
+			Timeout: 8 * time.Second,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
+		values: map[string]RemoteQuota{},
+		resets: newResetGate(),
+		clock:  time.Now,
+	}
+}
+
+// now returns the syncer clock.
+func (s *Syncer) now() time.Time {
+	s.clockMu.Lock()
+	f := s.clock
+	s.clockMu.Unlock()
+	if f == nil {
+		return time.Now()
+	}
+	return f()
+}
+
+// SetClock replaces the clock used for redemption cooldown accounting. It
+// exists so tests can advance the anti-double-spend interval deterministically.
+func (s *Syncer) SetClock(f func() time.Time) {
+	s.clockMu.Lock()
+	defer s.clockMu.Unlock()
+	s.clock = f
 }
 
 // Get returns a detached snapshot.
@@ -47,41 +85,60 @@ func (s *Syncer) Refresh(ctx context.Context, plans map[string]*config.Plan) {
 	s.refresh.Lock()
 	defer s.refresh.Unlock()
 	var wg sync.WaitGroup
-	for id, p := range plans {
+	for _, p := range plans {
 		if p == nil || !p.IsEnabled() || provider(p) == "" {
 			continue
 		}
 		wg.Add(1)
-		go func() {
+		go func(p *config.Plan) {
 			defer wg.Done()
-			key, err := s.secrets.Get(p.Credential)
-			var q RemoteQuota
-			if err == nil && key != "" {
-				q, err = fetch(ctx, s.client, p, key)
-			} else {
-				err = http.ErrNoCookie
-			}
-			if ctx.Err() != nil {
-				return
-			}
-			s.mu.Lock()
-			defer s.mu.Unlock()
-			if err != nil {
-				q = s.values[id]
-				q.Stale = true
-				q.LastError = "provider sync failed"
-				if q.SyncedAt != nil {
-					q.SyncSource = "cached"
-				}
-			} else {
-				now := time.Now().UTC()
-				q.SyncedAt = &now
-				q.SyncSource = "live-api"
-			}
-			s.values[id] = q
-		}()
+			s.syncOne(ctx, p)
+		}(p)
 	}
 	wg.Wait()
+}
+
+// syncOne fetches and stores the remote quota snapshot for a single plan and
+// raises the opt-in auto-reset evaluation when a configured window is exhausted.
+func (s *Syncer) syncOne(ctx context.Context, p *config.Plan) {
+	s.syncPlan(ctx, p, true)
+}
+
+// syncPlan fetches and stores one plan snapshot; hook controls whether the
+// opt-in auto-reset evaluation is raised afterwards.
+func (s *Syncer) syncPlan(ctx context.Context, p *config.Plan, hook bool) {
+	if s == nil || p == nil || !p.IsEnabled() || provider(p) == "" {
+		return
+	}
+	id := p.ID
+	key, err := s.secrets.Get(p.Credential)
+	var q RemoteQuota
+	if err == nil && key != "" {
+		q, err = fetch(ctx, s.client, p, key)
+	} else {
+		err = http.ErrNoCookie
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	s.mu.Lock()
+	if err != nil {
+		q = s.values[id]
+		q.Stale = true
+		q.LastError = "provider sync failed"
+		if q.SyncedAt != nil {
+			q.SyncSource = "cached"
+		}
+	} else {
+		now := time.Now().UTC()
+		q.SyncedAt = &now
+		q.SyncSource = "live-api"
+	}
+	s.values[id] = q
+	s.mu.Unlock()
+	if err == nil && hook {
+		s.maybeAutoReset(p, q)
+	}
 }
 
 // Run starts an immediate refresh and repeats until cancellation.

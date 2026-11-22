@@ -148,6 +148,10 @@ crabbro gw plans --pretty
 crabbro gw routes --pretty
 crabbro gw preview --protocol anthropic --model coding-main --tools --pretty
 crabbro gw usage --window 24h --pretty
+
+# Redeem a provider reset coupon (opt-in autoReset policy lives on the plan)
+crabbro gw quotas refresh
+crabbro gw quotas reset glm-coding --scope fiveHour --dry-run
 ```
 
 The `find`, `rules draft`, and plugin `decision.ask` helpers use the gateway's enabled `decision` route automatically (returning `decision API is not configured` when none is configured). See [docs/design/gateway.md](docs/design/gateway.md) for the full schema, `Quality × Cache × Quota` scoring, TTL-decay cache gravity, semantic tiering, and failover model.
@@ -178,7 +182,8 @@ reads the token file itself.
 | `find "QUERY" [--pretty]` | Decision-route natural-language search |
 | `verify replay ID [--expect-status N] [--expect-body-contains TEXT]` | Replay through the proxy |
 | `secrets list\|set\|delete` | Manage mode-`0600` credentials in `~/.crabbro/secrets/` |
-| `gw status\|plans\|routes\|usage\|preview\|cooldown-clear\|reload` | Gateway status, quotas, dry-run routing, and reload |
+| `gw status\|plans\|routes\|usage\|quotas\|preview\|cooldown-clear\|reload` | Gateway status, quotas, dry-run routing, and reload |
+| `gw quotas refresh` / `gw quotas reset <plan> [--scope fiveHour\|weekly] [--dry-run]` | Refresh provider quota snapshots; redeem at most one reset coupon (opt-in `autoReset` policy per plan) |
 | `config status\|draft\|validate\|commit\|discard` | Safe staging for rules, scope, `--gateway-plan`, and `--gateway-route` |
 | `rules list\|get\|create\|enable\|disable\|delete\|test` | Rule CRUD and fixture test |
 | `rules from ID [--action mock\|block\|header\|rewrite\|tag] [--name N] [--apply=false]` | Scaffold from a capture and create it |

@@ -42,6 +42,9 @@ const (
 	EventGatewayConfigChanged EventType = "gateway_config_changed"
 	// EventGatewayPlanHealthChanged is emitted when a plan enters or exits cooldown.
 	EventGatewayPlanHealthChanged EventType = "gateway_plan_health_changed"
+	// EventGatewayQuotaReset is emitted after a verified reset-coupon
+	// redemption. Payload carries the plan and window scope only.
+	EventGatewayQuotaReset EventType = "gateway_quota_reset"
 )
 
 // Event is a structured observation emitted by the daemon. Events are

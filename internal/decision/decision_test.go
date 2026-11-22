@@ -214,11 +214,11 @@ targets:
 
 func TestDecisionEmulatedOpenAIGeminiAnthropic(t *testing.T) {
 	cases := []struct {
-		name      string
-		proto     string
-		model     string
-		endpoint  func() string
-		handler   http.HandlerFunc
+		name     string
+		proto    string
+		model    string
+		endpoint func() string
+		handler  http.HandlerFunc
 	}{
 		{
 			name:  "openai-chat",

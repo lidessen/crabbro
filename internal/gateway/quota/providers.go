@@ -55,6 +55,26 @@ func timestamp(v any) *time.Time {
 	}
 	return &t
 }
+
+// shanghaiZone is the fixed +08:00 offset BigModel reports wall-clock times
+// in ("2006-01-02 15:04:05" strings without a zone designator).
+var shanghaiZone = time.FixedZone("Asia/Shanghai", 8*60*60)
+
+// shanghaiStamp parses a naive "2006-01-02 15:04:05" wall-clock string
+// reported in Asia/Shanghai local time and normalizes it to UTC.
+func shanghaiStamp(v string) *time.Time {
+	raw := strings.TrimSpace(v)
+	if raw == "" {
+		return nil
+	}
+	t, err := time.ParseInLocation("2006-01-02 15:04:05", raw, shanghaiZone)
+	if err != nil || t.IsZero() {
+		return nil
+	}
+	u := t.UTC()
+	return &u
+}
+
 func object(v any) map[string]any { m, _ := v.(map[string]any); return m }
 func percent(used, cap any) *float64 {
 	u, ok := number(used)
@@ -73,6 +93,21 @@ func provider(p *config.Plan) string {
 		}
 	}
 	return ""
+}
+
+// zcodeBase returns the API origin used for BigModel quota and reset endpoints,
+// honoring the first usable plan endpoint base URL override.
+func zcodeBase(p *config.Plan) string {
+	endpoint := "https://open.bigmodel.cn"
+	for _, ep := range p.Endpoints {
+		if ep != nil {
+			if u, e := url.Parse(ep.BaseURL); e == nil && (u.Scheme == "https" || u.Scheme == "http") && u.Host != "" && u.User == nil {
+				endpoint = u.Scheme + "://" + u.Host
+				break
+			}
+		}
+	}
+	return endpoint
 }
 func fetchJSON(ctx context.Context, client *http.Client, endpoint, key string, bearer bool) (map[string]any, error) {
 	req, e := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
@@ -116,15 +151,7 @@ func fetch(ctx context.Context, c *http.Client, p *config.Plan, key string) (Rem
 	var endpoint string
 	switch kind {
 	case "zcode":
-		endpoint = "https://open.bigmodel.cn"
-		for _, ep := range p.Endpoints {
-			if ep != nil {
-				if u, e := url.Parse(ep.BaseURL); e == nil && (u.Scheme == "https" || u.Scheme == "http") && u.Host != "" && u.User == nil {
-					endpoint = u.Scheme + "://" + u.Host
-					break
-				}
-			}
-		}
+		endpoint = zcodeBase(p)
 	case "commandcode":
 		endpoint = "https://api.commandcode.ai/alpha/billing/credits"
 	case "vercel":
@@ -180,41 +207,19 @@ func fetch(ctx context.Context, c *http.Client, p *config.Plan, key string) (Rem
 			}
 			q.Windows = append(q.Windows, QuotaWindow{Name: name, UsagePct: pct, ResetAt: timestamp(w["nextResetTime"])})
 		}
-		u, _ := url.Parse(endpoint)
-		u.Path = "/api/biz/customer-package-reset/list"
-		u.RawQuery = "targetType=PERSONAL"
-		coupons, err := fetchJSON(ctx, c, u.String(), key, false)
-		if err != nil {
-			return q, err
-		}
-		cd, err := envelope(coupons)
+		coupons, err := listResetCoupons(ctx, c, zcodeBase(p), key)
 		if err != nil {
 			return q, err
 		}
 		now := time.Now()
-		for _, k := range []string{"fiveHourResets", "weekResets"} {
-			items, _ := cd[k].([]any)
-			for _, item := range items {
-				x := object(item)
-				if x["available"] != true {
-					continue
-				}
-				exp := timestamp(x["expiresAt"])
-				if exp == nil {
-					exp = timestamp(x["expireTime"])
-				}
-				if exp != nil && !exp.After(now) {
-					continue
-				}
-				scope := "fiveHour"
-				if k == "weekResets" {
-					scope = "weekly"
-				}
-				q.Resets = append(q.Resets, ResetCoupon{Scope: scope, ExpiresAt: exp})
-				q.ResetsRemaining++
-				if exp != nil && (q.SoonestResetExpiry == nil || exp.Before(*q.SoonestResetExpiry)) {
-					q.SoonestResetExpiry = exp
-				}
+		for _, cp := range coupons {
+			if cp.expiresAt != nil && !cp.expiresAt.After(now) {
+				continue
+			}
+			q.Resets = append(q.Resets, ResetCoupon{Scope: cp.scope, ExpiresAt: cp.expiresAt})
+			q.ResetsRemaining++
+			if cp.expiresAt != nil && (q.SoonestResetExpiry == nil || cp.expiresAt.Before(*q.SoonestResetExpiry)) {
+				q.SoonestResetExpiry = cp.expiresAt
 			}
 		}
 	case "commandcode":

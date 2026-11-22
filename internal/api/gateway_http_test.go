@@ -3,10 +3,13 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/lidessen/crabbro/internal/gateway"
 	"github.com/lidessen/crabbro/internal/gateway/config"
@@ -193,6 +196,125 @@ targets:
 	s.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("usage = %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestGatewayQuotaResetEndpoint(t *testing.T) {
+	var mu sync.Mutex
+	useCalls := 0
+	drained := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/monitor/usage/quota/limit":
+			fmt.Fprint(w, `{"code":0,"data":{"level":"lite","limits":[{"unit":3,"usage":100,"remaining":100}]}}`)
+		case "/api/biz/customer-package-reset/list":
+			mu.Lock()
+			empty := drained
+			mu.Unlock()
+			if empty {
+				fmt.Fprint(w, `{"code":200,"success":true,"data":{}}`)
+				return
+			}
+			fmt.Fprintf(w, `{"code":200,"success":true,"data":{"fiveHourResets":[{"recordId":4242,"grantType":"DIRECT","expireTime":%q,"available":true}]}}`,
+				time.Now().Add(time.Hour).Format("2006-01-02 15:04:05"))
+		case "/api/biz/customer-package-reset/use":
+			mu.Lock()
+			useCalls++
+			drained = true
+			mu.Unlock()
+			fmt.Fprint(w, `{"code":200,"msg":"ok","success":true,"data":1}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	s := testMITMServer(t)
+	sec := secret.New(t.TempDir())
+	if err := sec.Set("zcode_key", "sk-zcode-test"); err != nil {
+		t.Fatal(err)
+	}
+	gw, err := gateway.New(gateway.Options{RootDir: t.TempDir()}, sec, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = gw.Stop() }()
+	s.Gateway = gw
+	snap := gw.Config.Snapshot()
+	snap.AllPlans["zcode"] = &config.Plan{
+		ID:         "zcode",
+		Credential: "zcode_key",
+		Endpoints:  map[string]*config.EndpointSpec{"anthropic": {BaseURL: server.URL}},
+	}
+
+	post := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/v1/gateway/quotas/reset", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, req)
+		return w
+	}
+
+	// Dry run selects without spending.
+	w := post(`{"plan":"zcode","scope":"fiveHour","dryRun":true}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"redeemed":false`) || !strings.Contains(w.Body.String(), `"couponsAvailable":1`) {
+		t.Fatalf("dry-run = %d %s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "4242") || strings.Contains(w.Body.String(), "recordId") {
+		t.Fatalf("dry-run leaked a coupon identifier: %s", w.Body.String())
+	}
+	mu.Lock()
+	calls := useCalls
+	mu.Unlock()
+	if calls != 0 {
+		t.Fatalf("dry run spent a coupon (%d /use calls)", calls)
+	}
+
+	// Real redemption clears cooling and reports the refreshed snapshot.
+	gw.Health.EnterPlanCooldown("zcode", "plan", "quota exhausted (429)", 5*time.Minute, time.Now().UTC())
+	w = post(`{"plan":"zcode"}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"redeemed":true`) || !strings.Contains(w.Body.String(), `"scope":"fiveHour"`) {
+		t.Fatalf("reset = %d %s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "4242") || strings.Contains(w.Body.String(), "recordId") {
+		t.Fatalf("reset leaked a coupon identifier: %s", w.Body.String())
+	}
+	var resp shared.GatewayQuotaResetResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Status == nil || resp.Status.CooldownUntil != nil {
+		t.Fatalf("plan status after reset = %+v", resp.Status)
+	}
+	mu.Lock()
+	calls = useCalls
+	mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("/use called %d times, want 1", calls)
+	}
+
+	// Drained inventory reports the failure without spending again.
+	w = post(`{"plan":"zcode","scope":"weekly"}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"error"`) {
+		t.Fatalf("drained reset = %d %s", w.Code, w.Body.String())
+	}
+
+	// Validation and unknown-plan handling.
+	if w := post(`{"plan":"zcode","scope":"hourly"}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("invalid scope = %d %s", w.Code, w.Body.String())
+	}
+	if w := post(`{"scope":"fiveHour"}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("missing plan = %d %s", w.Code, w.Body.String())
+	}
+	if w := post(`{"plan":"ghost"}`); w.Code != http.StatusNotFound {
+		t.Fatalf("unknown plan = %d %s", w.Code, w.Body.String())
+	}
+	if req := httptest.NewRequest(http.MethodGet, "/v1/gateway/quotas/reset", nil); func() *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, req)
+		return w
+	}().Code != http.StatusMethodNotAllowed {
+		t.Fatal("GET /v1/gateway/quotas/reset must be rejected")
 	}
 }
 

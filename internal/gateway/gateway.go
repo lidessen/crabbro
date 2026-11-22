@@ -111,6 +111,24 @@ func New(opt Options, secrets *secret.Store, sink capture.ExchangeSink) (*Gatewa
 	}
 
 	rtr.DecisionCaller = gw.InvokeDecision
+	// Verified automatic redemptions clear plan cooling immediately so traffic
+	// resumes without waiting out the exhaustion cooldown.
+	qs.OnAutoReset = func(planID, scope string, out quota.ResetOutcome) {
+		if g := gw; g != nil {
+			g.Health.ResetCooldown(planID)
+			if g.Sink != nil {
+				g.Sink.Emit(shared.EventGatewayQuotaReset, "", map[string]any{
+					"plan":  planID,
+					"scope": scope,
+				})
+			}
+		}
+	}
+	// Upstream exhaustion/rate-limit cooling raises the opt-in auto-reset
+	// evaluation on a detached context so request handling never blocks.
+	exec.AutoResetSignal = func(planID string) {
+		gw.Quotas.AutoResetAsync(func() map[string]*config.Plan { return gw.Config.Snapshot().AllPlans }, planID, true)
+	}
 	cfg.OnChange = func(snap *config.Snapshot) {
 		if sink != nil {
 			sink.Emit(shared.EventGatewayConfigChanged, "", map[string]any{
@@ -447,8 +465,19 @@ func (g *Gateway) Plans() shared.GatewayPlanListResponse {
 		hs := g.Health.Snapshot(id, now)
 		hasSec := g.Secrets != nil && g.Secrets.Has(p.Credential)
 		out = append(out, shared.GatewayPlanStatus{
-			ID:            p.ID,
-			Enabled:       p.IsEnabled(),
+			ID:      p.ID,
+			Enabled: p.IsEnabled(),
+			AutoReset: func() *shared.PlanAutoResetSpec {
+				if !p.AutoReset.Enabled {
+					return nil
+				}
+				return &shared.PlanAutoResetSpec{
+					Enabled:        true,
+					Scopes:         p.AutoReset.EffectiveAutoResetScopes(),
+					ExpiringWithin: p.AutoReset.ExpiringWithin,
+					MinInterval:    p.AutoReset.MinInterval,
+				}
+			}(),
 			DirectEnabled: p.DirectEnabled(),
 			DirectProfiles: func() []string {
 				if p.Direct == nil {
@@ -483,6 +512,30 @@ func (g *Gateway) ResetCooldown(planID string) error {
 	}
 	g.Health.ResetCooldown(planID)
 	return nil
+}
+
+// ResetQuota redeems at most one provider reset coupon for a plan, refreshes
+// its remote quota snapshot, and clears plan cooling so traffic resumes
+// immediately. Provider coupon identifiers never appear in the response.
+func (g *Gateway) ResetQuota(ctx context.Context, req shared.GatewayQuotaResetRequest) shared.GatewayQuotaResetResponse {
+	out, err := g.Quotas.Reset(ctx, g.Config.Snapshot().AllPlans, req.Plan, req.Scope, req.DryRun)
+	if err != nil && out.Error == "" {
+		out.Error = err.Error()
+	}
+	if out.Plan == "" {
+		out.Plan = req.Plan
+	}
+	if out.Redeemed {
+		g.Health.ResetCooldown(req.Plan)
+	}
+	statuses := g.Plans().Plans
+	for i := range statuses {
+		if statuses[i].ID == req.Plan {
+			out.Status = &statuses[i]
+			break
+		}
+	}
+	return out
 }
 
 // Routes returns loaded gateway routes.

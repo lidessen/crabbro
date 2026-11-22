@@ -158,3 +158,12 @@ func (c *Client) RefreshGatewayQuotas(ctx context.Context) ([]api.GatewayPlanSta
 	err := c.postJSON(ctx, "/v1/gateway/quotas/refresh", nil, &out)
 	return out.Plans, err
 }
+
+// ResetGatewayQuota redeems at most one reset coupon via
+// POST /v1/gateway/quotas/reset. An empty scope picks the soonest-expiring
+// coupon across both windows; dryRun selects without redeeming.
+func (c *Client) ResetGatewayQuota(ctx context.Context, req api.GatewayQuotaResetRequest) (api.GatewayQuotaResetResponse, error) {
+	var out api.GatewayQuotaResetResponse
+	err := c.postJSON(ctx, "/v1/gateway/quotas/reset", req, &out)
+	return out, err
+}

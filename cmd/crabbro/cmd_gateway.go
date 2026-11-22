@@ -16,7 +16,7 @@ import (
 
 func cmdGateway(cfg *clientConfig, args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: crabbro gw <status|plans|routes|usage|cooldown-clear|preview|reload>")
+		return fmt.Errorf("usage: crabbro gw <status|plans|routes|quotas|usage|cooldown-clear|preview|reload>")
 	}
 	switch args[0] {
 	case "status":
@@ -62,6 +62,18 @@ func cmdGateway(cfg *clientConfig, args []string) error {
 				fmt.Printf("%-18s enabled=%t secret=%-7s health=%-24s endpoints=%s models=%s\n",
 					p.ID, p.Enabled, sec, health, strings.Join(p.Endpoints, ","), strings.Join(p.Models, ","))
 				fmt.Printf("  direct: %s\n", direct)
+				if ar := p.AutoReset; ar != nil {
+					horizon := ar.ExpiringWithin
+					if horizon == "" {
+						horizon = "any"
+					}
+					interval := ar.MinInterval
+					if interval == "" {
+						interval = "5m"
+					}
+					fmt.Printf("  autoReset: on scopes=%s expiringWithin=%s minInterval=%s\n",
+						strings.Join(ar.Scopes, ","), horizon, interval)
+				}
 				if q := p.RemoteQuota; q != nil {
 					fmt.Printf("  remote balance=%s resets=%d source=%s stale=%t", q.Balance, q.ResetsRemaining, q.SyncSource, q.Stale)
 					if q.SoonestResetExpiry != nil {
@@ -101,6 +113,8 @@ func cmdGateway(cfg *clientConfig, args []string) error {
 					rt.ID, rt.Family, rt.Preset, rt.Enabled, rt.Models, strings.Join(tgts, ", "))
 			}
 		})
+	case "quotas":
+		return gwQuotas(cfg, args[1:])
 	case "usage":
 		fs := flag.NewFlagSet("gw usage", flag.ContinueOnError)
 		window := fs.String("window", "24h", "Rolling duration window (e.g. 1h, 24h, 7d)")
@@ -196,6 +210,104 @@ func cmdGateway(cfg *clientConfig, args []string) error {
 		return printAPI(cfg, http.MethodPost, "/v1/gateway/reload", nil)
 	default:
 		return fmt.Errorf("unknown gw subcommand: %s", args[0])
+	}
+}
+
+// reorderFlags moves flag tokens ahead of positional arguments so invocations
+// like `gw quotas reset zcode --scope fiveHour` parse the same way as
+// `gw quotas reset --scope fiveHour zcode`.
+func reorderFlags(fs *flag.FlagSet, args []string) []string {
+	boolFlags := map[string]bool{}
+	fs.VisitAll(func(f *flag.Flag) {
+		if f.DefValue == "true" || f.DefValue == "false" {
+			boolFlags[f.Name] = true
+		}
+	})
+	var flags, positional []string
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			positional = append(positional, args[i+1:]...)
+			break
+		}
+		if len(arg) > 1 && strings.HasPrefix(arg, "-") {
+			flags = append(flags, arg)
+			name := strings.TrimPrefix(strings.TrimPrefix(arg, "--"), "-")
+			if !strings.Contains(arg, "=") && !boolFlags[name] && i+1 < len(args) {
+				i++
+				flags = append(flags, args[i])
+			}
+			continue
+		}
+		positional = append(positional, arg)
+	}
+	return append(flags, positional...)
+}
+
+// gwQuotas implements `crabbro gw quotas <refresh|reset>`.
+func gwQuotas(cfg *clientConfig, args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: crabbro gw quotas <refresh|reset>")
+	}
+	switch args[0] {
+	case "refresh":
+		return printAPI(cfg, http.MethodPost, "/v1/gateway/quotas/refresh", nil)
+	case "reset":
+		fs := flag.NewFlagSet("gw quotas reset", flag.ContinueOnError)
+		scope := fs.String("scope", "", "Reset window scope (fiveHour|weekly; default soonest-expiring)")
+		dryRun := fs.Bool("dry-run", false, "Select a coupon without redeeming it")
+		pretty := fs.Bool("pretty", false, "Human-readable output")
+		if err := fs.Parse(reorderFlags(fs, args[1:])); err != nil {
+			return err
+		}
+		if *scope != "" && *scope != "fiveHour" && *scope != "weekly" {
+			return fmt.Errorf("--scope must be fiveHour or weekly")
+		}
+		if fs.NArg() < 1 {
+			return fmt.Errorf("usage: crabbro gw quotas reset <plan> [--scope fiveHour|weekly] [--dry-run]")
+		}
+		body, _ := json.Marshal(shared.GatewayQuotaResetRequest{
+			Plan:   fs.Arg(0),
+			Scope:  *scope,
+			DryRun: *dryRun,
+		})
+		if !*pretty {
+			return printAPI(cfg, http.MethodPost, "/v1/gateway/quotas/reset", bytes.NewReader(body))
+		}
+		raw, err := gwFetch(cfg, http.MethodPost, "/v1/gateway/quotas/reset", bytes.NewReader(body))
+		if err != nil {
+			return err
+		}
+		var out shared.GatewayQuotaResetResponse
+		if json.Unmarshal(raw, &out) != nil {
+			fmt.Println(string(raw))
+			return nil
+		}
+		action := "redeemed"
+		if out.DryRun {
+			action = "selected"
+		} else if !out.Redeemed {
+			action = "not redeemed"
+		}
+		fmt.Printf("plan=%s scope=%s %s coupons=%d", out.Plan, out.Scope, action, out.CouponsAvailable)
+		if out.CouponExpiresAt != nil {
+			fmt.Printf(" expires=%s", out.CouponExpiresAt.Format(time.RFC3339))
+		}
+		fmt.Println()
+		if out.Error != "" {
+			fmt.Printf("  error: %s\n", out.Error)
+		}
+		if q := out.Status; q != nil && q.RemoteQuota != nil {
+			fmt.Printf("  remote resets=%d source=%s stale=%t\n", q.RemoteQuota.ResetsRemaining, q.RemoteQuota.SyncSource, q.RemoteQuota.Stale)
+			for _, w := range q.RemoteQuota.Windows {
+				if w.UsagePct != nil {
+					fmt.Printf("  remote window %s used=%.0f%%\n", w.Name, *w.UsagePct)
+				}
+			}
+		}
+		return nil
+	default:
+		return fmt.Errorf("unknown gw quotas subcommand: %s", args[0])
 	}
 }
 

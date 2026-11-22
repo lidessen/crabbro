@@ -55,6 +55,12 @@ type Executor struct {
 	Bridge         BridgeHandler
 	CaptureMode    string
 	MaxRequestBody int64
+
+	// AutoResetSignal is invoked when an upstream attempt is classified as
+	// quota exhaustion or rate limiting. Implementations must not block: the
+	// gateway uses it to raise the opt-in reset-coupon evaluation off the
+	// request path.
+	AutoResetSignal func(planID string)
 }
 
 // New constructs an Executor with sane defaults.
@@ -818,6 +824,9 @@ func (e *Executor) applyFailure(cand router.Candidate, fc FailureClass, latencyM
 		case "model":
 			e.health().EnterModelCooldown(cand.Plan.ID, cand.Target.Model, fc.Summary, fc.CooldownDur, now)
 		}
+	}
+	if e.AutoResetSignal != nil && (fc.Kind == ErrKindQuotaExhausted || fc.Kind == ErrKindRateLimit) {
+		e.AutoResetSignal(cand.Plan.ID)
 	}
 	if e.Ledger != nil {
 		if fc.Kind == ErrKindRateLimit && e.Ledger.Calibrator != nil {

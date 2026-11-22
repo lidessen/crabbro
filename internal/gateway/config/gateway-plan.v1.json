@@ -62,6 +62,21 @@
         }
       }
     },
+    "autoReset": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "scopes": {
+          "type": "array",
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": { "enum": ["fiveHour", "weekly"] }
+        },
+        "expiringWithin": { "$ref": "#/$defs/duration" },
+        "minInterval": { "$ref": "#/$defs/duration" }
+      }
+    },
     "endpoints": {
       "type": "object",
       "minProperties": 1,
