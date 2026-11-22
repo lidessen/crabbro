@@ -1,6 +1,11 @@
 package quota
 
 import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -97,5 +102,64 @@ func TestReminderLeadDefaultsWhenUnset(t *testing.T) {
 	s := New(nil, t.TempDir())
 	if got := s.reminderLead("missing"); got != config.DefaultQuotaReminderLeadTime {
 		t.Fatalf("default lead = %v", got)
+	}
+}
+
+// TestUnderutilizedWindowReminderEmittedOnce proves the event path reaches
+// underutilized_window reminders: syncPlan must derive the same windowTrend
+// Get computes (providers never populate Trend), emitting exactly one event
+// for an underutilized weekly window and none on a repeat sync.
+func TestUnderutilizedWindowReminderEmittedOnce(t *testing.T) {
+	now := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+	// Weekly window resetting in 30h: ~82% elapsed with only 20% used
+	// projects far below 60%, i.e. underutilized, and 30h sits inside the
+	// configured 48h reminder lead.
+	resetAt := now.Add(30 * time.Hour)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/monitor/usage/quota/limit":
+			fmt.Fprintf(w, `{"code":0,"data":{"limits":[{"unit":6,"usage":100,"remaining":80,"nextResetTime":%q}]}}`, resetAt.UTC().Format(time.RFC3339))
+		case "/api/biz/customer-package-reset/list":
+			fmt.Fprint(w, `{"code":200,"data":{}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	s := newTestSyncer(t)
+	s.SetClock(func() time.Time { return now })
+	var mu sync.Mutex
+	var got []QuotaReminder
+	s.OnExpiryReminder = func(r QuotaReminder) {
+		mu.Lock()
+		defer mu.Unlock()
+		got = append(got, r)
+	}
+	p := &config.Plan{
+		ID:            "zcode",
+		Credential:    "zcode_key",
+		QuotaReminder: config.QuotaReminderSpec{LeadTime: "48h"},
+		Endpoints:     map[string]*config.EndpointSpec{"anthropic": {BaseURL: server.URL}},
+	}
+
+	s.syncOne(context.Background(), p)
+	mu.Lock()
+	if len(got) != 1 || got[0].Kind != "underutilized_window" || got[0].Scope != "Weekly" {
+		mu.Unlock()
+		t.Fatalf("events = %+v, want exactly one underutilized_window for Weekly", got)
+	}
+	if !got[0].ExpiresAt.Equal(resetAt) {
+		mu.Unlock()
+		t.Fatalf("event expiry = %v, want %v", got[0].ExpiresAt, resetAt)
+	}
+	mu.Unlock()
+
+	// A repeat sync of identical evidence is deduped: still exactly one event.
+	s.syncOne(context.Background(), p)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != 1 {
+		t.Fatalf("repeat sync re-emitted the reminder: %+v", got)
 	}
 }

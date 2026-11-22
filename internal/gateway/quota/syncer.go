@@ -278,6 +278,14 @@ func (s *Syncer) syncPlan(ctx context.Context, p *config.Plan, hook bool) {
 		now := time.Now().UTC()
 		q.SyncedAt = &now
 		q.SyncSource = "live-api"
+		// fetch never populates Trend, yet quotaReminders — and the
+		// gateway_quota_expiring event path behind syncPlan — requires it to
+		// recognize underutilized windows. Derive it exactly like Get does so
+		// the stored snapshot and the emitted events agree.
+		trendNow := s.now()
+		for i := range q.Windows {
+			q.Windows[i].Trend = windowTrend(q.Windows[i], trendNow)
+		}
 	}
 	s.values[id] = q
 	s.leads[id] = p.QuotaReminder.LeadTimeDuration()

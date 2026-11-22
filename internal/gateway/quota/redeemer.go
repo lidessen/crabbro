@@ -37,6 +37,12 @@ var (
 	ErrResetCooldown    = errors.New("reset minimum interval has not elapsed")
 	ErrResetNoCoupons   = errors.New("no available reset coupons for the requested scope")
 	ErrResetUnsupported = errors.New("plan does not support reset coupons")
+	// ErrResetWeeklyUsageLow marks an automatic weekly redemption withheld by
+	// the usage guard: a matching coupon exists, but the weekly window is not
+	// consumed enough (or its usage is unknown) to justify spending it. It is
+	// distinct from ErrResetNoCoupons so refusals are not mistaken for an
+	// empty inventory.
+	ErrResetWeeklyUsageLow = errors.New("weekly coupon withheld: weekly window usage is below the required minimum")
 )
 
 // resetEntry mirrors one row of the provider /list payload. recordId and

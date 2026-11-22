@@ -432,7 +432,14 @@ func (s *Syncer) redeem(ctx context.Context, p *config.Plan, scope string, dryRu
 			used, hasUsage = windowUsagePct(q, ScopeWeekly)
 		}
 		if !hasUsage || used < minUsed {
-			return out, ErrResetNoCoupons
+			// The coupon exists but the guard refuses to spend it while weekly
+			// quota remains. Report that distinctly (auto path only; the
+			// manual Reset never runs this branch) instead of pretending the
+			// inventory is empty.
+			if !hasUsage {
+				return out, fmt.Errorf("%w: weekly usage unavailable", ErrResetWeeklyUsageLow)
+			}
+			return out, fmt.Errorf("%w: %.1f%% used, requires at least %.1f%%", ErrResetWeeklyUsageLow, used, minUsed)
 		}
 	}
 	out.Scope = pick.scope

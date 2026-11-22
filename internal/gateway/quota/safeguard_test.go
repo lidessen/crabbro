@@ -2,6 +2,7 @@ package quota
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http/httptest"
 	"testing"
@@ -156,4 +157,57 @@ func TestPreExpirySafeguardEndToEnd(t *testing.T) {
 			t.Fatalf("expiring five-hour coupon was not redeemed (%d /use calls)", useCalls)
 		}
 	})
+}
+
+// TestWeeklyGuardRefusalReturnsDistinctSentinel proves the automatic path
+// reports ErrResetWeeklyUsageLow — not ErrResetNoCoupons — when the weekly
+// usage guard withholds a coupon that does exist, while the manual Reset
+// control path never runs the guard and still redeems.
+func TestWeeklyGuardRefusalReturnsDistinctSentinel(t *testing.T) {
+	now := time.Now()
+	expiry := now.Add(21 * time.Minute) // inside the 30m safeguard lead
+	policy := config.AutoResetSpec{
+		Enabled:   true,
+		Scopes:    []string{ScopeWeekly},
+		Safeguard: config.SafeguardSpec{Enabled: true, LeadTime: "30m", MinUsedPct: 80},
+	}
+	pct := func(v float64) *float64 { return &v }
+
+	mock := newBigModelMock(t)
+	mock.coupons = fmt.Sprintf(`{"code":200,"success":true,"data":{"weekResets":[{"recordId":"99001","grantType":"DIRECT","expireTime":%q,"available":true}]}}`, expiry.In(shanghaiZone).Format("2006-01-02 15:04:05"))
+	server := httptest.NewServer(mock)
+	defer server.Close()
+
+	s := newTestSyncer(t)
+	s.SetClock(func() time.Time { return now })
+	p := zcodePlan(server.URL, policy)
+	s.mu.Lock()
+	s.values["zcode"] = RemoteQuota{
+		Windows: []QuotaWindow{{Name: "5 hours", UsagePct: pct(100)}, {Name: "Weekly", UsagePct: pct(20)}},
+		Resets:  []ResetCoupon{{Scope: ScopeWeekly, ExpiresAt: &expiry}},
+	}
+	s.mu.Unlock()
+
+	out, err := s.redeem(context.Background(), p, ScopeWeekly, false, &policy)
+	if !errors.Is(err, ErrResetWeeklyUsageLow) {
+		t.Fatalf("guard refusal err = %v, want %v", err, ErrResetWeeklyUsageLow)
+	}
+	if errors.Is(err, ErrResetNoCoupons) {
+		t.Fatalf("guard refusal mislabeled as %v", ErrResetNoCoupons)
+	}
+	if out.CouponsAvailable != 1 {
+		t.Fatalf("coupons available = %d, want 1 (the coupon exists)", out.CouponsAvailable)
+	}
+	if _, useCalls := mock.stats(); useCalls != 0 {
+		t.Fatalf("withheld coupon was spent (%d /use calls)", useCalls)
+	}
+
+	// The manual control path skips the guard (auto-only) and redeems.
+	manual, err := s.Reset(context.Background(), map[string]*config.Plan{"zcode": p}, "zcode", ScopeWeekly, false)
+	if err != nil || !manual.Redeemed || manual.Scope != ScopeWeekly {
+		t.Fatalf("manual weekly reset = %+v, err = %v", manual, err)
+	}
+	if _, useCalls := mock.stats(); useCalls != 1 {
+		t.Fatalf("/use called %d times, want exactly 1", useCalls)
+	}
 }
