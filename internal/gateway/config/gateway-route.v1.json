@@ -80,7 +80,7 @@
           "model": { "type": "string", "minLength": 1, "maxLength": 128 },
           "endpointProtocol": { "$ref": "#/$defs/protocol" },
           "priority": { "type": "integer" },
-          "weight": { "type": "number", "minimum": 0, "maximum": 100, "description": "Preference bias on the unified score: 0 or 1 is neutral, higher is preferred (100 adds +2.5), fractional values below 1 demote. Bounded so it cannot override hard constraints or tier mismatches." },
+          "weight": { "type": "number", "minimum": 0, "maximum": 100, "description": "Preference bias on the unified score: 0 or 1 is neutral, higher is preferred (100 adds +1.2, quality-clamped), fractional values below 1 demote. Bounded so it cannot override hard constraints or flip a matched-tier candidate below an under-tier candidate." },
           "enabled": { "type": "boolean" },
           "minContextTokens": { "type": "integer", "minimum": 0 },
           "maxContextTokens": { "type": "integer", "minimum": 1 },
