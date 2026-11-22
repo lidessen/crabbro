@@ -21,14 +21,15 @@ const attemptGuard = 30 * time.Second
 
 // resetGate serializes redemptions and tracks anti-double-spend cooldowns.
 type resetGate struct {
-	mu      sync.Mutex
-	locks   map[string]*sync.Mutex // single-flight per plan
-	last    map[string]time.Time   // last verified redemption per plan+scope
-	lasting map[string]time.Time   // last attempt per plan+scope (any outcome)
+	mu        sync.Mutex
+	locks     map[string]*sync.Mutex // single-flight per plan
+	last      map[string]time.Time   // last verified redemption per plan+scope
+	lasting   map[string]time.Time   // last attempt per plan+scope (any outcome)
+	uncertain map[string]bool        // unverified /use result per plan+scope
 }
 
 func newResetGate() *resetGate {
-	return &resetGate{locks: map[string]*sync.Mutex{}, last: map[string]time.Time{}, lasting: map[string]time.Time{}}
+	return &resetGate{locks: map[string]*sync.Mutex{}, last: map[string]time.Time{}, lasting: map[string]time.Time{}, uncertain: map[string]bool{}}
 }
 
 func (g *resetGate) lock(planID string) *sync.Mutex {
@@ -45,6 +46,7 @@ func (g *resetGate) lock(planID string) *sync.Mutex {
 func (g *resetGate) noteRedeem(planID, scope string, at time.Time) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	delete(g.uncertain, planID+"\x00"+scope)
 	g.last[planID+"\x00"+scope] = at
 	g.lasting[planID+"\x00"+scope] = at
 }
@@ -53,6 +55,20 @@ func (g *resetGate) noteAttempt(planID, scope string, at time.Time) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.lasting[planID+"\x00"+scope] = at
+}
+
+// An unverified /use result requires operator reconciliation before another
+// automatic redemption. A timer alone cannot establish whether it succeeded.
+func (g *resetGate) noteUncertain(planID, scope string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.uncertain[planID+"\x00"+scope] = true
+}
+
+func (g *resetGate) isUncertain(planID, scope string) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.uncertain[planID+"\x00"+scope]
 }
 
 func (g *resetGate) lastRedeem(planID, scope string) (time.Time, bool) {
@@ -173,6 +189,9 @@ func (s *Syncer) AutoResetAsync(plans func() map[string]*config.Plan, planID str
 // (plan, scope) pair is still running. A recent ambiguous attempt also guards
 // the pair so a failing provider is never hammered.
 func (s *Syncer) cooldownActive(planID, scope string, minInterval time.Duration, now time.Time) bool {
+	if s.resets.isUncertain(planID, scope) {
+		return true
+	}
 	if minInterval > 0 {
 		if last, ok := s.resets.lastRedeem(planID, scope); ok && now.Sub(last) < minInterval {
 			return true
@@ -285,6 +304,7 @@ func (s *Syncer) redeem(ctx context.Context, p *config.Plan, scope string, dryRu
 	}
 	if err := useResetCoupon(ctx, s.client, zcodeBase(p), key, pick); err != nil {
 		s.resets.noteAttempt(p.ID, pick.scope, s.now())
+		s.resets.noteUncertain(p.ID, pick.scope)
 		return out, err
 	}
 	out.Redeemed = true

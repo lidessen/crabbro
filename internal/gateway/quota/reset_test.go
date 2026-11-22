@@ -490,3 +490,25 @@ func TestAutoResetHonorsExpiringWithinAndFailsClosed(t *testing.T) {
 		})
 	}
 }
+
+// A repeated exhausted snapshot must not turn an ambiguous /use into a retry,
+// even after the configured minimum interval has elapsed.
+func TestAutoResetDoesNotRetryUnverifiedUse(t *testing.T) {
+	mock := newBigModelMock(t)
+	mock.useStatus = http.StatusInternalServerError
+	server := httptest.NewServer(mock)
+	defer server.Close()
+	s := newTestSyncer(t)
+	now := time.Now()
+	s.SetClock(func() time.Time { return now })
+	policy := config.AutoResetSpec{Enabled: true, Scopes: []string{ScopeFiveHour}, MinInterval: "5m"}
+	p := zcodePlan(server.URL, policy)
+	s.syncPlan(context.Background(), p, false)
+	plans := map[string]*config.Plan{"zcode": p}
+	s.AutoReset(context.Background(), plans, "zcode", false)
+	now = now.Add(10 * time.Minute)
+	s.AutoReset(context.Background(), plans, "zcode", true)
+	if _, calls := mock.stats(); calls != 1 {
+		t.Fatalf("unverified redemption was retried: %d calls", calls)
+	}
+}
