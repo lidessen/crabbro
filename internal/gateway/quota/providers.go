@@ -533,6 +533,13 @@ func finalizeMiniMaxQuota(q *RemoteQuota) {
 	}
 }
 
+func miniMaxPercent(v any) (float64, bool) {
+	if s, ok := v.(string); ok {
+		v = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(s), "%"))
+	}
+	return number(v)
+}
+
 // parseMiniMaxQuota reads one MiniMax token-plan document into quota windows
 // and reports how many windows were parsed. Both endpoint shapes carry a
 // model_remains[] row for the "general" plan; the remains_percent document
@@ -554,16 +561,22 @@ func parseMiniMaxQuota(q *RemoteQuota, m map[string]any) int {
 			{"current_weekly", "weekly_end_time", "Weekly"},
 		} {
 			var pct *float64
-			if v, ok := number(x[entry.prefix+"_used_percent"]); ok && v >= 0 && v <= 100 {
+			if v, ok := miniMaxPercent(x[entry.prefix+"_used_percent"]); ok && v >= 0 && v <= 100 {
 				pct = &v
 			}
 			if pct == nil {
-				total, okT := number(x[entry.prefix+"_total_percent"])
-				rem, okR := number(x[entry.prefix+"_remaining_percent"])
+				total, okT := miniMaxPercent(x[entry.prefix+"_total_percent"])
+				rem, okR := miniMaxPercent(x[entry.prefix+"_remaining_percent"])
 				if okT && okR && total > 0 && rem >= 0 {
 					if p := percent(total-rem, total); p != nil {
 						pct = p
 					}
+				}
+			}
+			if pct == nil {
+				if rem, ok := miniMaxPercent(x[entry.prefix+"_remaining_percent"]); ok && rem >= 0 && rem <= 100 {
+					used := 100 - rem
+					pct = &used
 				}
 			}
 			if pct == nil {

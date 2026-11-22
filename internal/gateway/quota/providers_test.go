@@ -136,6 +136,29 @@ func TestMiniMaxRemainsPercent(t *testing.T) {
 	}
 }
 
+func TestMiniMaxLiveResponseShapes(t *testing.T) {
+	for _, tt := range []struct {
+		name, payload string
+		five, weekly  float64
+	}{
+		{"primary", `{"base_resp":{"status_code":0},"model_remains":[{"model_name":"general","current_interval_used_percent":"40.25%","current_interval_total_percent":"100%","current_weekly_used_percent":"25%","current_interval_total_count":0,"end_time":1795342800000}]}`, 40.25, 25},
+		{"fallback", `{"base_resp":{"status_code":0},"model_remains":[{"model_name":"general","current_interval_total_count":0,"current_interval_usage_count":0,"current_interval_remaining_percent":60,"current_weekly_total_count":0,"current_weekly_usage_count":0,"current_weekly_remaining_percent":75,"end_time":1795342800000}]}`, 40, 25},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			q, err := fetchFrom(t, "minimax-cn", tt.payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(q.Windows) != 2 || q.Windows[0].UsagePct == nil || q.Windows[1].UsagePct == nil || *q.Windows[0].UsagePct != tt.five || *q.Windows[1].UsagePct != tt.weekly {
+				t.Fatalf("unexpected windows: %+v", q.Windows)
+			}
+			if q.Windows[0].ResetAt == nil || q.Windows[0].ResetAt.UnixMilli() != 1795342800000 {
+				t.Fatalf("unexpected reset: %v", q.Windows[0].ResetAt)
+			}
+		})
+	}
+}
+
 // Older MiniMax deployments only serve the legacy coding_plan counts
 // document: the remains_percent request fails and the fallback endpoint is
 // tried before giving up.
