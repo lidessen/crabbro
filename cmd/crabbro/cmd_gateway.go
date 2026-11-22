@@ -21,6 +21,9 @@ func cmdGateway(cfg *clientConfig, args []string) error {
 		return fmt.Errorf("usage: crabbro gateway <status|plans|routes|quotas|usage|cooldown-clear|preview|reload>")
 	}
 	switch args[0] {
+	case "help", "--help", "-h":
+		fmt.Println("usage: crabbro gateway <status|plans|routes|quotas|usage|cooldown-clear|preview|reload>")
+		return nil
 	case "status":
 		return gatewayGetJSON(cfg, args[1:], "/v1/gateway/status", func(raw []byte) {
 			var st shared.GatewayStatusResponse
