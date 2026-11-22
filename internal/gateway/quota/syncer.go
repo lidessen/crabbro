@@ -2,8 +2,11 @@ package quota
 
 import (
 	"context"
+	"github.com/lidessen/crabbro/pkg/api"
+	"math"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -77,6 +80,10 @@ func (s *Syncer) Get(id string) (*RemoteQuota, bool) {
 	}
 	q.Windows = append([]QuotaWindow(nil), q.Windows...)
 	q.Resets = append([]ResetCoupon(nil), q.Resets...)
+	now := s.now()
+	for i := range q.Windows {
+		q.Windows[i].Trend = windowTrend(q.Windows[i], now)
+	}
 	return &q, true
 }
 
@@ -129,6 +136,9 @@ func (s *Syncer) syncPlan(ctx context.Context, p *config.Plan, hook bool) {
 		q = s.values[id]
 		q.Stale = true
 		q.LastError = "provider sync failed"
+		if err != nil && strings.HasPrefix(err.Error(), "endpoint requires session auth or rejected credentials (HTTP ") {
+			q.LastError = err.Error()
+		}
 		if q.SyncedAt != nil {
 			q.SyncSource = "cached"
 		}
@@ -157,4 +167,34 @@ func (s *Syncer) Run(ctx context.Context, plans func() map[string]*config.Plan) 
 			s.Refresh(ctx, plans())
 		}
 	}
+}
+
+func windowTrend(w QuotaWindow, now time.Time) *api.WindowTrend {
+	hours := map[string]float64{"5 hours": 5, "Weekly": 168, "Monthly": 720}[w.Name]
+	if hours == 0 || w.ResetAt == nil {
+		return nil
+	}
+	elapsed := math.Max(0, math.Min(100, (1-w.ResetAt.Sub(now).Hours()/hours)*100))
+	t := &api.WindowTrend{WindowHours: hours, ElapsedPct: elapsed, Status: "early"}
+	if w.UsagePct != nil {
+		used := math.Max(0, math.Min(100, *w.UsagePct))
+		delta, remaining := used-elapsed, 100-used
+		t.PaceDeltaPct, t.RemainingPct = &delta, &remaining
+		if elapsed >= 2 {
+			projected := math.Min(100, used/elapsed*100)
+			t.ProjectedEndPct = &projected
+			t.Status = "on_track"
+			if projected < 60 {
+				t.Status = "underutilized"
+			} else if projected >= 95 {
+				t.Status = "hot"
+			}
+		}
+		if used >= 99.9 {
+			t.Status = "exhausted"
+		}
+	} else if elapsed >= 2 {
+		t.Status = "on_track"
+	}
+	return t
 }

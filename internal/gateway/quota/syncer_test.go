@@ -126,6 +126,8 @@ func TestAdditionalProviderQuotas(t *testing.T) {
 		windows             int
 	}{
 		{"kimi-code-cn", "/coding/v1/usages", `{"usage":{"limit":"100","used":"29","resetTime":"2026-10-02T12:58:51Z"},"limits":[{"window":{"duration":300,"timeUnit":"TIME_UNIT_MINUTE"},"detail":{"limit":"100","used":"88"}}]}`, 88, 2},
+		{"kimi-code-cn", "/coding/v1/usages", `{"limits":[{"window":{"duration":300,"timeUnit":"TIME_UNIT_MINUTE"},"detail":{"limit":100}}]}`, 0, 1},
+		{"kimi-code-cn", "/coding/v1/usages", `{"limits":[{"window":{"duration":300,"timeUnit":"TIME_UNIT_MINUTE"},"detail":{"limit":100,"remaining":75}}]}`, 25, 1},
 		{"minimax-cn", "/v1/token_plan/remains", `{"model_remains":[{"model_name":"general","current_interval_total_count":100,"current_interval_usage_count":75,"current_weekly_total_count":100,"current_weekly_usage_count":50}]}`, 25, 2},
 		{"opencode-go", "/zen/go/v1/usage", `{"usage":{"rolling":{"percent":25,"resetsAt":"2026-10-02T12:58:51Z"},"weekly":{"percent":50},"monthly":{"percent":75}}}`, 25, 3},
 		{"zenmux", "/api/v1/management/subscription/detail", `{"success":true,"data":{"plan":{"tier":"ultra"},"quota_5_hour":{"max_flows":800,"used_flows":200},"quota_7_day":{"max_flows":1000,"used_flows":500}}}`, 25, 2},

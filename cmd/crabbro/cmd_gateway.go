@@ -8,7 +8,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/lidessen/crabbro/internal/shared"
@@ -246,8 +248,80 @@ func reorderFlags(fs *flag.FlagSet, args []string) []string {
 
 // gwQuotas implements `crabbro gw quotas <refresh|reset>`.
 func gwQuotas(cfg *clientConfig, args []string) error {
-	if len(args) < 1 {
-		return fmt.Errorf("usage: crabbro gw quotas <refresh|reset>")
+	if len(args) == 0 || args[0] == "trend" || args[0] == "--json" {
+		if len(args) > 0 && args[0] == "trend" {
+			args = args[1:]
+		}
+		fs := flag.NewFlagSet("gw quotas", flag.ContinueOnError)
+		asJSON := fs.Bool("json", false, "JSON output")
+		if err := fs.Parse(args); err != nil {
+			return err
+		}
+		if fs.NArg() != 0 {
+			return fmt.Errorf("unexpected quota arguments")
+		}
+		if *asJSON {
+			return printAPI(cfg, http.MethodGet, "/v1/gateway/plans", nil)
+		}
+		raw, err := gwFetch(cfg, http.MethodGet, "/v1/gateway/plans", nil)
+		if err != nil {
+			return err
+		}
+		var out shared.GatewayPlanListResponse
+		if err := json.Unmarshal(raw, &out); err != nil {
+			return err
+		}
+		tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+		fmt.Fprintln(tw, "PLAN\tWINDOW\tUSED%\tELAPSED%\tPROJECTED%\tRESET IN\tSTATUS\tBALANCE / COUPONS")
+		pct := func(p *float64) string {
+			if p == nil {
+				return "-"
+			}
+			return fmt.Sprintf("%.1f", *p)
+		}
+		for _, p := range out.Plans {
+			if !p.Enabled {
+				continue
+			}
+			q := p.RemoteQuota
+			if q == nil {
+				fmt.Fprintf(tw, "%s\t-\t-\t-\t-\t-\tunknown\t-\n", p.ID)
+				continue
+			}
+			details := q.Balance
+			if q.ResetsRemaining > 0 {
+				details += fmt.Sprintf(" coupons=%d", q.ResetsRemaining)
+				if q.SoonestResetExpiry != nil {
+					details += " expires=" + q.SoonestResetExpiry.Format(time.RFC3339)
+				}
+			}
+			if q.Stale {
+				details += " stale: " + q.LastError
+			}
+			if details == "" {
+				details = "-"
+			}
+			if len(q.Windows) == 0 {
+				fmt.Fprintf(tw, "%s\t-\t-\t-\t-\t-\tunknown\t%s\n", p.ID, details)
+			}
+			for _, w := range q.Windows {
+				elapsed, projected, status, reset := "-", "-", "unknown", "-"
+				if w.Trend != nil {
+					elapsed = fmt.Sprintf("%.1f", w.Trend.ElapsedPct)
+					projected = pct(w.Trend.ProjectedEndPct)
+					status = w.Trend.Status
+				}
+				if w.ResetAt != nil {
+					d := time.Until(*w.ResetAt)
+					if d < 0 {
+						d = 0
+					}
+					reset = d.Round(time.Minute).String()
+				}
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", p.ID, w.Name, pct(w.UsagePct), elapsed, projected, reset, status, details)
+			}
+		}
+		return tw.Flush()
 	}
 	switch args[0] {
 	case "refresh":

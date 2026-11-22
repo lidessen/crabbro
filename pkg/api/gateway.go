@@ -125,11 +125,22 @@ type GatewayWindowUsage struct {
 	Source         string  `json:"source"`
 }
 
+// WindowTrend describes consumption pace within a provider window.
+type WindowTrend struct {
+	WindowHours     float64  `json:"windowHours"`
+	ElapsedPct      float64  `json:"elapsedPct"`
+	ProjectedEndPct *float64 `json:"projectedEndPct,omitempty"`
+	PaceDeltaPct    *float64 `json:"paceDeltaPct,omitempty"`
+	RemainingPct    *float64 `json:"remainingPct,omitempty"`
+	Status          string   `json:"status"`
+}
+
 // RemoteQuotaWindow describes a provider-reported usage window.
 type RemoteQuotaWindow struct {
-	Name     string     `json:"name"`
-	UsagePct *float64   `json:"usagePct,omitempty"`
-	ResetAt  *time.Time `json:"resetAt,omitempty"`
+	Trend    *WindowTrend `json:"trend,omitempty"`
+	Name     string       `json:"name"`
+	UsagePct *float64     `json:"usagePct,omitempty"`
+	ResetAt  *time.Time   `json:"resetAt,omitempty"`
 }
 
 // RemoteResetCoupon describes an available reset coupon. Provider coupon

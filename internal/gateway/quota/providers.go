@@ -125,7 +125,10 @@ func fetchJSON(ctx context.Context, client *http.Client, endpoint, key string, b
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, errors.New("provider request failed")
+		if resp.StatusCode == 401 || resp.StatusCode == 403 {
+			return nil, fmt.Errorf("endpoint requires session auth or rejected credentials (HTTP %d)", resp.StatusCode)
+		}
+		return nil, fmt.Errorf("provider request failed (HTTP %d)", resp.StatusCode)
 	}
 	var m map[string]any
 	dec := json.NewDecoder(io.LimitReader(resp.Body, 1<<20))
@@ -280,7 +283,16 @@ func fetch(ctx context.Context, c *http.Client, p *config.Plan, key string) (Rem
 			duration, _ := number(window["duration"])
 			if duration == 300 && window["timeUnit"] == "TIME_UNIT_MINUTE" {
 				d := object(x["detail"])
-				q.Windows = append([]QuotaWindow{{Name: "5 hours", UsagePct: percent(d["used"], d["limit"]), ResetAt: timestamp(d["resetTime"])}}, q.Windows...)
+				used := d["used"]
+				if used == nil {
+					used = float64(0)
+					if limit, ok := number(d["limit"]); ok {
+						if remaining, ok := number(d["remaining"]); ok && remaining >= 0 && remaining <= limit {
+							used = limit - remaining
+						}
+					}
+				}
+				q.Windows = append([]QuotaWindow{{Name: "5 hours", UsagePct: percent(used, d["limit"]), ResetAt: timestamp(d["resetTime"])}}, q.Windows...)
 			}
 		}
 	case "opencode-go":
