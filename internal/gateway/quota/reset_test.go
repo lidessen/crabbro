@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -149,7 +150,7 @@ func newTestSyncer(t *testing.T) *Syncer {
 	if err := store.Set("zcode_key", "sk-zcode-test"); err != nil {
 		t.Fatal(err)
 	}
-	s := New(store)
+	s := New(store, t.TempDir())
 	s.client = &http.Client{Timeout: 5 * time.Second}
 	return s
 }
@@ -507,6 +508,12 @@ func TestAutoResetDoesNotRetryUnverifiedUse(t *testing.T) {
 	plans := map[string]*config.Plan{"zcode": p}
 	s.AutoReset(context.Background(), plans, "zcode", false)
 	now = now.Add(10 * time.Minute)
+	// Simulate a new process reading the same persistent guard.
+	restarted := New(s.secrets, filepath.Dir(s.resets.stateDir))
+	restarted.client = s.client
+	restarted.SetClock(func() time.Time { return now })
+	restarted.syncPlan(context.Background(), p, false)
+	restarted.AutoReset(context.Background(), plans, "zcode", true)
 	s.AutoReset(context.Background(), plans, "zcode", true)
 	if _, calls := mock.stats(); calls != 1 {
 		t.Fatalf("unverified redemption was retried: %d calls", calls)

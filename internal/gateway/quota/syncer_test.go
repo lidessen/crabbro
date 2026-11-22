@@ -57,7 +57,7 @@ func TestProvidersAndStalePreservation(t *testing.T) {
 		}
 		plans[name] = &config.Plan{ID: name, Credential: name}
 	}
-	s := New(store)
+	s := New(store, t.TempDir())
 	u, _ := url.Parse(server.URL)
 	s.client.Transport = rewriteTransport{u}
 	s.Refresh(context.Background(), plans)

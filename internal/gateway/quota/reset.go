@@ -2,8 +2,12 @@ package quota
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -26,6 +30,7 @@ type resetGate struct {
 	last      map[string]time.Time   // last verified redemption per plan+scope
 	lasting   map[string]time.Time   // last attempt per plan+scope (any outcome)
 	uncertain map[string]bool        // unverified /use result per plan+scope
+	stateDir  string                 // persistent guards for interrupted requests
 }
 
 func newResetGate() *resetGate {
@@ -59,6 +64,21 @@ func (g *resetGate) noteAttempt(planID, scope string, at time.Time) {
 
 // An unverified /use result requires operator reconciliation before another
 // automatic redemption. A timer alone cannot establish whether it succeeded.
+func (g *resetGate) guardPath(planID, scope string) string {
+	sum := sha256.Sum256([]byte(planID + "\x00" + scope))
+	return filepath.Join(g.stateDir, hex.EncodeToString(sum[:]))
+}
+
+func (g *resetGate) persistUncertain(planID, scope string) error {
+	if err := os.MkdirAll(g.stateDir, 0700); err != nil {
+		return errors.New("reset guard unavailable")
+	}
+	if err := os.WriteFile(g.guardPath(planID, scope), []byte("pending\n"), 0600); err != nil {
+		return errors.New("reset guard unavailable")
+	}
+	return nil
+}
+
 func (g *resetGate) noteUncertain(planID, scope string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -68,7 +88,11 @@ func (g *resetGate) noteUncertain(planID, scope string) {
 func (g *resetGate) isUncertain(planID, scope string) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return g.uncertain[planID+"\x00"+scope]
+	if g.uncertain[planID+"\x00"+scope] {
+		return true
+	}
+	_, err := os.Stat(g.guardPath(planID, scope))
+	return err == nil || !errors.Is(err, os.ErrNotExist)
 }
 
 func (g *resetGate) lastRedeem(planID, scope string) (time.Time, bool) {
@@ -302,12 +326,19 @@ func (s *Syncer) redeem(ctx context.Context, p *config.Plan, scope string, dryRu
 	if dryRun {
 		return out, nil
 	}
+	// Record the pending attempt before sending /use, so a restart cannot
+	// turn an unknown outcome into a blind automatic retry.
+	if err := s.resets.persistUncertain(p.ID, pick.scope); err != nil {
+		return out, err
+	}
 	if err := useResetCoupon(ctx, s.client, zcodeBase(p), key, pick); err != nil {
 		s.resets.noteAttempt(p.ID, pick.scope, s.now())
 		s.resets.noteUncertain(p.ID, pick.scope)
 		return out, err
 	}
 	out.Redeemed = true
+	// Failure to remove the guard is safe: subsequent automatic attempts stop.
+	_ = os.Remove(s.resets.guardPath(p.ID, pick.scope))
 	s.resets.noteRedeem(p.ID, pick.scope, s.now())
 	// Immediately refresh remote quota so the plan reflects the reset window.
 	s.syncOne(ctx, p)

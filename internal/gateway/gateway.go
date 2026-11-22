@@ -88,7 +88,7 @@ func New(opt Options, secrets *secret.Store, sink capture.ExchangeSink) (*Gatewa
 	sess := router.NewSessionCacheStore(4096)
 	health := router.NewHealthStore()
 	rtr := router.New(secrets, sess, health, ldg)
-	qs := quota.New(secrets)
+	qs := quota.New(secrets, opt.RootDir)
 	rtr.Quotas = qs
 	exec := executor.New(rtr, secrets, ldg, sink)
 	exec.Bridge = codec.NewBridge()

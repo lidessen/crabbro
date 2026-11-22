@@ -3,6 +3,7 @@ package quota
 import (
 	"context"
 	"net/http"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -27,7 +28,9 @@ type Syncer struct {
 	clock   func() time.Time
 }
 
-func New(secrets *secret.Store) *Syncer {
+func New(secrets *secret.Store, rootDir string) *Syncer {
+	gate := newResetGate()
+	gate.stateDir = filepath.Join(rootDir, "reset-guards")
 	return &Syncer{
 		secrets: secrets,
 		client: &http.Client{
@@ -37,7 +40,7 @@ func New(secrets *secret.Store) *Syncer {
 			},
 		},
 		values: map[string]RemoteQuota{},
-		resets: newResetGate(),
+		resets: gate,
 		clock:  time.Now,
 	}
 }
