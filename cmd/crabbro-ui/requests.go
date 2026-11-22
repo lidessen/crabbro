@@ -516,10 +516,10 @@ func (a *app) detailBody(c *ui.Context, p *palette, d *api.RequestDetailResponse
 	case 1:
 		sides(c, p,
 			func() {
-				a.bodyPane(c, p, "request", "Request body", d.Body, d.Request.RequestHeaders, d.Request.RequestHeaderList)
+				a.bodyPane(c, p, "request", "Request body", d.Body, d.Request.RequestHeaders, d.Request.RequestHeaderList, d.Request.RequestBodyTruncated)
 			},
 			func() {
-				a.bodyPane(c, p, "response", "Response body", d.ResponseBody, d.Request.ResponseHeaders, d.Request.ResponseHeaderList)
+				a.bodyPane(c, p, "response", "Response body", d.ResponseBody, d.Request.ResponseHeaders, d.Request.ResponseHeaderList, d.Request.ResponseBodyTruncated)
 			})
 	case 2:
 		a.ruleTraceSection(c, p, d.Request.RuleTrace)
@@ -582,6 +582,7 @@ type bodyView struct {
 	source      string
 	input       string
 	contentType string
+	truncated   bool
 	formatted   string
 	filename    string
 	lines       int
@@ -592,7 +593,7 @@ var bodyViews = map[string]*bodyView{}
 
 // bodyPane is one side's body in a read-only editor, formatted unless the
 // raw switch is on. Its buffer is kept across frames.
-func (a *app) bodyPane(c *ui.Context, p *palette, key, title string, body *string, headers api.Headers, list []api.HeaderField) {
+func (a *app) bodyPane(c *ui.Context, p *palette, key, title string, body *string, headers api.Headers, list []api.HeaderField, truncated bool) {
 	if body == nil || *body == "" {
 		ui.Text(c, "No body").FontSize(13).TextColor(p.faint)
 		return
@@ -616,14 +617,11 @@ func (a *app) bodyPane(c *ui.Context, p *palette, key, title string, body *strin
 			break
 		}
 	}
-	if v.state == nil || v.input != source || v.contentType != contentType {
-		v.formatted, v.filename = readableBody(source, contentType)
-		v.input, v.contentType = source, contentType
+	if v.state == nil || v.input != source || v.contentType != contentType || v.truncated != truncated {
+		v.formatted, v.filename = readableBody(source, contentType, truncated)
+		v.input, v.contentType, v.truncated = source, contentType, truncated
 	}
-	display, filename := v.formatted, v.filename
-	if bodyRaw {
-		display = source
-	}
+	display, filename := bodyDisplay(source, v.formatted, bodyRaw), v.filename
 	cacheKey := fmt.Sprintf("%t:%s:%s", bodyRaw, filename, display)
 	if v.state == nil || v.source != cacheKey {
 		buf := editor.NewBuffer(display)
@@ -641,16 +639,29 @@ func (a *app) bodyPane(c *ui.Context, p *palette, key, title string, body *strin
 		Background(p.surface).Shadow(0, 1, 2, 0, p.shade()).Clip().Children(func() {
 		editor.View(c.Key("body:"+key), v.state).Fill().MinWidth(0)
 	})
+	if truncated {
+		ui.Text(c, "Body preview truncated").FontSize(11).TextColor(p.muted)
+	}
+}
+
+func bodyDisplay(source, formatted string, raw bool) string {
+	if raw {
+		return source
+	}
+	return formatted
 }
 
 // readableBody formats JSON and HTML without loading or executing content.
 // Raw always retains the captured bytes represented by the API's string.
-func readableBody(source, contentType string) (string, string) {
+func readableBody(source, contentType string, truncated bool) (string, string) {
 	var formatted bytes.Buffer
 	if json.Indent(&formatted, []byte(source), "", "  ") == nil {
 		return formatted.String(), "body.json"
 	}
 	trimmed := strings.TrimSpace(source)
+	if truncated && (strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[")) {
+		return indentJSONPreview(source), "body.json"
+	}
 	if strings.Contains(strings.ToLower(contentType), "html") || strings.HasPrefix(strings.ToLower(trimmed), "<!doctype html") || strings.HasPrefix(strings.ToLower(trimmed), "<html") {
 		z := html.NewTokenizer(strings.NewReader(source))
 		var out strings.Builder
@@ -675,6 +686,65 @@ func readableBody(source, contentType string) (string, string) {
 		return out.String(), "body.html"
 	}
 	return source, "body.txt"
+}
+
+// indentJSONPreview adds structure to an incomplete JSON preview without changing
+// string contents or inventing closing tokens.
+func indentJSONPreview(source string) string {
+	var out strings.Builder
+	depth := 0
+	inString, escaped, lineStart := false, false, true
+	newline := func() { out.WriteByte('\n'); lineStart = true }
+	write := func(b byte) {
+		if lineStart {
+			out.WriteString(strings.Repeat("  ", depth))
+			lineStart = false
+		}
+		out.WriteByte(b)
+	}
+	for i := 0; i < len(source); i++ {
+		b := source[i]
+		if inString {
+			write(b)
+			if escaped {
+				escaped = false
+			} else if b == '\\' {
+				escaped = true
+			} else if b == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch b {
+		case ' ', '\t', '\r', '\n':
+		case '"':
+			write(b)
+			inString = true
+		case '{', '[':
+			write(b)
+			depth++
+			if i+1 < len(source) && source[i+1] != '}' && source[i+1] != ']' {
+				newline()
+			}
+		case '}', ']':
+			if depth > 0 {
+				depth--
+			}
+			if !lineStart && i > 0 && source[i-1] != '{' && source[i-1] != '[' {
+				newline()
+			}
+			write(b)
+		case ',':
+			write(b)
+			newline()
+		case ':':
+			write(b)
+			out.WriteByte(' ')
+		default:
+			write(b)
+		}
+	}
+	return strings.TrimSuffix(out.String(), "\n")
 }
 
 // ruleTraceSection is which rules ran on the exchange and what they did:
