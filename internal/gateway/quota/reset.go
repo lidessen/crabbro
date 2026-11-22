@@ -381,8 +381,15 @@ func (s *Syncer) redeem(ctx context.Context, p *config.Plan, scope string, dryRu
 	if policy != nil && s.cooldownActive(p.ID, scope, minInterval, now) {
 		return out, ErrResetCooldown
 	}
-	key, err := s.secrets.Get(p.Credential)
-	if err != nil || key == "" {
+	var key string
+	for _, ref := range p.CredentialRefs() {
+		value, err := s.secrets.Get(ref)
+		if err == nil && value != "" {
+			key = value
+			break
+		}
+	}
+	if key == "" {
 		return out, errors.New("plan credential is not set")
 	}
 	// Always re-read the coupon list: never redeem from cached state.

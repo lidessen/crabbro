@@ -434,6 +434,11 @@ func (h *HealthStore) RecordOutcome(planID string, failed bool, latencyMs int64)
 
 // Snapshot returns a redacted health view for planID at now.
 func (h *HealthStore) Snapshot(planID string, now time.Time) PlanHealthSnapshot {
+	return h.SnapshotWithCredentials(planID, nil, now)
+}
+
+// SnapshotWithCredentials includes cooldowns when every usable credential is cooling.
+func (h *HealthStore) SnapshotWithCredentials(planID string, refs []string, now time.Time) PlanHealthSnapshot {
 	snap := PlanHealthSnapshot{Healthy: true}
 	if h == nil {
 		return snap
@@ -453,6 +458,23 @@ func (h *HealthStore) Snapshot(planID string, now time.Time) PlanHealthSnapshot 
 		snap.Healthy = false
 		snap.CooldownUntil = &t
 		snap.CooldownScope = st.cooldownScope
+	}
+	if len(refs) > 0 {
+		var earliest time.Time
+		for _, ref := range refs {
+			until := st.keyCool[ref]
+			if !now.Before(until) {
+				return snap
+			}
+			if earliest.IsZero() || until.Before(earliest) {
+				earliest = until
+			}
+		}
+		if snap.CooldownUntil == nil || earliest.After(*snap.CooldownUntil) {
+			snap.CooldownUntil = &earliest
+			snap.CooldownScope = "key"
+		}
+		snap.Healthy = false
 	}
 	return snap
 }

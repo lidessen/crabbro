@@ -293,6 +293,21 @@ func TestExplicitResetDryRunAndRedeemption(t *testing.T) {
 	}
 }
 
+func TestResetSkipsMissingCredential(t *testing.T) {
+	mock := newBigModelMock(t)
+	server := httptest.NewServer(mock)
+	defer server.Close()
+	s := newTestSyncer(t)
+	p := zcodePlan(server.URL, config.AutoResetSpec{})
+	p.Credentials = &config.CredentialPool{Refs: []string{"missing", "zcode_key"}}
+	if _, err := s.Reset(context.Background(), map[string]*config.Plan{p.ID: p}, p.ID, "", true); err != nil {
+		t.Fatalf("reset with later available credential: %v", err)
+	}
+	if mock.auth() != "sk-zcode-test" {
+		t.Fatal("reset did not use the available credential")
+	}
+}
+
 // TestResetWeeklyScopeAndValidation covers explicit scope selection plus the
 // scope/plan guards of the control path.
 func TestResetWeeklyScopeAndValidation(t *testing.T) {

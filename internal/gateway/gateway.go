@@ -487,7 +487,13 @@ func (g *Gateway) Plans() shared.GatewayPlanListResponse {
 			mods = append(mods, k)
 		}
 		sort.Strings(mods)
-		hs := g.Health.Snapshot(id, now)
+		var usableRefs []string
+		for _, ref := range p.CredentialRefs() {
+			if g.Secrets != nil && g.Secrets.Has(ref) {
+				usableRefs = append(usableRefs, ref)
+			}
+		}
+		hs := g.Health.SnapshotWithCredentials(id, usableRefs, now)
 		hasSec := g.Secrets != nil && planHasAnySecret(p, g.Secrets)
 		out = append(out, shared.GatewayPlanStatus{
 			ID:      p.ID,

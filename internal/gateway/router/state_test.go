@@ -173,6 +173,25 @@ func TestHealthStoreCooldownsStoreClassifiedOrOmittedReasons(t *testing.T) {
 
 // Snapshot is the API boundary: even state written directly must come out as
 // either an allowlisted summary or the fixed unclassified marker.
+func TestSnapshotWithCredentialsCooling(t *testing.T) {
+	h := NewHealthStore()
+	now := time.Now()
+	h.EnterKeyCooldown("p", "a", time.Minute, now)
+	if snap := h.SnapshotWithCredentials("p", []string{"a"}, now); snap.Healthy || snap.CooldownUntil == nil || !snap.CooldownUntil.Equal(now.Add(time.Minute)) {
+		t.Fatalf("single key snapshot = %+v", snap)
+	}
+	if snap := h.SnapshotWithCredentials("p", []string{"a", "b"}, now); !snap.Healthy {
+		t.Fatalf("available key snapshot = %+v", snap)
+	}
+	h.EnterKeyCooldown("p", "b", 2*time.Minute, now)
+	if snap := h.SnapshotWithCredentials("p", []string{"a", "b"}, now); snap.Healthy || snap.CooldownUntil == nil || !snap.CooldownUntil.Equal(now.Add(time.Minute)) {
+		t.Fatalf("all keys cooling snapshot = %+v", snap)
+	}
+	if snap := h.SnapshotWithCredentials("p", []string{"a", "b"}, now.Add(time.Minute)); !snap.Healthy {
+		t.Fatalf("expired cooldown snapshot = %+v", snap)
+	}
+}
+
 func TestHealthStoreSnapshotOmitsUnrecognizedDirectState(t *testing.T) {
 	for _, reason := range unsafeReasonSamples() {
 		h := NewHealthStore()
