@@ -246,6 +246,31 @@ func (s *Syncer) syncOne(ctx context.Context, p *config.Plan) {
 	s.syncPlan(ctx, p, true)
 }
 
+// sanitizedSyncError maps one fetch failure onto the snapshot's LastError
+// status. ok=false means the failure is not a sync fault at all (the plan's
+// provider mapping resolved to no quota endpoint): the caller must leave any
+// stored snapshot untouched instead of marking it stale, so a plan without a
+// quota endpoint never degrades routing state. Only the fixed,
+// provider-attributed summaries from providers.go pass the boundary
+// verbatim; everything else collapses to the generic marker.
+func sanitizedSyncError(err error) (string, bool) {
+	if err == nil {
+		return "", true
+	}
+	if err.Error() == "unsupported provider" {
+		return "", false
+	}
+	for _, prefix := range []string{
+		"endpoint requires session auth or rejected credentials (HTTP ",
+		"zenmux key lacks management scope (HTTP ",
+	} {
+		if strings.HasPrefix(err.Error(), prefix) {
+			return err.Error(), true
+		}
+	}
+	return "provider sync failed", true
+}
+
 // syncPlan fetches and stores one plan snapshot; hook controls whether the
 // opt-in auto-reset evaluation is raised afterwards.
 func (s *Syncer) syncPlan(ctx context.Context, p *config.Plan, hook bool) {
@@ -265,12 +290,17 @@ func (s *Syncer) syncPlan(ctx context.Context, p *config.Plan, hook bool) {
 	}
 	s.mu.Lock()
 	if err != nil {
+		status, syncFault := sanitizedSyncError(err)
+		if !syncFault {
+			// No quota endpoint exists for this provider mapping (e.g. the
+			// zenmux-jev relay): it is a configuration fact, not a failed
+			// sync, so keep the previous snapshot as-is.
+			s.mu.Unlock()
+			return
+		}
 		q = s.values[id]
 		q.Stale = true
-		q.LastError = "provider sync failed"
-		if err != nil && strings.HasPrefix(err.Error(), "endpoint requires session auth or rejected credentials (HTTP ") {
-			q.LastError = err.Error()
-		}
+		q.LastError = status
 		if q.SyncedAt != nil {
 			q.SyncSource = "cached"
 		}

@@ -386,6 +386,19 @@ Maps tiers `fast=1`, `strong=2`, `frontier=3` (using `model.codingScore` as fine
 
 Explicit `policy.weights` override individual preset values. Candidates sort descending by `Score` (tie-broken by target `priority`, deterministic `plan/model` ID) to form the ordered **Failover Candidate List** for Stage 7.
 
+##### 4.4.1 Target `weight` bias
+
+Per-target `weight` (route YAML `targets[].weight`, schema range `0..100`) is a bounded additive preference bias on the unified `Total` — not a fifth objective:
+
+```
+weightBias = 2.5 * ln(clamp(weight, 0.01, 100)) / ln(100)
+```
+
+- `weight: 0` (the YAML zero value) or `1` → bias `0.00` (neutral; unset behaves exactly like the default)
+- `weight: 10` → `+1.25`; `weight: 100` → `+2.50`; `weight: 0.1` → `-1.25` (symmetric demotion, floor `-2.50`)
+
+`+2.50` outranks a full `NewUserTurn` cache gravity (≤ `2.0` under `balanced`), so a `weight: 100` target beats a `weight: 1` target even when the low-weight target holds the warm session cache — the intended way to demote expensive fallback targets (e.g. pay-per-token Vercel) without disabling them. A `ToolLoop` cache pin (gravity `10`) still wins, hard constraints still reject before scoring, and a tier mismatch (`-2.25` quality deficit under `balanced`) cannot be flipped by any weight. `strict-failover` routes that order by target `priority` ignore the bias for ordering, like every other score component. The bias is surfaced as the `weight` field of each candidate's `scores` in the `RouteDecision` trace.
+
 #### 4.5 Explainable `RouteDecision` trace example
 
 ```json

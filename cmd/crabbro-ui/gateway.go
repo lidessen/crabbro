@@ -333,13 +333,20 @@ func (a *app) gwPlansCard(c *ui.Context, p *palette, st store) {
 							Padding(2, 7).Radius(6).Background(p.text.Alpha(0.06)).SingleLine()
 					}
 				})
-				if reason := gwSafeReason(pl.LastError); reason != "" {
-					// LastError survives its cooldown and carries no time or
-					// model: label it as the historical reason it is, never
-					// as a live failure of a plan shown as fine. The reason
-					// is sanitized here as well as in the router so raw
-					// snapshot text never reaches the frame.
+				if reason := gwSafeReason(pl.LastError); reason != "" && !pl.Healthy {
+					// LastError is populated only while the plan is
+					// unhealthy: label it the current cooldown reason. The
+					// reason is sanitized here as well as in the router so
+					// raw snapshot text never reaches the frame.
 					ui.Text(c.Key("gw-plan-err:"+pl.ID),
+						fmt.Sprintf("Current cooldown reason: %s", reason)).
+						FontSize(11.5).Font(mono()).TextColor(p.removed).FillWidth()
+				}
+				if reason := gwSafeReason(pl.HistoricalLastError); reason != "" {
+					// HistoricalLastError survives its cooldown and carries
+					// no time or model: label it as the historical reason it
+					// is, never as a live failure of a plan shown as fine.
+					ui.Text(c.Key("gw-plan-hist-err:"+pl.ID),
 						fmt.Sprintf("Last cooldown reason (historical, time & model not reported): %s", reason)).
 						FontSize(11.5).Font(mono()).TextColor(p.removed).FillWidth()
 				}
@@ -353,6 +360,14 @@ func (a *app) gwPlansCard(c *ui.Context, p *palette, st store) {
 					}
 					if q.UsagePct != nil {
 						summary += fmt.Sprintf(" · %.0f%% used", *q.UsagePct)
+					}
+					for _, w := range q.Windows {
+						// Windows whose usage is not a percentage (e.g. a
+						// token pass reporting only remaining credit) surface
+						// their sanitized note instead.
+						if w.Note != "" {
+							summary += " · " + w.Name + " " + w.Note
+						}
 					}
 					summary += fmt.Sprintf(" · %d resets", q.ResetsRemaining)
 					if q.SoonestResetExpiry != nil {

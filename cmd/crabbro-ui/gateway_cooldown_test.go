@@ -41,9 +41,12 @@ func gwFrameApp(t *testing.T, a *app) *ui.Tester {
 	return tt
 }
 
-// gwPlanStore is two plans on an enabled gateway: one out of cooldown that
-// still carries its persistent last cooldown reason, and one cooling. The
-// store reads as one after a successful snapshot: every endpoint answered.
+// gwPlanStore is two plans on an enabled gateway: one healthy that still
+// carries its persistent historical last cooldown reason, and one cooling
+// with its current cooldown reason. The store reads as one after a
+// successful snapshot: every endpoint answered. The fields mirror the API
+// split: LastError only while unhealthy, HistoricalLastError only once
+// healthy again.
 func gwPlanStore(until time.Time) store {
 	return store{
 		conn:          connConnected,
@@ -66,8 +69,10 @@ func gwPlanStore(until time.Time) store {
 				Endpoints:  []string{"anthropic"},
 				Models:     []string{"glm-4.7"},
 				Healthy:    true,
-				// Persistent: it outlives the cooldown it came from.
-				LastError: "429 rate limited",
+				// Persistent: it outlives the cooldown it came from, and the
+				// API reports it on HistoricalLastError once the plan is
+				// healthy again.
+				HistoricalLastError: "429 rate limited",
 			},
 			{
 				ID:            "codex-sub",
@@ -126,10 +131,32 @@ func TestGatewayCoolingPlanShowsRemainingTimeOrItsAbsence(t *testing.T) {
 func TestGatewayLastErrorIsLabeledHistoricalLastCooldownReason(t *testing.T) {
 	tt := gwFrame(t, gwPlanStore(time.Now().Add(90*time.Second)))
 	if !tt.HasText("Last cooldown reason (historical, time & model not reported): 429 rate limited") {
-		t.Error("LastError should be labeled as the historical last cooldown reason, with time and model said to be unreported")
+		t.Error("HistoricalLastError should be labeled as the historical last cooldown reason, with time and model said to be unreported")
 	}
 	if !tt.HasText("Plan not cooling") {
 		t.Error("the labeled historical reason should still sit beside the plan that is not cooling")
+	}
+}
+
+// A cooling plan's LastError is the current cooldown reason: it must be
+// labeled as current, never as historical, and both labeled kinds can appear
+// side by side exactly once each.
+func TestGatewayCoolingPlanLabelsCurrentCooldownReason(t *testing.T) {
+	tt := gwFrame(t, gwPlanStore(time.Now().Add(90*time.Second)))
+	if !tt.HasText("Current cooldown reason: quota exhausted") {
+		t.Error("a cooling plan's LastError should be labeled as the current cooldown reason")
+	}
+	current, historical := 0, 0
+	for _, text := range tt.Texts() {
+		switch {
+		case strings.HasPrefix(text, "Current cooldown reason"):
+			current++
+		case strings.HasPrefix(text, "Last cooldown reason"):
+			historical++
+		}
+	}
+	if current != 1 || historical != 1 {
+		t.Errorf("rendered %d current and %d historical reason lines, want 1 of each", current, historical)
 	}
 }
 
@@ -178,16 +205,6 @@ func TestGatewayPlansCardDistinguishesOffFromNoneConfigured(t *testing.T) {
 	}
 }
 
-// gwLastReasonText returns the rendered historical reason line, if any.
-func gwLastReasonText(tt *ui.Tester) string {
-	for _, text := range tt.Texts() {
-		if strings.HasPrefix(text, "Last cooldown reason") {
-			return text
-		}
-	}
-	return ""
-}
-
 // gwUnsafeReason is shaped like an upstream body: an HTML dump with a private
 // response, credential parameters, odd key prefixes, a fake API key, a Bearer
 // token, an email, query tokens, newlines, and a large payload.
@@ -199,11 +216,12 @@ func gwUnsafeReason() string {
 }
 
 // The UI boundary allows only the classifier's fixed summaries. A plan status
-// answer carrying raw LastError text must render the fixed unclassified marker
-// and never echo any body, credential, email, URL, or prompt fragment.
+// answer carrying raw error text — current or historical — must render the
+// fixed unclassified marker and never echo any body, credential, email, URL,
+// or prompt fragment.
 func TestGatewayPlansCardRejectsUnrecognizedLastErrorAtBoundary(t *testing.T) {
 	st := gwPlanStore(time.Now().Add(90 * time.Second))
-	st.gwPlans[0].LastError = strings.Join([]string{
+	st.gwPlans[0].HistoricalLastError = strings.Join([]string{
 		"<body>private response</body>",
 		"?credential=example-secret",
 		"xsk-example",
@@ -214,8 +232,9 @@ func TestGatewayPlansCardRejectsUnrecognizedLastErrorAtBoundary(t *testing.T) {
 	st.gwPlans[1].LastError = gwUnsafeReason()
 
 	tt := gwFrame(t, st)
-	want := "Last cooldown reason (historical, time & model not reported): " + gwUnclassifiedReason
-	reasons := 0
+	wantHistorical := "Last cooldown reason (historical, time & model not reported): " + gwUnclassifiedReason
+	wantCurrent := "Current cooldown reason: " + gwUnclassifiedReason
+	current, historical := 0, 0
 	for _, text := range tt.Texts() {
 		for _, banned := range []string{
 			"private response", "credential=example-secret", "xsk-example",
@@ -232,19 +251,27 @@ func TestGatewayPlansCardRejectsUnrecognizedLastErrorAtBoundary(t *testing.T) {
 				t.Errorf("rendered text %q contains control character %U", text, r)
 			}
 		}
-		if !strings.HasPrefix(text, "Last cooldown reason") {
-			continue
-		}
-		reasons++
-		if text != want {
-			t.Errorf("rendered reason = %q, want %q", text, want)
-		}
-		if n := utf8.RuneCountInString(text); n > 200 {
-			t.Errorf("rendered reason is %d runes, want a bounded display: %q", n, text)
+		switch {
+		case strings.HasPrefix(text, "Current cooldown reason"):
+			current++
+			if text != wantCurrent {
+				t.Errorf("rendered current reason = %q, want %q", text, wantCurrent)
+			}
+			if n := utf8.RuneCountInString(text); n > 200 {
+				t.Errorf("rendered current reason is %d runes, want a bounded display: %q", n, text)
+			}
+		case strings.HasPrefix(text, "Last cooldown reason"):
+			historical++
+			if text != wantHistorical {
+				t.Errorf("rendered historical reason = %q, want %q", text, wantHistorical)
+			}
+			if n := utf8.RuneCountInString(text); n > 200 {
+				t.Errorf("rendered historical reason is %d runes, want a bounded display: %q", n, text)
+			}
 		}
 	}
-	if reasons != len(st.gwPlans) {
-		t.Errorf("rendered %d historical reason lines, want %d", reasons, len(st.gwPlans))
+	if current != 1 || historical != 1 {
+		t.Errorf("rendered %d current and %d historical reason lines, want 1 of each", current, historical)
 	}
 }
 
@@ -296,15 +323,19 @@ func TestGatewaySafeReasonAllowsOnlyClassifiedSummaries(t *testing.T) {
 	}
 }
 
-// A reason that sanitizes to nothing must not render an empty labeled line.
+// A reason that sanitizes to nothing must not render an empty labeled line,
+// on either the current or the historical field.
 func TestGatewayPlansCardSkipsBlankLastError(t *testing.T) {
 	st := gwPlanStore(time.Now().Add(90 * time.Second))
 	for i := range st.gwPlans {
 		st.gwPlans[i].LastError = " \n\t\x00 "
+		st.gwPlans[i].HistoricalLastError = " \n\t\x00 "
 	}
 	tt := gwFrame(t, st)
-	if reason := gwLastReasonText(tt); reason != "" {
-		t.Errorf("blank LastError should not render a reason line, got %q", reason)
+	for _, text := range tt.Texts() {
+		if strings.HasPrefix(text, "Current cooldown reason") || strings.HasPrefix(text, "Last cooldown reason") {
+			t.Errorf("blank reasons should not render a reason line, got %q", text)
+		}
 	}
 }
 
@@ -318,5 +349,22 @@ func TestGatewayRemoteQuotaSummary(t *testing.T) {
 	}
 	if !tt.HasText("Refresh quotas") {
 		t.Fatal("refresh action missing")
+	}
+}
+
+// A window whose usage is not a percentage (a token pass reporting only its
+// remaining credit) surfaces its sanitized note in the summary instead.
+func TestGatewayRemoteQuotaSummaryShowsWindowNote(t *testing.T) {
+	st := gwPlanStore(time.Now().Add(time.Minute))
+	usage := 25.0
+	st.gwPlans[0].RemoteQuota = &api.RemoteQuotaJSON{
+		Balance:         "$17.66",
+		UsagePct:        &usage,
+		ResetsRemaining: 2,
+		Windows:         []api.RemoteQuotaWindow{{Name: "Token Pass", Note: "$70.62 remaining"}},
+	}
+	tt := gwFrame(t, st)
+	if !tt.HasText("Remote quota · $17.66 · 25% used · Token Pass $70.62 remaining · 2 resets") {
+		t.Fatal("remote quota summary should surface the token pass note")
 	}
 }

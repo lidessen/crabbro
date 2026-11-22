@@ -23,6 +23,7 @@ type CandidateScores struct {
 	Quota    float64 `json:"quota"`
 	Protocol float64 `json:"protocol"`
 	Priority float64 `json:"priority,omitempty"`
+	Weight   float64 `json:"weight,omitempty"`
 	Health   float64 `json:"health"`
 	Total    float64 `json:"total"`
 }
@@ -135,11 +136,14 @@ type WindowTrend struct {
 	Status          string   `json:"status"`
 }
 
-// RemoteQuotaWindow describes a provider-reported usage window.
+// RemoteQuotaWindow describes a provider-reported usage window. Note carries
+// a sanitized provider remark for windows whose usage cannot be reduced to a
+// percentage (e.g. a Vercel token pass reporting only remaining credit).
 type RemoteQuotaWindow struct {
 	Trend    *WindowTrend `json:"trend,omitempty"`
 	Name     string       `json:"name"`
 	UsagePct *float64     `json:"usagePct,omitempty"`
+	Note     string       `json:"note,omitempty"`
 	ResetAt  *time.Time   `json:"resetAt,omitempty"`
 }
 

@@ -50,8 +50,16 @@ func cmdGateway(cfg *clientConfig, args []string) error {
 				if !p.Healthy {
 					health = "unhealthy"
 				}
-				if p.CooldownUntil != nil && p.CooldownUntil.After(time.Now()) {
-					health = fmt.Sprintf("cooling(%s, %s remaining)", p.CooldownScope, time.Until(*p.CooldownUntil).Round(time.Second))
+				if p.CooldownUntil != nil && !p.Healthy {
+					if p.CooldownUntil.After(time.Now()) {
+						health = fmt.Sprintf("cooling(%s, %s remaining)", p.CooldownScope, time.Until(*p.CooldownUntil).Round(time.Second))
+					} else {
+						// The reported cooldown already closed: the snapshot
+						// is older than its own cooldown, so say that
+						// instead of implying a still-open window.
+						health = fmt.Sprintf("unhealthy (cooldown ended %s ago as last reported; state not refreshed)",
+							time.Since(*p.CooldownUntil).Round(time.Second))
+					}
 				}
 				sec := "missing"
 				if p.HasSecret {
@@ -70,7 +78,7 @@ func cmdGateway(cfg *clientConfig, args []string) error {
 					fmt.Printf("  error: %s\n", p.LastError)
 				}
 				if p.HistoricalLastError != "" {
-					fmt.Printf("  historical error: %s\n", p.HistoricalLastError)
+					fmt.Printf("  historical error: %s (time & model not reported)\n", p.HistoricalLastError)
 				}
 				fmt.Printf("  direct: %s\n", direct)
 				if ar := p.AutoReset; ar != nil {
@@ -94,6 +102,8 @@ func cmdGateway(cfg *clientConfig, args []string) error {
 					for _, w := range q.Windows {
 						if w.UsagePct != nil {
 							fmt.Printf("  remote window %s used=%.0f%%\n", w.Name, *w.UsagePct)
+						} else if w.Note != "" {
+							fmt.Printf("  remote window %s %s\n", w.Name, w.Note)
 						}
 					}
 				}
@@ -211,9 +221,9 @@ func cmdGateway(cfg *clientConfig, args []string) error {
 		if out.Decision != nil {
 			fmt.Printf("  resolution=%s\n", out.Decision.Resolution)
 			for _, c := range out.Decision.Candidates {
-				fmt.Printf("  %-18s model=%-22s protocol=%-14s eligible=%t total=%.3f (Q=%.2f C=%.2f U=%.2f P=%.2f H=%.2f) %s\n",
+				fmt.Printf("  %-18s model=%-22s protocol=%-14s eligible=%t total=%.3f (Q=%.2f C=%.2f U=%.2f P=%.2f W=%.2f H=%.2f) %s\n",
 					c.Plan, c.Model, c.Protocol, c.Eligible, c.Scores.Total,
-					c.Scores.Quality, c.Scores.Cache, c.Scores.Quota, c.Scores.Protocol, c.Scores.Health, c.RejectReason)
+					c.Scores.Quality, c.Scores.Cache, c.Scores.Quota, c.Scores.Protocol, c.Scores.Weight, c.Scores.Health, c.RejectReason)
 			}
 		}
 		return nil
@@ -400,6 +410,8 @@ func gatewayQuotas(cfg *clientConfig, args []string) error {
 			for _, w := range q.RemoteQuota.Windows {
 				if w.UsagePct != nil {
 					fmt.Printf("  remote window %s used=%.0f%%\n", w.Name, *w.UsagePct)
+				} else if w.Note != "" {
+					fmt.Printf("  remote window %s %s\n", w.Name, w.Note)
 				}
 			}
 		}

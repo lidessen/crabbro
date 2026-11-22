@@ -85,8 +85,22 @@ func percent(used, cap any) *float64 {
 	n := math.Min(100, u/c*100)
 	return &n
 }
+
+// providerNoQuota lists plan-name fragments that must never resolve to a
+// quota provider. "zenmux-jev" is a Jev-protocol relay whose key
+// (zenmux_jev_api_key) has no Zenmux management scope: substring-matching it
+// as "zenmux" would drive a guaranteed-403 request against the management
+// subscription endpoint on every sync and mark the plan stale. Plans without
+// a provider are skipped by the syncer instead.
+var providerNoQuota = []string{"zenmux-jev"}
+
 func provider(p *config.Plan) string {
 	s := strings.ToLower(p.ID + " " + p.Credential)
+	for _, n := range providerNoQuota {
+		if strings.Contains(s, n) {
+			return ""
+		}
+	}
 	for _, n := range []string{"zcode", "commandcode", "vercel", "deepseek", "kimi-code-cn", "minimax-cn", "opencode-go", "zenmux"} {
 		if strings.Contains(s, n) {
 			return n
@@ -148,6 +162,15 @@ func envelope(m map[string]any) (map[string]any, error) {
 	}
 	return d, nil
 }
+
+// MiniMax token-plan endpoints (mirroring the opencode-minimax-auth
+// reference): remains_percent is primary; older deployments only serve the
+// legacy coding_plan document with count fields.
+const (
+	minimaxRemainsPercent = "https://www.minimaxi.com/backend/account/token_plan/remains_percent"
+	minimaxLegacyRemains  = "https://www.minimaxi.com/v1/api/openplatform/coding_plan/remains"
+)
+
 func fetch(ctx context.Context, c *http.Client, p *config.Plan, key string) (RemoteQuota, error) {
 	var q RemoteQuota
 	kind := provider(p)
@@ -164,7 +187,7 @@ func fetch(ctx context.Context, c *http.Client, p *config.Plan, key string) (Rem
 	case "kimi-code-cn":
 		endpoint = "https://api.kimi.com/coding/v1/usages"
 	case "minimax-cn":
-		endpoint = "https://www.minimaxi.com/v1/token_plan/remains"
+		endpoint = minimaxRemainsPercent
 	case "opencode-go":
 		endpoint = "https://opencode.ai/zen/go/v1/usage"
 	case "zenmux":
@@ -176,6 +199,21 @@ func fetch(ctx context.Context, c *http.Client, p *config.Plan, key string) (Rem
 		endpoint += "/api/monitor/usage/quota/limit"
 	}
 	m, e := fetchJSON(ctx, c, endpoint, key, kind != "zcode")
+	if e != nil {
+		if kind == "zenmux" && strings.Contains(e.Error(), "(HTTP 403)") {
+			// The management subscription endpoint answers a normal
+			// (non-management) key with 403; name the scope gap so the
+			// surfaced status says what actually failed.
+			return q, errors.New("zenmux key lacks management scope (HTTP 403)")
+		}
+		if kind == "minimax-cn" {
+			// The remains_percent document is absent on older deployments
+			// that only serve the legacy coding_plan counts document.
+			if legacy, e2 := fetchJSON(ctx, c, minimaxLegacyRemains, key, true); e2 == nil {
+				m, e = legacy, nil
+			}
+		}
+	}
 	if e != nil {
 		return q, e
 	}
@@ -263,15 +301,38 @@ func fetch(ctx context.Context, c *http.Client, p *config.Plan, key string) (Rem
 			q.Balance = safe(fmt.Sprintf("%.2f credits", total))
 		}
 	case "vercel":
-		v, ok := number(m["balance"])
-		tp := object(m["token_pass"])
-		if !ok {
-			v, ok = number(tp["remaining"])
-		}
-		if ok && v >= 0 && v < 1e12 {
+		// m["balance"] is the cash balance; the token pass is a separate
+		// prepaid allowance. Both can coexist, and the token pass must not
+		// be dropped just because a balance exists.
+		if v, ok := number(m["balance"]); ok && v >= 0 && v < 1e12 {
 			q.Balance = safe(fmt.Sprintf("$%.2f", v))
 		}
-		q.ResetAt = timestamp(tp["resets_at"])
+		if tp := object(m["token_pass"]); tp != nil {
+			w := QuotaWindow{Name: "Token Pass", ResetAt: timestamp(tp["resets_at"])}
+			// Usage percentage, most exact first: explicit used/limit,
+			// then limit-remaining, and when the payload reports only the
+			// remaining credit, surface it as a sanitized note instead of
+			// guessing a percentage or overwriting the cash Balance.
+			if used, ok := number(tp["used"]); ok {
+				w.UsagePct = percent(used, tp["limit"])
+			}
+			if w.UsagePct == nil {
+				if limit, ok := number(tp["limit"]); ok && limit > 0 {
+					if rem, ok2 := number(tp["remaining"]); ok2 && rem >= 0 && rem <= limit {
+						w.UsagePct = percent(limit-rem, limit)
+					}
+				}
+			}
+			if w.UsagePct == nil {
+				if rem, ok := number(tp["remaining"]); ok && rem >= 0 && rem < 1e12 {
+					w.Note = safe(fmt.Sprintf("$%.2f remaining", rem))
+				}
+			}
+			q.Windows = append(q.Windows, w)
+			if q.ResetAt == nil {
+				q.ResetAt = w.ResetAt
+			}
+		}
 	case "kimi-code-cn":
 		if x := object(m["usage"]); x != nil {
 			q.Windows = append(q.Windows, QuotaWindow{Name: "Weekly", UsagePct: percent(x["used"], x["limit"]), ResetAt: timestamp(x["resetTime"])})
@@ -305,20 +366,13 @@ func fetch(ctx context.Context, c *http.Client, p *config.Plan, key string) (Rem
 			}
 		}
 	case "minimax-cn":
-		rows, _ := m["model_remains"].([]any)
-		for _, row := range rows {
-			x := object(row)
-			if x["model_name"] != "general" {
-				continue
+		if parseMiniMaxQuota(&q, m) == 0 {
+			// A successful remains_percent answer that yields no windows
+			// may still be a shape mismatch: try the legacy counts
+			// document before declaring the response invalid.
+			if legacy, e2 := fetchJSON(ctx, c, minimaxLegacyRemains, key, true); e2 == nil {
+				parseMiniMaxQuota(&q, legacy)
 			}
-			for _, entry := range []struct{ prefix, name string }{{"current_interval", "5 hours"}, {"current_weekly", "Weekly"}} {
-				total, ok := number(x[entry.prefix+"_total_count"])
-				remaining, ok2 := number(x[entry.prefix+"_usage_count"])
-				if ok && ok2 && total > 0 && remaining >= 0 && remaining <= total {
-					q.Windows = append(q.Windows, QuotaWindow{Name: entry.name, UsagePct: percent(total-remaining, total)})
-				}
-			}
-			break
 		}
 	case "zenmux":
 		if m["success"] != true {
@@ -359,4 +413,67 @@ func fetch(ctx context.Context, c *http.Client, p *config.Plan, key string) (Rem
 		}
 	}
 	return q, nil
+}
+
+// flexStamp parses provider timestamps that may be epoch milliseconds,
+// RFC3339 strings, or naive "2006-01-02 15:04:05" wall-clock strings
+// reported in Asia/Shanghai (the zone MiniMax reports without a designator).
+func flexStamp(v any) *time.Time {
+	if s, ok := v.(string); ok {
+		if t := shanghaiStamp(s); t != nil {
+			return t
+		}
+	}
+	return timestamp(v)
+}
+
+// parseMiniMaxQuota reads one MiniMax token-plan document into quota windows
+// and reports how many windows were parsed. Both endpoint shapes carry a
+// model_remains[] row for the "general" plan; the remains_percent document
+// reports current_interval_/current_weekly_ {used,total,remaining}_percent
+// plus end_time/weekly_end_time reset stamps, while the legacy coding_plan
+// document reports the same windows as total_count/usage_count pairs
+// (usage_count being the still-remaining count). Each window prefers the
+// percentage triple and falls back to the legacy counts.
+func parseMiniMaxQuota(q *RemoteQuota, m map[string]any) int {
+	rows, _ := m["model_remains"].([]any)
+	parsed := 0
+	for _, row := range rows {
+		x := object(row)
+		if x["model_name"] != "general" {
+			continue
+		}
+		for _, entry := range []struct{ prefix, resetKey, name string }{
+			{"current_interval", "end_time", "5 hours"},
+			{"current_weekly", "weekly_end_time", "Weekly"},
+		} {
+			var pct *float64
+			if v, ok := number(x[entry.prefix+"_used_percent"]); ok && v >= 0 && v <= 100 {
+				pct = &v
+			}
+			if pct == nil {
+				total, okT := number(x[entry.prefix+"_total_percent"])
+				rem, okR := number(x[entry.prefix+"_remaining_percent"])
+				if okT && okR && total > 0 && rem >= 0 {
+					if p := percent(total-rem, total); p != nil {
+						pct = p
+					}
+				}
+			}
+			if pct == nil {
+				total, okT := number(x[entry.prefix+"_total_count"])
+				remaining, okR := number(x[entry.prefix+"_usage_count"])
+				if okT && okR && total > 0 && remaining >= 0 && remaining <= total {
+					pct = percent(total-remaining, total)
+				}
+			}
+			if pct == nil {
+				continue
+			}
+			q.Windows = append(q.Windows, QuotaWindow{Name: entry.name, UsagePct: pct, ResetAt: flexStamp(x[entry.resetKey])})
+			parsed++
+		}
+		break
+	}
+	return parsed
 }

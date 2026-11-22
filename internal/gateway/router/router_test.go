@@ -2,6 +2,7 @@ package router
 
 import (
 	"context"
+	"math"
 	"path/filepath"
 	"testing"
 	"time"
@@ -337,5 +338,136 @@ func TestUnderutilizedWindowBoost(t *testing.T) {
 	}
 	if sel.Candidates[0].Plan.ID != "glm-coding" {
 		t.Fatalf("window did not win: %+v", sel.Decision.Candidates)
+	}
+}
+
+// The documented target-weight formula: zero-value and 1 are neutral, the
+// bias is logarithmic and clamped to [-2.5, +2.5] on the schema's 0..100
+// range, and NaN cannot leak into scores.
+func TestTargetWeightBiasFormula(t *testing.T) {
+	for _, tt := range []struct {
+		w, want float64
+	}{
+		{0, 0},
+		{1, 0},
+		{10, 1.25},
+		{100, 2.5},
+		{0.1, -1.25},
+		{0.01, -2.5},
+		{0.000001, -2.5}, // clamped at the floor
+		{1000, 2.5},      // clamped at the ceiling
+		{-5, 0},          // negative behaves like unset
+		{math.NaN(), 0},  // NaN never reaches Total
+	} {
+		if got := targetWeightBias(tt.w); math.Abs(got-tt.want) > 1e-9 {
+			t.Errorf("targetWeightBias(%v) = %v, want %v", tt.w, got, tt.want)
+		}
+	}
+}
+
+// Two otherwise-identical targets are separated by exactly the documented
+// weight bias: weight 10 beats weight 1 by +1.25, and the bias is surfaced
+// as the candidate's Weight score component.
+func TestTargetWeightDemotesLowWeightFallback(t *testing.T) {
+	r, snap, _, _ := setupRouterFixture(t)
+	now := time.Now().UTC()
+	r.Now = func() time.Time { return now }
+	snap.Routes[0].Targets = []config.Target{
+		{Plan: "kimi-coding", Model: "kimi-k2.5", Priority: 10, Weight: 10},
+		{Plan: "glm-coding", Model: "glm-4.7", Priority: 10, Weight: 1},
+	}
+	sig := ExtractSignals("", config.ProtocolAnthropic, config.FamilyGenerative, "coding-main", "", []byte(`{"model":"coding-main","messages":[{"role":"user","content":"hello"}]}`))
+	sel, err := r.Select(context.Background(), snap, sig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sel.Candidates[0].Plan.ID != "kimi-coding" {
+		t.Fatalf("weight-10 target lost to weight-1: %+v", sel.Decision.Candidates)
+	}
+	if math.Abs(sel.Candidates[0].Scores.Weight-1.25) > 1e-9 || sel.Candidates[1].Scores.Weight != 0 {
+		t.Fatalf("weight components = %v/%v, want 1.25/0", sel.Candidates[0].Scores.Weight, sel.Candidates[1].Scores.Weight)
+	}
+	if diff := sel.Candidates[0].Scores.Total - sel.Candidates[1].Scores.Total; math.Abs(diff-1.25) > 1e-6 {
+		t.Fatalf("total difference = %v, want exactly the +1.25 weight bias", diff)
+	}
+
+	// Zero-value weight is neutral: it scores exactly like the explicit 1,
+	// leaving the deterministic plan-ID tie-break in charge.
+	snap.Routes[0].Targets[0].Weight = 0
+	sel, err = r.Select(context.Background(), snap, sig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := sel.Candidates[0].Scores.Total - sel.Candidates[1].Scores.Total; math.Abs(d) > 1e-9 {
+		t.Fatalf("zero-value weight must be neutral like weight 1, total difference = %v", d)
+	}
+
+	// Weight 10 beats the zero-value default exactly like it beat weight 1.
+	snap.Routes[0].Targets[0].Weight = 10
+	sel, err = r.Select(context.Background(), snap, sig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sel.Candidates[0].Plan.ID != "kimi-coding" {
+		t.Fatalf("weight-10 target lost to unset-weight target: %+v", sel.Decision.Candidates)
+	}
+	if d := sel.Candidates[0].Scores.Total - sel.Candidates[1].Scores.Total; math.Abs(d-1.25) > 1e-6 {
+		t.Fatalf("total difference = %v, want the +1.25 weight bias over a neutral target", d)
+	}
+}
+
+// The whole point of weight: a highly weighted target wins even under warm
+// session cache stickiness on the low-weight target, while without weights
+// the same warm session keeps routing to itself. A ToolLoop pin still wins.
+func TestTargetWeightOverridesCacheStickiness(t *testing.T) {
+	r, snap, _, _ := setupRouterFixture(t)
+	now := time.Date(2026, 11, 19, 10, 30, 0, 0, time.UTC)
+	r.Now = func() time.Time { return now }
+	r.Sessions.Update(SessionCacheEntry{
+		SessionKey:       "ses_weight",
+		LastPlan:         "kimi-coding",
+		LastModel:        "kimi-k2.5",
+		WarmPrefixTokens: 50000,
+		LastSuccessAt:    now.Add(-30 * time.Second),
+	})
+	body := []byte(`{"model":"coding-main","messages":[{"role":"user","content":"first"},{"role":"assistant","content":"ok"},{"role":"user","content":"next step"}]}`)
+
+	// Baseline: no weights, the warm kimi session keeps kimi first.
+	sel, err := r.Select(context.Background(), snap, ExtractSignals("", config.ProtocolAnthropic, config.FamilyGenerative, "coding-main", "ses_weight", body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sel.Candidates[0].Plan.ID != "kimi-coding" {
+		t.Fatalf("baseline lost warm-cache stickiness: %+v", sel.Decision.Candidates)
+	}
+
+	// glm at weight 100 (+2.50) outranks the warm kimi cache gravity
+	// (overlap 1.0 * freshness 0.9 * cache weight 2.0 = 1.80).
+	snap.Routes[0].Targets = []config.Target{
+		{Plan: "kimi-coding", Model: "kimi-k2.5", Priority: 10},
+		{Plan: "glm-coding", Model: "glm-4.7", Priority: 20, Weight: 100},
+	}
+	sel, err = r.Select(context.Background(), snap, ExtractSignals("", config.ProtocolAnthropic, config.FamilyGenerative, "coding-main", "ses_weight", body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sel.Candidates[0].Plan.ID != "glm-coding" {
+		t.Fatalf("weight-100 target failed to beat warm cache stickiness: %+v", sel.Decision.Candidates)
+	}
+	if sel.Candidates[0].Scores.Weight != 2.5 {
+		t.Fatalf("weight component = %v, want 2.5", sel.Candidates[0].Scores.Weight)
+	}
+	if sel.Candidates[1].Scores.Cache <= 0 {
+		t.Fatalf("warm candidate cache score = %v, want the sticky cache to still be scored", sel.Candidates[1].Scores.Cache)
+	}
+
+	// A ToolLoop pin (gravity 10) still outranks any weight bias.
+	toolBody := []byte(`{"model":"coding-main","messages":[{"role":"user","content":"edit"},{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}]}`)
+	sel, err = r.Select(context.Background(), snap, ExtractSignals("", config.ProtocolAnthropic, config.FamilyGenerative, "coding-main", "ses_weight", toolBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sel.Candidates[0].Plan.ID != "kimi-coding" {
+		t.Fatalf("ToolLoop pin must survive target weights: %+v", sel.Decision.Candidates)
 	}
 }
