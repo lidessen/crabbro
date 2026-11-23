@@ -89,6 +89,15 @@ func (b *Bridge) BuildUpstreamBody(cand router.Candidate, ingress IngressInfo, r
 		if decErr != nil {
 			return nil, nil, decErr
 		}
+		if ingress.Protocol == config.ProtocolTypeSafeJev {
+			_, _, hasImage, imageErr := decisionImage(dreq)
+			if imageErr != nil {
+				return nil, nil, imageErr
+			}
+			if hasImage && cand.EndpointProto != config.ProtocolOpenAIDecisions && cand.EndpointProto != config.ProtocolGeminiDecisions {
+				return nil, nil, fmt.Errorf("image decision translation unsupported for %q", cand.EndpointProto)
+			}
+		}
 		st.origDecisionReq = dreq
 		if config.ProtocolFamily(cand.EndpointProto) == config.FamilyDecision {
 			copyReq := *dreq
@@ -159,6 +168,12 @@ func (b *Bridge) TranslateResponse(cand router.Candidate, ingress IngressInfo, s
 		}
 		h := make(http.Header)
 		h.Set("Content-Type", "application/json")
+		// This gateway-generated marker means the referenced PNG was validated and
+		// encoded into a supported translated decision request; it does not attest
+		// that the upstream model understood or used the image.
+		if _, _, hasImage, imageErr := decisionImage(st.origDecisionReq); imageErr == nil && hasImage && st.ingressProto == config.ProtocolTypeSafeJev && (cand.EndpointProto == config.ProtocolOpenAIDecisions || cand.EndpointProto == config.ProtocolGeminiDecisions) {
+			h.Set("X-Crabbro-Decision-Images", "preserved")
+		}
 		return status, h, out, dresp.Usage, err
 	}
 	upCodec, err := codecFor(cand.EndpointProto)

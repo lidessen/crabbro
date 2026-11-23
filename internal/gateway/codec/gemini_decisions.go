@@ -60,6 +60,10 @@ func EncodeGeminiDecisionRequest(req *ir.DecisionRequest, model string) ([]byte,
 	if req == nil {
 		return nil, fmt.Errorf("decision request is nil")
 	}
+	text, image, hasImage, err := decisionImage(req)
+	if err != nil {
+		return nil, err
+	}
 	input, ok := req.State.(string)
 	if !ok {
 		b, err := json.Marshal(req.State)
@@ -67,6 +71,10 @@ func EncodeGeminiDecisionRequest(req *ir.DecisionRequest, model string) ([]byte,
 			return nil, err
 		}
 		input = string(b)
+	}
+	var wireInput any = input
+	if hasImage {
+		wireInput = []any{map[string]any{"type": "text", "text": text}, map[string]any{"type": "image", "data": image, "mime_type": "image/png"}}
 	}
 	questions := make(map[string]geminiDecisionQuestion, len(req.Questions))
 	for name, q := range req.Questions {
@@ -93,9 +101,9 @@ func EncodeGeminiDecisionRequest(req *ir.DecisionRequest, model string) ([]byte,
 	}
 	return json.Marshal(struct {
 		Model     string                            `json:"model"`
-		Input     string                            `json:"input"`
+		Input     any                               `json:"input"`
 		Questions map[string]geminiDecisionQuestion `json:"questions"`
-	}{model, input, questions})
+	}{model, wireInput, questions})
 }
 
 func DecodeGeminiDecisionResponse(body []byte, orig *ir.DecisionRequest, model string) (*ir.DecisionResponse, error) {

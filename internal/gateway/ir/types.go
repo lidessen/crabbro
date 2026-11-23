@@ -124,9 +124,17 @@ type DecisionQuestion struct {
 }
 
 // DecisionRequest represents a TypeSafe System One (/v1/systemone) request.
+type DecisionAsset struct {
+	Type       string `json:"type"`
+	Format     string `json:"format"`
+	DataBase64 string `json:"data_base64"`
+}
+
+// DecisionRequest represents a TypeSafe System One (/v1/systemone) request.
 type DecisionRequest struct {
 	Model          string                      `json:"model"`
 	State          any                         `json:"state"`
+	Assets         map[string]DecisionAsset    `json:"assets,omitempty"`
 	PromptCacheKey string                      `json:"prompt_cache_key,omitempty"`
 	Questions      map[string]DecisionQuestion `json:"questions"`
 }

@@ -170,6 +170,10 @@ func EncodeOpenAIDecisionsRequest(req *ir.DecisionRequest) ([]byte, error) {
 	if req == nil {
 		return nil, fmt.Errorf("decision request is nil")
 	}
+	text, image, hasImage, err := decisionImage(req)
+	if err != nil {
+		return nil, err
+	}
 	input := req.State
 	if _, ok := input.(string); !ok {
 		b, err := json.Marshal(input)
@@ -177,6 +181,9 @@ func EncodeOpenAIDecisionsRequest(req *ir.DecisionRequest) ([]byte, error) {
 			return nil, err
 		}
 		input = string(b)
+	}
+	if hasImage {
+		input = []any{map[string]any{"role": "user", "content": []any{map[string]any{"type": "input_text", "text": "UI state:\n" + text}, map[string]any{"type": "input_image", "image_url": "data:image/png;base64," + image}}}}
 	}
 	w := decisionWireRequest{Model: req.Model, Input: input, PromptCacheKey: req.PromptCacheKey}
 	keys := make([]string, 0, len(req.Questions))

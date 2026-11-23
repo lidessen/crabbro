@@ -471,6 +471,9 @@ func (e *Executor) tryCandidate(
 	})
 
 	copyResponseHeaders(w.Header(), outHdr)
+	if needBridge && outHdr.Get("X-Crabbro-Decision-Images") == "preserved" {
+		w.Header().Set("X-Crabbro-Decision-Images", "preserved")
+	}
 	setTraceHeaders(w.Header(), sel.Route.ID, cand, len(*attempts), needBridge)
 	w.Header().Del("Content-Length")
 	w.Header().Set("Content-Length", strconv.Itoa(len(outBody)))
@@ -1116,7 +1119,7 @@ func stripProxyHopHeaders(h http.Header) {
 func copyResponseHeaders(dst, src http.Header) {
 	for k, vs := range src {
 		lk := strings.ToLower(k)
-		if lk == "connection" || lk == "keep-alive" || lk == "transfer-encoding" || lk == "upgrade" {
+		if lk == "x-crabbro-decision-images" || lk == "connection" || lk == "keep-alive" || lk == "transfer-encoding" || lk == "upgrade" {
 			continue
 		}
 		for _, v := range vs {
