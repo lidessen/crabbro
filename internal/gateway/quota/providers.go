@@ -189,7 +189,7 @@ func provider(p *config.Plan) string {
 			return ""
 		}
 	}
-	for _, n := range []string{"zcode", "commandcode", "vercel", "deepseek", "kimi-code-cn", "minimax-cn", "opencode-go", "zenmux"} {
+	for _, n := range []string{"zcode", "commandcode", "vercel", "deepseek", "kimi-code-cn", "minimax-cn", "opencode-go", "zenmux", "xiaomi"} {
 		if strings.Contains(s, n) {
 			return n
 		}
@@ -210,6 +210,29 @@ func zcodeBase(p *config.Plan) string {
 		}
 	}
 	return endpoint
+}
+
+// xiaomiQuotaURL returns the Xiaomi MiMo Token Plan quota endpoint. The
+// default is the CN token-plan origin; a plan that pins an openai-chat or
+// openai-responses endpoint on another token-plan-*.xiaomimimo.com host
+// (regional or private deployment) keeps that scheme and host.
+func xiaomiQuotaURL(p *config.Plan) string {
+	for _, proto := range []string{config.ProtocolOpenAIChat, config.ProtocolOpenAIResponses} {
+		ep := p.Endpoints[proto]
+		if ep == nil {
+			continue
+		}
+		u, err := url.Parse(ep.BaseURL)
+		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil {
+			continue
+		}
+		host := strings.ToLower(u.Hostname())
+		if !strings.HasPrefix(host, "token-plan-") || !strings.HasSuffix(host, ".xiaomimimo.com") {
+			continue
+		}
+		return u.Scheme + "://" + u.Host + "/v1/platform/token_plan"
+	}
+	return "https://token-plan-cn.xiaomimimo.com/v1/platform/token_plan"
 }
 func fetchJSON(ctx context.Context, client *http.Client, endpoint, key string, bearer bool) (map[string]any, error) {
 	req, e := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
@@ -277,6 +300,8 @@ func fetch(ctx context.Context, c *http.Client, p *config.Plan, key string) (Rem
 		endpoint = "https://opencode.ai/zen/go/v1/usage"
 	case "zenmux":
 		endpoint = "https://zenmux.ai/api/v1/management/subscription/detail"
+	case "xiaomi":
+		endpoint = xiaomiQuotaURL(p)
 	default:
 		return q, errors.New("unsupported provider")
 	}
@@ -458,6 +483,28 @@ func fetch(ctx context.Context, c *http.Client, p *config.Plan, key string) (Rem
 			}
 		}
 
+	case "xiaomi":
+		// Verified live shape: {"object":"token_plan","plan_code":"standard",
+		// "period":{"start_at":...,"end_at":...},
+		// "quota":{"total_credits":N,"used_credits":M,"remaining_credits":R},...}
+		credits := object(m["quota"])
+		total, okTotal := number(credits["total_credits"])
+		used, okUsed := number(credits["used_credits"])
+		if credits == nil || !okTotal || !okUsed || total <= 0 {
+			return q, &syncFetchError{Primary: parseFetchError("primary")}
+		}
+		if code, ok := m["plan_code"].(string); ok && code != "" && (key == "" || !strings.Contains(code, key)) {
+			q.PlanTier = safe(code)
+		}
+		pct := math.Min(100, math.Max(0, used/total*100))
+		var resetAt *time.Time
+		if period := object(m["period"]); period != nil {
+			if s, ok := period["end_at"].(string); ok {
+				resetAt = shanghaiStamp(s)
+			}
+		}
+		q.Windows = append(q.Windows, QuotaWindow{Name: "Monthly", UsagePct: &pct, ResetAt: resetAt})
+
 	case "deepseek":
 		items, _ := m["balance_infos"].([]any)
 		if len(items) > 0 {
@@ -471,7 +518,7 @@ func fetch(ctx context.Context, c *http.Client, p *config.Plan, key string) (Rem
 			}
 		}
 	}
-	if (kind == "kimi-code-cn" || kind == "opencode-go" || kind == "zenmux") && len(q.Windows) == 0 {
+	if (kind == "kimi-code-cn" || kind == "opencode-go" || kind == "zenmux" || kind == "xiaomi") && len(q.Windows) == 0 {
 		return q, &syncFetchError{Primary: parseFetchError("primary")}
 	}
 	if len(q.Windows) > 0 {

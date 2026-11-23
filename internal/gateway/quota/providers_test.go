@@ -379,6 +379,129 @@ func TestMiniMaxSyncDistinguishesTransportAndHTTP(t *testing.T) {
 	}
 }
 
+// The verified Xiaomi MiMo Token Plan document reports the monthly credit
+// allowance as integer credits plus an Asia/Shanghai period end stamp. The
+// snapshot carries one Monthly window and the plan_code tier.
+func TestXiaomiTokenPlan(t *testing.T) {
+	method, path, auth, accept := "", "", "", ""
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method, path = r.Method, r.URL.Path
+		auth, accept = r.Header.Get("Authorization"), r.Header.Get("Accept")
+		fmt.Fprint(w, `{"object":"token_plan","plan_code":"standard",
+			"period":{"start_at":"2026-11-07 08:23:26","end_at":"2026-12-07 23:59:59"},
+			"quota":{"total_credits":11000000000,"used_credits":154062451,"remaining_credits":10845937549},
+			"auto_renew":true,"claw_enabled":false}`)
+	}))
+	defer server.Close()
+	u, _ := url.Parse(server.URL)
+	q, err := fetch(context.Background(), &http.Client{Transport: rewriteTransport{u}},
+		&config.Plan{ID: "xiaomi", Credential: "xiaomi_api_key"}, "test-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if method != http.MethodGet {
+		t.Fatalf("method = %q, want GET", method)
+	}
+	if path != "/v1/platform/token_plan" {
+		t.Fatalf("path = %q, want /v1/platform/token_plan", path)
+	}
+	if auth != "Bearer test-key" {
+		t.Fatalf("Authorization = %q, want Bearer test-key", auth)
+	}
+	if accept != "application/json" {
+		t.Fatalf("Accept = %q, want application/json", accept)
+	}
+	if q.PlanTier != "standard" {
+		t.Fatalf("PlanTier = %q, want standard", q.PlanTier)
+	}
+	if len(q.Windows) != 1 {
+		t.Fatalf("windows = %+v, want one Monthly window", q.Windows)
+	}
+	w := q.Windows[0]
+	if w.Name != "Monthly" {
+		t.Fatalf("window name = %q, want Monthly", w.Name)
+	}
+	if w.UsagePct == nil || math.Abs(*w.UsagePct-1.4005677) > 0.0001 {
+		t.Fatalf("usagePct = %v, want 154062451/11000000000*100 ≈ 1.40057", w.UsagePct)
+	}
+	// end_at is a naive Asia/Shanghai wall clock: 23:59:59 +08 == 15:59:59 UTC.
+	if w.ResetAt == nil || !w.ResetAt.Equal(time.Date(2026, 12, 7, 15, 59, 59, 0, time.UTC)) {
+		t.Fatalf("window ResetAt = %v, want 2026-12-07T15:59:59Z", w.ResetAt)
+	}
+	if q.UsagePct == nil || *q.UsagePct != *w.UsagePct {
+		t.Fatalf("snapshot usagePct = %v, want the Monthly window percentage", q.UsagePct)
+	}
+	if q.ResetAt == nil || !q.ResetAt.Equal(*w.ResetAt) {
+		t.Fatalf("snapshot ResetAt = %v, want the Monthly reset", q.ResetAt)
+	}
+}
+
+// A token_plan 200 response with no plan_code still yields the Monthly window,
+// and usage above the allowance clamps to 100%.
+func TestXiaomiTokenPlanNoPlanCode(t *testing.T) {
+	q, err := fetchFrom(t, "xiaomi", `{"quota":{"total_credits":100,"used_credits":150},
+		"period":{"end_at":"2026-12-07 23:59:59"}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q.PlanTier != "" {
+		t.Fatalf("PlanTier = %q, want empty when plan_code is absent", q.PlanTier)
+	}
+	if len(q.Windows) != 1 || q.Windows[0].UsagePct == nil || *q.Windows[0].UsagePct != 100 {
+		t.Fatalf("windows = %+v, want one Monthly window clamped to 100%%", q.Windows)
+	}
+}
+
+// A token_plan document without a usable monthly allowance (missing or
+// non-positive total_credits) is a parse failure, not a fresh snapshot, and
+// the non-empty-window guard keeps an unexpected 200 body from being stored.
+func TestXiaomiTokenPlanRejectsBadTotal(t *testing.T) {
+	for _, tt := range []struct{ name, payload string }{
+		{"zero-total", `{"object":"token_plan","plan_code":"standard","quota":{"total_credits":0,"used_credits":10}}`},
+		{"missing-total", `{"object":"token_plan","plan_code":"standard","quota":{"used_credits":10}}`},
+		{"empty", `{}`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			q, err := fetchFrom(t, "xiaomi", tt.payload)
+			if err == nil {
+				t.Fatalf("quota = %+v, want an error for %s", q, tt.name)
+			}
+			if len(q.Windows) != 0 {
+				t.Fatalf("windows = %+v, want none for %s", q.Windows, tt.name)
+			}
+			if !strings.Contains(err.Error(), "parse error") {
+				t.Fatalf("error = %v, want a sanitized parse error", err)
+			}
+		})
+	}
+}
+
+// A plan pinned to another token-plan-*.xiaomimimo.com host derives the quota
+// endpoint from that scheme and host; anything else keeps the CN default.
+func TestXiaomiQuotaURL(t *testing.T) {
+	derived := &config.Plan{Endpoints: map[string]*config.EndpointSpec{
+		config.ProtocolOpenAIChat: {BaseURL: "https://token-plan-sg.xiaomimimo.com/v1"},
+	}}
+	if got := xiaomiQuotaURL(derived); got != "https://token-plan-sg.xiaomimimo.com/v1/platform/token_plan" {
+		t.Fatalf("derived endpoint = %q", got)
+	}
+	responses := &config.Plan{Endpoints: map[string]*config.EndpointSpec{
+		config.ProtocolOpenAIResponses: {BaseURL: "http://token-plan-private.xiaomimimo.com/v1"},
+	}}
+	if got := xiaomiQuotaURL(responses); got != "http://token-plan-private.xiaomimimo.com/v1/platform/token_plan" {
+		t.Fatalf("responses endpoint = %q", got)
+	}
+	for _, p := range []*config.Plan{
+		{},
+		{Endpoints: map[string]*config.EndpointSpec{config.ProtocolOpenAIChat: {BaseURL: "https://api.xiaomimimo.com/v1"}}},
+		{Endpoints: map[string]*config.EndpointSpec{config.ProtocolOpenAIChat: {BaseURL: "https://token-plan-evil.example.com/v1"}}},
+	} {
+		if got := xiaomiQuotaURL(p); got != "https://token-plan-cn.xiaomimimo.com/v1/platform/token_plan" {
+			t.Fatalf("endpoint = %q, want the CN default", got)
+		}
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
