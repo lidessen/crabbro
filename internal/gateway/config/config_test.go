@@ -252,3 +252,30 @@ models:
 		})
 	}
 }
+
+func TestResponseTransformValidation(t *testing.T) {
+	base := `version: 1
+id: test
+credential: ref
+endpoints:
+  anthropic:
+    baseUrl: https://example.com
+    authHeader: X-Private
+    responseTransform:
+      unwrapPath: data
+      renameBodyFields: {usage.in: usage.input_tokens}
+models:
+  target:
+    responseTransform:
+      setBodyFields: {model: test}
+`
+	if _, diags := ValidatePlanBytes("test.yaml", "test", []byte(base)); len(diags) != 0 {
+		t.Fatalf("valid: %+v", diags)
+	}
+	for _, bad := range []string{"      extractField: data\n      unwrapPath: data\n", "      unwrapPath: a..b\n", "      setHeaders: {X-Private: bad}\n", "      path: /bad\n"} {
+		data := strings.Replace(base, "      setBodyFields: {model: test}\n", bad, 1)
+		if _, diags := ValidatePlanBytes("test.yaml", "test", []byte(data)); len(diags) == 0 {
+			t.Errorf("accepted %s", bad)
+		}
+	}
+}

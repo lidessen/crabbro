@@ -92,11 +92,11 @@ func TestCrossProtocolAndSignatureStripping(t *testing.T) {
 		if strings.Contains(string(b), "foreign-signature") || !strings.Contains(string(b), "hello") || !strings.Contains(string(b), `"model":"target"`) {
 			t.Errorf("translated request: %s", b)
 		}
-		io.WriteString(w, `{"id":"chat-1","model":"target","choices":[{"index":0,"message":{"role":"assistant","content":"world"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":3}}`)
+		io.WriteString(w, `{"data":{"id":"chat-1","model":"target","choices":[{"index":0,"message":{"role":"assistant","content":"world"},"finish_reason":"stop"}],"usage":{"input":5,"output":3}}}`)
 	}))
 
 	c := provider.Client{HTTPClient: srv.client}
-	res, err := c.Do(context.Background(), provider.Endpoint{BaseURL: srv.url, Protocol: provider.OpenAIChat, Model: "target"}, provider.Request{Protocol: provider.Anthropic, Model: "alias", Body: []byte(`{"model":"alias","max_tokens":32,"messages":[{"role":"user","content":[{"type":"thinking","thinking":"hidden","signature":"foreign-signature"},{"type":"text","text":"hello"}]}]}`)})
+	res, err := c.Do(context.Background(), provider.Endpoint{BaseURL: srv.url, Protocol: provider.OpenAIChat, Model: "target", ResponseTransform: provider.ResponseTransform{UnwrapPath: "data", RenameBodyFields: map[string]string{"usage.input": "usage.prompt_tokens", "usage.output": "usage.completion_tokens"}}}, provider.Request{Protocol: provider.Anthropic, Model: "alias", Body: []byte(`{"model":"alias","max_tokens":32,"messages":[{"role":"user","content":[{"type":"thinking","thinking":"hidden","signature":"foreign-signature"},{"type":"text","text":"hello"}]}]}`)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,5 +248,45 @@ func TestRequestTransformAndAuth(t *testing.T) {
 	ep.ModelRequestTransform.SetHeaders = map[string]string{"x-custom-auth": "bad"}
 	if _, err = c.Do(context.Background(), ep, provider.Request{Protocol: provider.Anthropic, Body: []byte(`{}`)}); err == nil {
 		t.Fatal("custom auth override accepted")
+	}
+}
+
+func TestResponseTransformAndErrors(t *testing.T) {
+	for _, status := range []int{http.StatusOK, http.StatusBadRequest} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			srv := mockServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("X-Remove", "yes")
+				w.Header().Set("X-Order", "old")
+				w.WriteHeader(status)
+				io.WriteString(w, `{"data":{"usage":{"in":7,"out":2},"message":"secret-value"}}`)
+			}))
+			c := provider.Client{HTTPClient: srv.client, Resolver: provider.CredentialResolverFunc(func(context.Context, string) (string, error) { return "secret-value", nil })}
+			ep := provider.Endpoint{BaseURL: srv.url, Protocol: provider.OpenAIChat, Model: "target", CredentialRef: "ref", ResponseTransform: provider.ResponseTransform{UnwrapPath: "data", StripHeaders: []string{"x-remove"}, RenameBodyFields: map[string]string{"usage.in": "usage.prompt_tokens"}, SetHeaders: map[string]string{"X-Order": "endpoint"}}, ModelResponseTransform: provider.ResponseTransform{RenameBodyFields: map[string]string{"usage.out": "usage.completion_tokens"}, SetHeaders: map[string]string{"X-Order": "model"}}}
+			res, err := c.Do(context.Background(), ep, provider.Request{Protocol: provider.OpenAIChat, Body: []byte(`{"model":"x"}`)})
+			if status == 200 && err != nil || status != 200 && err == nil {
+				t.Fatalf("err=%v", err)
+			}
+			if res.Header.Get("X-Remove") != "" || res.Header.Get("X-Order") != "model" || strings.Contains(string(res.Body), "secret-value") || !strings.Contains(string(res.Body), `"prompt_tokens":7`) {
+				t.Fatalf("response=%+v body=%s", res, res.Body)
+			}
+			if status == 200 && (res.Usage.InputTokens != 7 || res.Usage.OutputTokens != 2) {
+				t.Fatalf("usage=%+v", res.Usage)
+			}
+		})
+	}
+}
+
+func TestResponseTransformDoesNotTouchSSE(t *testing.T) {
+	const stream = "data: {\"value\":1}\n\ndata: [DONE]\n\n"
+	srv := mockServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("X-Order", "upstream")
+		io.WriteString(w, stream)
+	}))
+	ep := provider.Endpoint{BaseURL: srv.url, Protocol: provider.OpenAIChat, Model: "target", ResponseTransform: provider.ResponseTransform{UnwrapPath: "missing", SetHeaders: map[string]string{"X-Order": "transformed"}}}
+	var dst bytes.Buffer
+	res, err := (&provider.Client{HTTPClient: srv.client}).DoStream(context.Background(), ep, provider.Request{Protocol: provider.OpenAIChat, Body: []byte(`{"model":"x"}`)}, &dst)
+	if err != nil || dst.String() != stream || res.Header.Get("X-Order") != "upstream" {
+		t.Fatalf("stream=%q response=%+v err=%v", dst.String(), res, err)
 	}
 }

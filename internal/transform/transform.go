@@ -1,4 +1,4 @@
-// Package transform applies declarative, stateless upstream request normalization.
+// Package transform applies declarative, stateless upstream normalization.
 package transform
 
 import (
@@ -92,6 +92,10 @@ func validPath(s string) bool {
 
 // Apply returns independent copies; no input is modified even on error.
 func Apply(u *url.URL, h http.Header, body []byte, s Spec, protected ...string) (*url.URL, http.Header, []byte, error) {
+	return apply(u, h, body, s, true, protected...)
+}
+
+func apply(u *url.URL, h http.Header, body []byte, s Spec, request bool, protected ...string) (*url.URL, http.Header, []byte, error) {
 	if u == nil {
 		return nil, nil, nil, fmt.Errorf("nil URL")
 	}
@@ -113,7 +117,7 @@ func Apply(u *url.URL, h http.Header, body []byte, s Spec, protected ...string) 
 				delete(headers, k)
 			}
 		}
-		if (prefix && strings.HasPrefix("user-agent", p)) || (!prefix && p == "user-agent") {
+		if request && ((prefix && strings.HasPrefix("user-agent", p)) || (!prefix && p == "user-agent")) {
 			headers["User-Agent"] = []string{""}
 		}
 	}

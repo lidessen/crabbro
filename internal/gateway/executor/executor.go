@@ -23,6 +23,7 @@ import (
 	"github.com/lidessen/crabbro/internal/gateway/ir"
 	"github.com/lidessen/crabbro/internal/gateway/ledger"
 	"github.com/lidessen/crabbro/internal/gateway/router"
+	"github.com/lidessen/crabbro/internal/scrub"
 	"github.com/lidessen/crabbro/internal/secret"
 	"github.com/lidessen/crabbro/internal/shared"
 	"github.com/lidessen/crabbro/internal/transform"
@@ -333,8 +334,16 @@ func (e *Executor) tryCandidate(
 
 	// Non-2xx response -> read bounded body, classify, cooldown, failover if retryable.
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+		errBody, readErr := transform.ReadResponse(resp.Body)
 		resp.Body.Close()
+		if readErr == nil && !strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
+			resp.Header, errBody, readErr = transform.Response(resp.Header, errBody, cand.Endpoint.AuthHeader, cand.Endpoint.ResponseTransform, cand.ModelSpec.ResponseTransform)
+			resp.Header = scrub.ScrubHeaders(resp.Header, []string{secVal}, cand.Endpoint.AuthHeader)
+			errBody = []byte(scrub.ScrubText(string(errBody), secVal))
+		}
+		if readErr != nil {
+			return attemptOutcome{retryable: true, errMsg: "upstream response normalization failed"}
+		}
 		latMs := time.Since(attStart).Milliseconds()
 		fc := ClassifyHTTPFailure(resp.StatusCode, errBody, resp.Header, cand.Plan.ID, e.health(), cand.CredentialRef)
 		e.applyFailure(cand, fc, latMs, sel.Route.ID, sel.Signals.SessionKey, resp.StatusCode, accountedAttempts)
@@ -405,7 +414,12 @@ func (e *Executor) tryCandidate(
 
 	// Non-streaming 2xx response.
 	defer resp.Body.Close()
-	respBytes, readErr := io.ReadAll(io.LimitReader(resp.Body, 16*1024*1024))
+	respBytes, readErr := transform.ReadResponse(resp.Body)
+	if readErr == nil {
+		resp.Header, respBytes, readErr = transform.Response(resp.Header, respBytes, cand.Endpoint.AuthHeader, cand.Endpoint.ResponseTransform, cand.ModelSpec.ResponseTransform)
+		resp.Header = scrub.ScrubHeaders(resp.Header, []string{secVal}, cand.Endpoint.AuthHeader)
+		respBytes = []byte(scrub.ScrubText(string(respBytes), secVal))
+	}
 	latMs := time.Since(attStart).Milliseconds()
 	if readErr != nil {
 		fc := ClassifyHTTPFailure(http.StatusBadGateway, []byte(readErr.Error()), nil, cand.Plan.ID, e.health(), cand.CredentialRef)
@@ -420,7 +434,7 @@ func (e *Executor) tryCandidate(
 			LatencyMs:       latMs,
 			CooldownApplied: fc.CooldownLabel,
 		})
-		return attemptOutcome{retryable: true, errMsg: readErr.Error()}
+		return attemptOutcome{retryable: true, errMsg: secret.ScrubText(readErr.Error(), secVal)}
 	}
 
 	outStatus := resp.StatusCode
@@ -741,13 +755,18 @@ func (e *Executor) ExecuteDecision(ctx context.Context, snap *config.Snapshot, r
 			continue
 		}
 
-		respBytes, readErr := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
+		respBytes, readErr := transform.ReadResponse(resp.Body)
+		if readErr == nil && !strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
+			resp.Header, respBytes, readErr = transform.Response(resp.Header, respBytes, cand.Endpoint.AuthHeader, cand.Endpoint.ResponseTransform, cand.ModelSpec.ResponseTransform)
+			resp.Header = scrub.ScrubHeaders(resp.Header, []string{secVal}, cand.Endpoint.AuthHeader)
+			respBytes = []byte(scrub.ScrubText(string(respBytes), secVal))
+		}
 		resp.Body.Close()
 		cancelReq()
 		if readErr != nil {
 			fc := ClassifyHTTPFailure(http.StatusBadGateway, []byte(readErr.Error()), nil, cand.Plan.ID, e.health(), cand.CredentialRef)
 			e.applyFailure(cand, fc, time.Since(attStart).Milliseconds(), sel.Route.ID, "", http.StatusBadGateway, &accountedAttempts)
-			lastErr = readErr
+			lastErr = fmt.Errorf("%s", secret.ScrubText(readErr.Error(), secVal))
 			continue
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -755,7 +774,7 @@ func (e *Executor) ExecuteDecision(ctx context.Context, snap *config.Snapshot, r
 			e.applyFailure(cand, fc, latMs, sel.Route.ID, "", resp.StatusCode, &accountedAttempts)
 			attempts = append(attempts, shared.GatewayAttempt{
 				Plan: cand.Plan.ID, CredentialRef: cand.CredentialRef, Model: cand.Target.Model, Protocol: cand.EndpointProto,
-				Status: resp.StatusCode, ErrorKind: fc.Kind, ErrorMessage: fc.Summary,
+				Status: resp.StatusCode, ErrorKind: fc.Kind, ErrorMessage: secret.ScrubText(fc.Summary, secVal),
 				LatencyMs: latMs, CooldownApplied: fc.CooldownLabel,
 			})
 			lastErr = fmt.Errorf("decision backend status %d", resp.StatusCode)

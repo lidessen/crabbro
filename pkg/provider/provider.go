@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/lidessen/crabbro/internal/gateway/codec"
 	"github.com/lidessen/crabbro/internal/gateway/ir"
 	"github.com/lidessen/crabbro/internal/gateway/protocol"
+	"github.com/lidessen/crabbro/internal/scrub"
 	"github.com/lidessen/crabbro/internal/transform"
 	"github.com/lidessen/crabbro/pkg/api"
 )
@@ -28,21 +30,22 @@ const (
 )
 
 type (
-	RequestTransform = transform.Spec
-	GenRequest       = ir.GenRequest
-	GenResponse      = ir.GenResponse
-	Message          = ir.Message
-	ContentPart      = ir.ContentPart
-	ToolDecl         = ir.ToolDecl
-	ToolChoice       = ir.ToolChoice
-	ThinkingConfig   = ir.ThinkingConfig
-	StreamEvent      = ir.StreamEvent
-	Usage            = api.TokenUsage
-	DecisionRequest  = ir.DecisionRequest
-	DecisionResponse = ir.DecisionResponse
-	DecisionQuestion = ir.DecisionQuestion
-	DecisionAnswer   = ir.DecisionAnswer
-	DecisionAsset    = ir.DecisionAsset
+	RequestTransform  = transform.Spec
+	ResponseTransform = transform.ResponseSpec
+	GenRequest        = ir.GenRequest
+	GenResponse       = ir.GenResponse
+	Message           = ir.Message
+	ContentPart       = ir.ContentPart
+	ToolDecl          = ir.ToolDecl
+	ToolChoice        = ir.ToolChoice
+	ThinkingConfig    = ir.ThinkingConfig
+	StreamEvent       = ir.StreamEvent
+	Usage             = api.TokenUsage
+	DecisionRequest   = ir.DecisionRequest
+	DecisionResponse  = ir.DecisionResponse
+	DecisionQuestion  = ir.DecisionQuestion
+	DecisionAnswer    = ir.DecisionAnswer
+	DecisionAsset     = ir.DecisionAsset
 )
 
 const (
@@ -79,17 +82,19 @@ func (f CredentialResolverFunc) Resolve(ctx context.Context, ref string) (string
 
 // Endpoint describes the upstream. CredentialRef is never interpreted as a token.
 type Endpoint struct {
-	BaseURL               string
-	Protocol              string
-	Model                 string
-	CredentialRef         string
-	AuthHeader            string
-	AuthPrefix            string
-	APIVersion            string
-	Headers               map[string]string
-	ExtraBody             map[string]any
-	RequestTransform      RequestTransform
-	ModelRequestTransform RequestTransform
+	BaseURL                string
+	Protocol               string
+	Model                  string
+	CredentialRef          string
+	AuthHeader             string
+	AuthPrefix             string
+	APIVersion             string
+	Headers                map[string]string
+	ExtraBody              map[string]any
+	RequestTransform       RequestTransform
+	ModelRequestTransform  RequestTransform
+	ResponseTransform      ResponseTransform
+	ModelResponseTransform ResponseTransform
 }
 
 func (e Endpoint) CodecTarget() (string, string, map[string]any) {
@@ -120,7 +125,7 @@ type Response struct {
 	Usage      Usage
 }
 
-// HTTPError reports a non-success upstream status. Response contains its original body.
+// HTTPError reports a non-success upstream status.
 type HTTPError struct{ StatusCode int }
 
 func (e *HTTPError) Error() string { return fmt.Sprintf("provider returned HTTP %d", e.StatusCode) }
@@ -231,9 +236,14 @@ func (c *Client) call(ctx context.Context, ep Endpoint, req Request, dst io.Writ
 	defer res.Body.Close()
 	result := &Response{StatusCode: res.StatusCode, Header: res.Header.Clone()}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		result.Body, err = io.ReadAll(res.Body)
+		result.Body, err = transform.ReadResponse(res.Body)
+		if err == nil && !strings.Contains(strings.ToLower(res.Header.Get("Content-Type")), "text/event-stream") {
+			result.Header, result.Body, err = transform.Response(result.Header, result.Body, ep.AuthHeader, ep.ResponseTransform, ep.ModelResponseTransform)
+			result.Header = scrub.ScrubHeaders(result.Header, []string{token}, ep.AuthHeader)
+			result.Body = []byte(scrub.ScrubText(string(result.Body), token))
+		}
 		if err != nil {
-			return result, err
+			return result, fmt.Errorf("%s", scrub.ScrubText(err.Error(), token))
 		}
 		return result, &HTTPError{StatusCode: res.StatusCode}
 	}
@@ -252,15 +262,20 @@ func (c *Client) call(ctx context.Context, ep Endpoint, req Request, dst io.Writ
 		}
 		return result, err
 	}
-	result.Body, err = io.ReadAll(res.Body)
+	result.Body, err = transform.ReadResponse(res.Body)
+	if err == nil && !strings.Contains(strings.ToLower(res.Header.Get("Content-Type")), "text/event-stream") {
+		result.Header, result.Body, err = transform.Response(result.Header, result.Body, ep.AuthHeader, ep.ResponseTransform, ep.ModelResponseTransform)
+		result.Header = scrub.ScrubHeaders(result.Header, []string{token}, ep.AuthHeader)
+		result.Body = []byte(scrub.ScrubText(string(result.Body), token))
+	}
 	if err != nil {
-		return result, err
+		return result, fmt.Errorf("%s", scrub.ScrubText(err.Error(), token))
 	}
 	if same {
 		result.Usage = codec.ExtractUsageJSON(ep.Protocol, result.Body)
 		return result, nil
 	}
-	result.StatusCode, result.Header, result.Body, result.Usage, err = bridge.TranslateResponse(ep, ingress, state, res.StatusCode, res.Header, result.Body)
+	result.StatusCode, result.Header, result.Body, result.Usage, err = bridge.TranslateResponse(ep, ingress, state, res.StatusCode, result.Header, result.Body)
 	return result, err
 }
 

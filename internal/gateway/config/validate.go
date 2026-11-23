@@ -96,6 +96,9 @@ func ValidatePlanBytes(filename, expectedID string, data []byte) (*Plan, []share
 		if err := ep.RequestTransform.Validate(ep.AuthHeader); err != nil {
 			diags = append(diags, shared.Diagnostic{File: filename, Path: "$.endpoints." + proto + ".requestTransform", Message: err.Error()})
 		}
+		if err := ep.ResponseTransform.Validate(ep.AuthHeader); err != nil {
+			diags = append(diags, shared.Diagnostic{File: filename, Path: "$.endpoints." + proto + ".responseTransform", Message: err.Error()})
+		}
 		u, err := url.Parse(ep.BaseURL)
 		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
 			diags = append(diags, shared.Diagnostic{File: filename, Path: "$.endpoints." + proto + ".baseUrl", Message: "invalid endpoint baseUrl"})
@@ -107,6 +110,9 @@ func ValidatePlanBytes(filename, expectedID string, data []byte) (*Plan, []share
 		}
 		for proto, ep := range plan.Endpoints {
 			if ep != nil && (len(ms.Endpoints) == 0 || containsProtocol(ms.Endpoints, proto)) {
+				if err := ms.ResponseTransform.Validate(ep.AuthHeader); err != nil {
+					diags = append(diags, shared.Diagnostic{File: filename, Path: "$.models." + model + ".responseTransform", Message: err.Error()})
+				}
 				if err := ms.RequestTransform.Validate(ep.AuthHeader); err != nil {
 					diags = append(diags, shared.Diagnostic{File: filename, Path: "$.models." + model + ".requestTransform", Message: err.Error()})
 					break

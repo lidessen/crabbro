@@ -33,8 +33,7 @@ caller-owned writer, honors request cancellation, and returns accumulated usage
 when supplied by the upstream. Decision requests use `SystemOne`,
 `OpenAIDecisions`, or `GeminiDecisions`; streaming decisions are unsupported.
 
-A non-2xx response returns both a `Response` containing the original status,
-headers and body and an `*HTTPError`. Transport, resolver, decoding and writer
+A non-2xx response returns both a `Response` containing the upstream status, headers and body (after any configured response normalization) and an `*HTTPError`. Transport, resolver, decoding and writer
 errors are returned to the caller. The caller owns all credential storage and
 must not put tokens into endpoint URLs, static headers, or logs.
 
@@ -42,3 +41,10 @@ must not put tokens into endpoint URLs, static headers, or logs.
 normalization operations as gateway plan transforms. They run in that order
 after encoding and before credential injection. See the gateway example in the
 [main README](../../README.md#llm--decision-gateway).
+
+`Endpoint.ResponseTransform` and `Endpoint.ModelResponseTransform` run in that
+order on buffered non-SSE responses, including HTTP errors. `unwrapPath` and
+`extractField` are alternative dot-separated paths selecting a JSON object;
+then fields are dropped, renamed, and set. Missing or non-object selections
+fail the request. Response bodies are limited to 16 MiB before and after
+transformation. SSE streams are not transformed.
