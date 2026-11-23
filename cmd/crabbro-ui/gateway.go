@@ -661,8 +661,12 @@ func gwUsageMetrics(c *ui.Context, p *palette, total api.GatewayUsageBucket) {
 	if total.Errors > 0 {
 		errorTone = p.removed
 	}
+	requestDetail := gwErrors(total.Errors)
+	if total.Retries > 0 {
+		requestDetail += " · " + gwRetries(total.Retries)
+	}
 	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Stretch).Children(func() {
-		gwMetric(c, p, "Requests", gwCount(total.Requests), gwErrors(total.Errors), errorTone)
+		gwMetric(c, p, "Requests", gwCount(total.Requests), requestDetail, errorTone)
 		gwMetric(c, p, "Tokens", gwCount(total.TotalTokens), "", p.faint)
 		gwMetric(c, p, "Cache hit", gwCacheHit(total), "", p.faint)
 		gwMetric(c, p, "Avg. TTFT", gwMilliseconds(total.AvgTTFTMs), "", p.faint)
@@ -693,6 +697,13 @@ func gwErrors(count int64) string {
 		return "1 error"
 	}
 	return gwCount(count) + " errors"
+}
+
+func gwRetries(count int64) string {
+	if count == 1 {
+		return "1 retry"
+	}
+	return gwCount(count) + " retries"
 }
 
 func gwMilliseconds(ms float64) string {

@@ -29,6 +29,7 @@ func gwUsageByPlan(buckets []api.GatewayUsageBucket) []gwUsagePlan {
 		plan.models = append(plan.models, bucket)
 		plan.totals.Requests += bucket.Requests
 		plan.totals.Errors += bucket.Errors
+		plan.totals.Retries += bucket.Retries
 		plan.totals.TotalTokens += bucket.TotalTokens
 		plan.totals.InputTokens += bucket.InputTokens
 		plan.totals.CacheReadTokens += bucket.CacheReadTokens
@@ -143,6 +144,9 @@ func gwUsageRankingRow(c *ui.Context, p *palette, plan gwUsagePlan, maxTokens in
 	b.Children(func() {
 		ui.Column(c).Grow(1).MinWidth(0).Gap(5).Children(func() {
 			ui.Text(c, plan.name()).FontSize(12).FontWeight(600).Font(mono()).TextColor(p.text).FillWidth()
+			if plan.totals.Retries > 0 {
+				ui.Text(c, gwRetries(plan.totals.Retries)).FontSize(11).TextColor(p.muted)
+			}
 			if maxTokens > 0 {
 				pct := 100 * float32(float64(plan.totals.TotalTokens)/float64(maxTokens))
 				gwProgress(c, p, pct, tone)
@@ -192,6 +196,9 @@ func gwUsageInspector(c *ui.Context, p *palette, plan gwUsagePlan, split bool) {
 				ui.Text(c, detail).FontSize(11.5).TextColor(p.muted).FillWidth()
 				if model.Errors > 0 {
 					ui.Text(c, gwErrors(model.Errors)).FontSize(11).TextColor(p.removed)
+				}
+				if model.Retries > 0 {
+					ui.Text(c, gwRetries(model.Retries)).FontSize(11).TextColor(p.muted)
 				}
 			})
 		}

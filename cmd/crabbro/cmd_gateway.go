@@ -169,12 +169,12 @@ func cmdGateway(cfg *clientConfig, args []string) error {
 			fmt.Println(string(raw))
 			return nil
 		}
-		fmt.Printf("window=%s total_requests=%d errors=%d total_tokens=%d in=%d out=%d cache_read=%d avg_ttft=%.0fms\n",
-			out.Window, out.Totals.Requests, out.Totals.Errors, out.Totals.TotalTokens,
+		fmt.Printf("window=%s total_requests=%d errors=%d retries=%d total_tokens=%d in=%d out=%d cache_read=%d avg_ttft=%.0fms\n",
+			out.Window, out.Totals.Requests, out.Totals.Errors, out.Totals.Retries, out.Totals.TotalTokens,
 			out.Totals.InputTokens, out.Totals.OutputTokens, out.Totals.CacheReadTokens, out.Totals.AvgTTFTMs)
 		for _, b := range out.Buckets {
-			fmt.Printf("  %-18s %-24s requests=%d errors=%d tokens=%d hit=%.0f%% ttft=%.0fms\n",
-				b.Plan, b.Model, b.Requests, b.Errors, b.TotalTokens, b.CacheHitRatio*100, b.AvgTTFTMs)
+			fmt.Printf("  %-18s %-24s requests=%d errors=%d retries=%d tokens=%d hit=%.0f%% ttft=%.0fms\n",
+				b.Plan, b.Model, b.Requests, b.Errors, b.Retries, b.TotalTokens, b.CacheHitRatio*100, b.AvgTTFTMs)
 		}
 		return nil
 	case "cooldown-clear":
