@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -208,5 +209,46 @@ models:
 		if _, diags := ValidatePlanBytes("test.yaml", "test", []byte(data)); len(diags) == 0 {
 			t.Errorf("accepted %s", bad)
 		}
+	}
+}
+
+func TestModelTransformValidationUsesAvailableEndpoints(t *testing.T) {
+	base := `version: 1
+id: test
+credential: ref
+endpoints:
+  anthropic:
+    baseUrl: https://example.com
+    authHeader: X-Anthropic-Auth
+  openai-chat:
+    baseUrl: https://example.com
+    authHeader: X-OpenAI-Auth
+models:
+  target:
+%s    requestTransform:
+      setHeaders: {X-OpenAI-Auth: value}
+`
+	for _, tc := range []struct {
+		name, endpoints, wantPath string
+	}{
+		{"restricted to another endpoint", "    endpoints: [anthropic]\n", ""},
+		{"restricted to protected endpoint", "    endpoints: [openai-chat]\n", "$.models.target.requestTransform"},
+		{"multiple available endpoints", "    endpoints: [anthropic, openai-chat]\n", "$.models.target.requestTransform"},
+		{"all endpoints by default", "", "$.models.target.requestTransform"},
+		{"all endpoints with empty list", "    endpoints: []\n", "$.models.target.requestTransform"},
+		{"missing endpoint", "    endpoints: [gemini]\n", "$.models.target.endpoints[0]"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, diags := ValidatePlanBytes("test.yaml", "test", []byte(fmt.Sprintf(base, tc.endpoints)))
+			if tc.wantPath == "" {
+				if len(diags) != 0 {
+					t.Fatalf("unexpected diagnostics: %+v", diags)
+				}
+				return
+			}
+			if len(diags) != 1 || diags[0].Path != tc.wantPath {
+				t.Fatalf("got diagnostics %+v, want path %s", diags, tc.wantPath)
+			}
+		})
 	}
 }

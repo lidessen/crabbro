@@ -105,8 +105,8 @@ func ValidatePlanBytes(filename, expectedID string, data []byte) (*Plan, []share
 		if ms == nil {
 			continue
 		}
-		for _, ep := range plan.Endpoints {
-			if ep != nil {
+		for proto, ep := range plan.Endpoints {
+			if ep != nil && (len(ms.Endpoints) == 0 || containsProtocol(ms.Endpoints, proto)) {
 				if err := ms.RequestTransform.Validate(ep.AuthHeader); err != nil {
 					diags = append(diags, shared.Diagnostic{File: filename, Path: "$.models." + model + ".requestTransform", Message: err.Error()})
 					break

@@ -162,7 +162,7 @@ func Apply(u *url.URL, h http.Header, body []byte, s Spec, protected ...string) 
 			}
 		}
 		for _, p := range sorted(s.SetBodyFields) {
-			if err := put(obj, p, s.SetBodyFields[p]); err != nil {
+			if err := put(obj, p, cloneBodyValue(s.SetBodyFields[p])); err != nil {
 				return nil, nil, nil, err
 			}
 		}
@@ -175,6 +175,32 @@ func Apply(u *url.URL, h http.Header, body []byte, s Spec, protected ...string) 
 	headers.Del("Content-Length")
 	return &out, headers, b, nil
 }
+
+func cloneBodyValue(v any) any {
+	switch v := v.(type) {
+	case map[string]any:
+		if v == nil {
+			return v
+		}
+		copy := make(map[string]any, len(v))
+		for k, value := range v {
+			copy[k] = cloneBodyValue(value)
+		}
+		return copy
+	case []any:
+		if v == nil {
+			return v
+		}
+		copy := make([]any, len(v))
+		for i, value := range v {
+			copy[i] = cloneBodyValue(value)
+		}
+		return copy
+	default:
+		return v
+	}
+}
+
 func sorted[V any](m map[string]V) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
