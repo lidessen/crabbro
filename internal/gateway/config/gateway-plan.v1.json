@@ -122,6 +122,21 @@
     }
   },
   "$defs": {
+    "requestTransform": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "stripHeaders": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "setHeaders": { "type": "object", "additionalProperties": { "type": "string" } },
+        "path": { "type": "string", "pattern": "^(/.*)?$" },
+        "pathPrefix": { "type": "string", "pattern": "^(/.*)?$" },
+        "query": { "type": "object", "additionalProperties": { "type": ["string", "null"] } },
+        "dropBodyFields": { "type": "array", "items": { "$ref": "#/$defs/bodyPath" } },
+        "renameBodyFields": { "type": "object", "propertyNames": { "$ref": "#/$defs/bodyPath" }, "additionalProperties": { "$ref": "#/$defs/bodyPath" } },
+        "setBodyFields": { "type": "object", "propertyNames": { "$ref": "#/$defs/bodyPath" } }
+      }
+    },
+    "bodyPath": { "type": "string", "pattern": "^[^.]+(\\.[^.]+)*$" },
     "protocol": { "enum": ["openai-chat", "openai-responses", "anthropic", "gemini", "typesafe-jev", "openai-decisions", "gemini-decisions"] },
     "duration": {
       "type": "string",
@@ -140,7 +155,8 @@
           "maxProperties": 32,
           "additionalProperties": { "type": "string" }
         },
-        "apiVersion": { "type": "string", "minLength": 1, "maxLength": 64 }
+        "apiVersion": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "requestTransform": { "$ref": "#/$defs/requestTransform" }
       }
     },
     "modelSpec": {
@@ -167,7 +183,8 @@
         "extraBody": {
           "type": "object",
           "additionalProperties": true
-        }
+        },
+        "requestTransform": { "$ref": "#/$defs/requestTransform" }
       }
     }
   }

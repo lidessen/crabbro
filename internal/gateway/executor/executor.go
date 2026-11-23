@@ -25,6 +25,7 @@ import (
 	"github.com/lidessen/crabbro/internal/gateway/router"
 	"github.com/lidessen/crabbro/internal/secret"
 	"github.com/lidessen/crabbro/internal/shared"
+	"github.com/lidessen/crabbro/internal/transform"
 )
 
 const (
@@ -290,11 +291,17 @@ func (e *Executor) tryCandidate(
 	stripProxyHopHeaders(upReq.Header)
 	upReq.Header.Del("Accept-Encoding")
 	upReq.Header.Set("Content-Type", "application/json")
-	upReq.ContentLength = int64(len(upBody))
-	codec.InjectUpstreamAuth(upReq.Header, cand.Endpoint, cand.EndpointProto, secVal)
+	codec.InjectUpstreamAuth(upReq.Header, cand.Endpoint, cand.EndpointProto, "")
 	if upReq.Header.Get("User-Agent") == "" {
 		upReq.Header.Set("User-Agent", "crabbro-gateway/1.0")
 	}
+	upBody, err = transform.Request(upReq, upBody, cand.Endpoint.AuthHeader, cand.Endpoint.RequestTransform, cand.ModelSpec.RequestTransform)
+	if err != nil {
+		ttftTimer.Stop()
+		*attempts = append(*attempts, shared.GatewayAttempt{Plan: cand.Plan.ID, CredentialRef: cand.CredentialRef, Model: cand.Target.Model, Protocol: cand.EndpointProto, Status: http.StatusBadRequest, ErrorKind: ErrKindClientBadRequest, ErrorMessage: err.Error()})
+		return attemptOutcome{retryable: false, errMsg: err.Error()}
+	}
+	codec.InjectCredential(upReq.Header, cand.Endpoint, cand.EndpointProto, secVal)
 
 	if e.Router != nil && e.Router.Health != nil {
 		e.Router.Health.AcquireInFlight(cand.Plan.ID)
@@ -691,10 +698,18 @@ func (e *Executor) ExecuteDecision(ctx context.Context, snap *config.Snapshot, r
 		timer := time.AfterFunc(cand.Plan.Timeout.TTFTDuration(), cancelReq)
 		upReq, _ := http.NewRequestWithContext(reqCtx, http.MethodPost, upURL, bytes.NewReader(upBody))
 		upReq.Header.Set("Content-Type", "application/json")
-		codec.InjectUpstreamAuth(upReq.Header, cand.Endpoint, cand.EndpointProto, secVal)
+		codec.InjectUpstreamAuth(upReq.Header, cand.Endpoint, cand.EndpointProto, "")
 		if upReq.Header.Get("User-Agent") == "" {
 			upReq.Header.Set("User-Agent", "crabbro-gateway/1.0")
 		}
+		upBody, err = transform.Request(upReq, upBody, cand.Endpoint.AuthHeader, cand.Endpoint.RequestTransform, cand.ModelSpec.RequestTransform)
+		if err != nil {
+			timer.Stop()
+			cancelReq()
+			lastErr = err
+			continue
+		}
+		codec.InjectCredential(upReq.Header, cand.Endpoint, cand.EndpointProto, secVal)
 
 		if e.health() != nil {
 			e.health().AcquireInFlight(cand.Plan.ID)

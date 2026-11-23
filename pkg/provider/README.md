@@ -37,3 +37,8 @@ A non-2xx response returns both a `Response` containing the original status,
 headers and body and an `*HTTPError`. Transport, resolver, decoding and writer
 errors are returned to the caller. The caller owns all credential storage and
 must not put tokens into endpoint URLs, static headers, or logs.
+
+`Endpoint.RequestTransform` and `Endpoint.ModelRequestTransform` accept the same
+normalization operations as gateway plan transforms. They run in that order
+after encoding and before credential injection. See the gateway example in the
+[main README](../../README.md#llm--decision-gateway).

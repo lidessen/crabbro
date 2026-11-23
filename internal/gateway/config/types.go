@@ -10,6 +10,7 @@ import (
 
 	"github.com/lidessen/crabbro/internal/gateway/protocol"
 	"github.com/lidessen/crabbro/internal/shared"
+	"github.com/lidessen/crabbro/internal/transform"
 )
 
 const (
@@ -406,11 +407,12 @@ func (w WindowSpec) EffectiveMode() string {
 
 // EndpointSpec configures one wire-protocol endpoint for a plan.
 type EndpointSpec struct {
-	BaseURL    string            `yaml:"baseUrl" json:"baseUrl"`
-	AuthHeader string            `yaml:"authHeader,omitempty" json:"authHeader,omitempty"`
-	AuthPrefix string            `yaml:"authPrefix,omitempty" json:"authPrefix,omitempty"`
-	Headers    map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
-	APIVersion string            `yaml:"apiVersion,omitempty" json:"apiVersion,omitempty"`
+	RequestTransform transform.Spec    `yaml:"requestTransform,omitempty" json:"requestTransform,omitempty"`
+	BaseURL          string            `yaml:"baseUrl" json:"baseUrl"`
+	AuthHeader       string            `yaml:"authHeader,omitempty" json:"authHeader,omitempty"`
+	AuthPrefix       string            `yaml:"authPrefix,omitempty" json:"authPrefix,omitempty"`
+	Headers          map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
+	APIVersion       string            `yaml:"apiVersion,omitempty" json:"apiVersion,omitempty"`
 }
 
 // CodecAuth exposes endpoint authentication settings to transport codecs.
@@ -423,14 +425,15 @@ func (e *EndpointSpec) CodecAuth() (string, string, string, map[string]string) {
 
 // ModelSpec describes a model offered on a plan.
 type ModelSpec struct {
-	Endpoints       []string       `yaml:"endpoints,omitempty" json:"endpoints,omitempty"`
-	Tier            string         `yaml:"tier,omitempty" json:"tier,omitempty"`
-	CodingScore     *float64       `yaml:"codingScore,omitempty" json:"codingScore,omitempty"`
-	ContextWindow   int            `yaml:"contextWindow,omitempty" json:"contextWindow,omitempty"`
-	MaxOutputTokens int            `yaml:"maxOutputTokens,omitempty" json:"maxOutputTokens,omitempty"`
-	CacheTTL        string         `yaml:"cacheTtl,omitempty" json:"cacheTtl,omitempty"`
-	Capabilities    Capabilities   `yaml:"capabilities,omitempty" json:"capabilities,omitempty"`
-	ExtraBody       map[string]any `yaml:"extraBody,omitempty" json:"extraBody,omitempty"`
+	RequestTransform transform.Spec `yaml:"requestTransform,omitempty" json:"requestTransform,omitempty"`
+	Endpoints        []string       `yaml:"endpoints,omitempty" json:"endpoints,omitempty"`
+	Tier             string         `yaml:"tier,omitempty" json:"tier,omitempty"`
+	CodingScore      *float64       `yaml:"codingScore,omitempty" json:"codingScore,omitempty"`
+	ContextWindow    int            `yaml:"contextWindow,omitempty" json:"contextWindow,omitempty"`
+	MaxOutputTokens  int            `yaml:"maxOutputTokens,omitempty" json:"maxOutputTokens,omitempty"`
+	CacheTTL         string         `yaml:"cacheTtl,omitempty" json:"cacheTtl,omitempty"`
+	Capabilities     Capabilities   `yaml:"capabilities,omitempty" json:"capabilities,omitempty"`
+	ExtraBody        map[string]any `yaml:"extraBody,omitempty" json:"extraBody,omitempty"`
 }
 
 // EffectiveTier returns the model tier, defaulting to strong.

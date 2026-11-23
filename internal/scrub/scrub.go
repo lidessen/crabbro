@@ -33,12 +33,13 @@ func StripAuthHeaders(h http.Header, extraHeaders ...string) http.Header {
 		return nil
 	}
 	out := h.Clone()
-	for _, name := range defaultAuthHeaders {
-		out.Del(name)
-	}
-	for _, name := range extraHeaders {
-		if strings.TrimSpace(name) != "" {
-			out.Del(name)
+	names := append(append([]string(nil), defaultAuthHeaders...), extraHeaders...)
+	for key := range out {
+		for _, name := range names {
+			if strings.TrimSpace(name) != "" && strings.EqualFold(key, name) {
+				delete(out, key)
+				break
+			}
 		}
 	}
 	return out

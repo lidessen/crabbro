@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -173,5 +174,39 @@ targets:
 	}
 	if diags := st.ValidateFile(KindRoute, "decision"); len(diags) == 0 {
 		t.Fatal("expected allowEmulation validation error")
+	}
+}
+
+func TestRequestTransformValidation(t *testing.T) {
+	base := `version: 1
+id: test
+credential: ref
+endpoints:
+  anthropic:
+    baseUrl: https://example.com
+    authHeader: X-Private
+    requestTransform:
+      stripHeaders: [anthropic-beta, 'x-stainless-*']
+      path: /custom
+      query: {remove: null, mode: v1}
+      renameBodyFields: {old: new}
+models:
+  target:
+    requestTransform:
+      setBodyFields: {nested.value: 1}
+`
+	if _, diags := ValidatePlanBytes("test.yaml", "test", []byte(base)); len(diags) > 0 {
+		t.Fatalf("valid transform: %+v", diags)
+	}
+	for _, bad := range []string{
+		"      setHeaders: {Authorization: bad}\n",
+		"      setHeaders: {X-Private: bad}\n",
+		"      path: relative\n",
+		"      unknown: true\n",
+	} {
+		data := strings.Replace(base, "      setBodyFields: {nested.value: 1}\n", bad, 1)
+		if _, diags := ValidatePlanBytes("test.yaml", "test", []byte(data)); len(diags) == 0 {
+			t.Errorf("accepted %s", bad)
+		}
 	}
 }

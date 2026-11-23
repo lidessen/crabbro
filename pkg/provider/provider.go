@@ -13,6 +13,7 @@ import (
 	"github.com/lidessen/crabbro/internal/gateway/codec"
 	"github.com/lidessen/crabbro/internal/gateway/ir"
 	"github.com/lidessen/crabbro/internal/gateway/protocol"
+	"github.com/lidessen/crabbro/internal/transform"
 	"github.com/lidessen/crabbro/pkg/api"
 )
 
@@ -27,6 +28,7 @@ const (
 )
 
 type (
+	RequestTransform = transform.Spec
 	GenRequest       = ir.GenRequest
 	GenResponse      = ir.GenResponse
 	Message          = ir.Message
@@ -77,15 +79,17 @@ func (f CredentialResolverFunc) Resolve(ctx context.Context, ref string) (string
 
 // Endpoint describes the upstream. CredentialRef is never interpreted as a token.
 type Endpoint struct {
-	BaseURL       string
-	Protocol      string
-	Model         string
-	CredentialRef string
-	AuthHeader    string
-	AuthPrefix    string
-	APIVersion    string
-	Headers       map[string]string
-	ExtraBody     map[string]any
+	BaseURL               string
+	Protocol              string
+	Model                 string
+	CredentialRef         string
+	AuthHeader            string
+	AuthPrefix            string
+	APIVersion            string
+	Headers               map[string]string
+	ExtraBody             map[string]any
+	RequestTransform      RequestTransform
+	ModelRequestTransform RequestTransform
 }
 
 func (e Endpoint) CodecTarget() (string, string, map[string]any) {
@@ -210,7 +214,12 @@ func (c *Client) call(ctx context.Context, ep Endpoint, req Request, dst io.Writ
 	}
 	up.Header.Del("Accept-Encoding")
 	up.Header.Set("Content-Type", "application/json")
-	codec.InjectUpstreamAuth(up.Header, ep, ep.Protocol, token)
+	codec.InjectUpstreamAuth(up.Header, ep, ep.Protocol, "")
+	body, err = transform.Request(up, body, ep.AuthHeader, ep.RequestTransform, ep.ModelRequestTransform)
+	if err != nil {
+		return nil, err
+	}
+	codec.InjectCredential(up.Header, ep, ep.Protocol, token)
 	client := http.DefaultClient
 	if c != nil && c.HTTPClient != nil {
 		client = c.HTTPClient

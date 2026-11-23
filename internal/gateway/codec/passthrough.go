@@ -175,6 +175,15 @@ type AuthEndpoint interface {
 }
 
 func InjectUpstreamAuth(h http.Header, ep AuthEndpoint, proto, secretVal string) {
+	injectUpstreamAuth(h, ep, proto, secretVal, true)
+}
+
+// InjectCredential injects only protected authentication after request normalization.
+func InjectCredential(h http.Header, ep AuthEndpoint, proto, secretVal string) {
+	injectUpstreamAuth(h, ep, proto, secretVal, false)
+}
+
+func injectUpstreamAuth(h http.Header, ep AuthEndpoint, proto, secretVal string, defaults bool) {
 	if h == nil {
 		return
 	}
@@ -204,15 +213,17 @@ func InjectUpstreamAuth(h http.Header, ep AuthEndpoint, proto, secretVal string)
 	if secretVal != "" {
 		h.Set(headerName, prefix+secretVal)
 	}
-	if proto == protocol.ProtocolAnthropic && h.Get("anthropic-version") == "" {
+	if defaults && proto == protocol.ProtocolAnthropic && h.Get("anthropic-version") == "" {
 		ver := opts.Version
 		if ver == "" {
 			ver = "2023-06-01"
 		}
 		h.Set("anthropic-version", ver)
 	}
-	for k, v := range opts.Headers {
-		h.Set(k, v)
+	if defaults {
+		for k, v := range opts.Headers {
+			h.Set(k, v)
+		}
 	}
 }
 

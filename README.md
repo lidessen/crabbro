@@ -154,6 +154,33 @@ crabbro gateway quotas refresh
 crabbro gateway quotas reset glm-coding --scope fiveHour --dry-run
 ```
 
+Endpoint and model specs can normalize requests for custom gateways. For example:
+
+```yaml
+endpoints:
+  anthropic:
+    baseUrl: https://gateway.example.com
+    requestTransform:
+      stripHeaders: [anthropic-beta, 'x-stainless-*', User-Agent]
+      path: /custom/messages
+      query: {compat: '1', obsolete: null}
+      dropBodyFields: [metadata.trace]
+      renameBodyFields: {max_tokens: max_output_tokens}
+models:
+  example-model:
+    requestTransform:
+      setBodyFields: {vendor.mode: compatible}
+```
+
+Transforms run after protocol encoding, endpoint first and model second, before
+credential injection. `setHeaders` overrides ordinary headers; authentication
+and HTTP framing headers are protected. `path` replaces the decoded path and
+`pathPrefix` prepends to it; query values replace individual keys and `null`
+removes a key. Body field paths address JSON objects using dots; drops precede
+renames, then explicit sets. These sets override values, unlike `extraBody`,
+which supplies missing top-level defaults. Renames with multiple sources run in
+lexical source order. Keep credentials in the secret store, not transforms.
+
 Remote quota availability depends on provider credentials and APIs. Xiaomi MiMo Token Plan quota is read from `GET /v1/platform/token_plan` (`Authorization: Bearer <xiaomi_api_key>`), which reports the monthly credit allowance (`quota.total_credits` / `quota.used_credits`) and its `period.end_at` reset; a plan pinned to another `token-plan-*.xiaomimimo.com` host reuses that scheme and host. Google and OpenAI API-key plans likewise have no supported account quota endpoint here (N/A). ZenMux subscription details require a management API key, which may differ from an inference key. MiniMax quota counters and Kimi usage endpoints may change or report inconsistent values; unknown responses are not treated as fresh quota.
 
 The `find`, `rules draft`, and plugin `decision.ask` helpers use the gateway's enabled `decision` route automatically (returning `decision API is not configured` when none is configured). See [docs/design/gateway.md](docs/design/gateway.md) for the full schema, `Quality × Cache × Quota` scoring, TTL-decay cache gravity, semantic tiering, and failover model.

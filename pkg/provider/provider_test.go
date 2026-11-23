@@ -223,3 +223,30 @@ func TestStreamWriterError(t *testing.T) {
 		t.Fatalf("writer error: %v", err)
 	}
 }
+
+func TestRequestTransformAndAuth(t *testing.T) {
+	path, val := "/custom", "model"
+	srv := mockServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/custom" || r.URL.Query().Get("mode") != "model" || r.URL.Query().Has("remove") {
+			t.Errorf("URL %s", r.URL)
+		}
+		if r.Header.Get("Anthropic-Beta") != "" || r.Header.Get("X-Stainless-Lang") != "" || r.Header.Get("X-Order") != "model" || r.Header.Get("X-Custom-Auth") != "fixture-credential" || len(r.Header.Values("X-Custom-Auth")) != 1 {
+			t.Errorf("headers incorrect")
+		}
+		b, _ := io.ReadAll(r.Body)
+		if r.ContentLength != int64(len(b)) || !bytes.Contains(b, []byte(`"new":"model"`)) || bytes.Contains(b, []byte(`"old"`)) || bytes.Contains(b, []byte(`"drop"`)) {
+			t.Errorf("body %s length %d", b, r.ContentLength)
+		}
+		io.WriteString(w, `{}`)
+	}))
+	c := provider.Client{HTTPClient: srv.client, Resolver: provider.CredentialResolverFunc(func(context.Context, string) (string, error) { return "fixture-credential", nil })}
+	ep := provider.Endpoint{BaseURL: srv.url, Protocol: provider.Anthropic, Model: "target", CredentialRef: "ref", AuthHeader: "X-Custom-Auth", Headers: map[string]string{"Anthropic-Beta": "beta"}, RequestTransform: provider.RequestTransform{StripHeaders: []string{"anthropic-beta", "x-stainless-*"}, Path: &path, Query: map[string]*string{"mode": &val, "remove": nil}, RenameBodyFields: map[string]string{"old": "new"}, DropBodyFields: []string{"drop"}, SetHeaders: map[string]string{"X-Order": "endpoint"}}, ModelRequestTransform: provider.RequestTransform{SetHeaders: map[string]string{"X-Order": "model"}, SetBodyFields: map[string]any{"new": "model"}}}
+	_, err := c.Do(context.Background(), ep, provider.Request{Protocol: provider.Anthropic, Header: http.Header{"X-Stainless-Lang": {"go"}, "x-custom-auth": {"client-credential"}}, Query: "remove=1", Body: []byte(`{"old":"endpoint","drop":true}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ep.ModelRequestTransform.SetHeaders = map[string]string{"x-custom-auth": "bad"}
+	if _, err = c.Do(context.Background(), ep, provider.Request{Protocol: provider.Anthropic, Body: []byte(`{}`)}); err == nil {
+		t.Fatal("custom auth override accepted")
+	}
+}
