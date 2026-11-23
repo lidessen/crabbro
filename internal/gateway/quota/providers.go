@@ -223,7 +223,7 @@ func xiaomiQuotaURL(p *config.Plan) string {
 			continue
 		}
 		u, err := url.Parse(ep.BaseURL)
-		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil {
+		if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil {
 			continue
 		}
 		host := strings.ToLower(u.Hostname())
@@ -490,7 +490,7 @@ func fetch(ctx context.Context, c *http.Client, p *config.Plan, key string) (Rem
 		credits := object(m["quota"])
 		total, okTotal := number(credits["total_credits"])
 		used, okUsed := number(credits["used_credits"])
-		if credits == nil || !okTotal || !okUsed || total <= 0 {
+		if credits == nil || !okTotal || !okUsed || total <= 0 || used < 0 {
 			return q, &syncFetchError{Primary: parseFetchError("primary")}
 		}
 		if code, ok := m["plan_code"].(string); ok && code != "" && (key == "" || !strings.Contains(code, key)) {

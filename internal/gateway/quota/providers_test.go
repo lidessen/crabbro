@@ -452,13 +452,14 @@ func TestXiaomiTokenPlanNoPlanCode(t *testing.T) {
 	}
 }
 
-// A token_plan document without a usable monthly allowance (missing or
-// non-positive total_credits) is a parse failure, not a fresh snapshot, and
+// A token_plan document without a usable monthly allowance or with negative
+// usage is a parse failure, not a fresh snapshot, and
 // the non-empty-window guard keeps an unexpected 200 body from being stored.
-func TestXiaomiTokenPlanRejectsBadTotal(t *testing.T) {
+func TestXiaomiTokenPlanRejectsInvalidCredits(t *testing.T) {
 	for _, tt := range []struct{ name, payload string }{
 		{"zero-total", `{"object":"token_plan","plan_code":"standard","quota":{"total_credits":0,"used_credits":10}}`},
 		{"missing-total", `{"object":"token_plan","plan_code":"standard","quota":{"used_credits":10}}`},
+		{"negative-used", `{"object":"token_plan","plan_code":"standard","quota":{"total_credits":100,"used_credits":-1}}`},
 		{"empty", `{}`},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -469,7 +470,7 @@ func TestXiaomiTokenPlanRejectsBadTotal(t *testing.T) {
 			if len(q.Windows) != 0 {
 				t.Fatalf("windows = %+v, want none for %s", q.Windows, tt.name)
 			}
-			if !strings.Contains(err.Error(), "parse error") {
+			if err.Error() != "quota sync failed (primary: parse error)" {
 				t.Fatalf("error = %v, want a sanitized parse error", err)
 			}
 		})
@@ -486,13 +487,14 @@ func TestXiaomiQuotaURL(t *testing.T) {
 		t.Fatalf("derived endpoint = %q", got)
 	}
 	responses := &config.Plan{Endpoints: map[string]*config.EndpointSpec{
-		config.ProtocolOpenAIResponses: {BaseURL: "http://token-plan-private.xiaomimimo.com/v1"},
+		config.ProtocolOpenAIResponses: {BaseURL: "https://token-plan-private.xiaomimimo.com/v1"},
 	}}
-	if got := xiaomiQuotaURL(responses); got != "http://token-plan-private.xiaomimimo.com/v1/platform/token_plan" {
+	if got := xiaomiQuotaURL(responses); got != "https://token-plan-private.xiaomimimo.com/v1/platform/token_plan" {
 		t.Fatalf("responses endpoint = %q", got)
 	}
 	for _, p := range []*config.Plan{
 		{},
+		{Endpoints: map[string]*config.EndpointSpec{config.ProtocolOpenAIResponses: {BaseURL: "http://token-plan-private.xiaomimimo.com/v1"}}},
 		{Endpoints: map[string]*config.EndpointSpec{config.ProtocolOpenAIChat: {BaseURL: "https://api.xiaomimimo.com/v1"}}},
 		{Endpoints: map[string]*config.EndpointSpec{config.ProtocolOpenAIChat: {BaseURL: "https://token-plan-evil.example.com/v1"}}},
 	} {
