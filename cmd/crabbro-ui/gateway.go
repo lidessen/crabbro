@@ -670,6 +670,7 @@ func gwUsageMetrics(c *ui.Context, p *palette, total api.GatewayUsageBucket) {
 		gwMetric(c, p, "Tokens", gwCount(total.TotalTokens), "", p.faint)
 		gwMetric(c, p, "Cache hit", gwCacheHit(total), "", p.faint)
 		gwMetric(c, p, "Avg. TTFT", gwMilliseconds(total.AvgTTFTMs), "", p.faint)
+		gwMetric(c, p, "Avg. tok/s", gwTokensPerSec(total.AvgTokensPerSec), "", p.faint)
 	})
 	ui.Row(c).FillWidth().Gap(8).Wrap().Children(func() {
 		ui.Text(c, fmt.Sprintf("%s input · %s output · %s cache read", gwCount(total.InputTokens),
@@ -840,4 +841,11 @@ func (a *app) gatewayTraceSection(c *ui.Context, p *palette, gt *api.GatewayTrac
 			ui.Text(c.Key(fmt.Sprintf("gw-cand:%d", i)), line).FontSize(11.5).Font(mono()).TextColor(col).FillWidth()
 		}
 	}
+}
+
+func gwTokensPerSec(rate float64) string {
+	if rate <= 0 {
+		return "—"
+	}
+	return fmt.Sprintf("%.1f", rate)
 }

@@ -56,7 +56,7 @@ func TestMigrateLegacyUsage(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	_, err = db.Exec(`INSERT INTO gateway_usage (ts, plan_id, model, protocol, route_id, session_key, status) VALUES (?, 'p', 'm', '', '', '', 200)`, now.UnixMilli())
+	_, err = db.Exec(`INSERT INTO gateway_usage (ts, plan_id, model, protocol, route_id, session_key, status, output_tokens, ttft_ms, duration_ms) VALUES (?, 'p', 'm', '', '', '', 200, 20, 100, 500)`, now.UnixMilli())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestMigrateLegacyUsage(t *testing.T) {
 			t.Fatal(err)
 		}
 		got, err := st.Aggregate("test", now.Add(-time.Second), now.Add(time.Second), "")
-		if err != nil || got.Totals.Requests != 1 || got.Totals.Retries != 0 {
+		if err != nil || got.Totals.Requests != 1 || got.Totals.Retries != 0 || got.Totals.OutputTokens != 20 || got.Totals.AvgTokensPerSec != 0 {
 			t.Fatalf("legacy totals = %+v, err = %v", got.Totals, err)
 		}
 		if err := st.Close(); err != nil {
@@ -180,5 +180,46 @@ func TestCalibratorHeadersAndAIMD(t *testing.T) {
 	cal.NoteSuccess("ant")
 	if f := cal.EffectiveCapFactor("ant", now); f != 0.6 {
 		t.Fatalf("factor after success = %v, want 0.6", f)
+	}
+}
+
+func TestAggregateGenerationSpeed(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "usage.db"), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	now := time.Now().UTC()
+	entries := []UsageEntry{
+		{Timestamp: now, PlanID: "a", Model: "m", Protocol: "openai-chat", Status: 200, OutputTokens: 100, ReasoningTokens: 30, GenMs: 1000},
+		{Timestamp: now, PlanID: "a", Model: "m", Status: 200, OutputTokens: 20, GenMs: 1000},
+		{Timestamp: now, PlanID: "b", Model: "m", Protocol: "gemini", Status: 200, OutputTokens: 30, ReasoningTokens: 10, GenMs: 1000},
+		{Timestamp: now, PlanID: "c", Model: "m", Status: 200, OutputTokens: 1, GenMs: 1},
+		{Timestamp: now, PlanID: "a", Model: "m", Status: 500, OutputTokens: 500, GenMs: 1000},
+		{Timestamp: now, PlanID: "a", Model: "m", Status: 200, ErrorKind: "stream_error", OutputTokens: 500, GenMs: 1000},
+		{Timestamp: now, PlanID: "a", Model: "m", Status: 200, GenMs: 1000},
+		{Timestamp: now, PlanID: "a", Model: "m", Status: 200, OutputTokens: 100, GenMs: 0},
+	}
+	for _, e := range entries {
+		if err := st.Record(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := st.Aggregate("test", now.Add(-time.Second), now.Add(time.Second), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := float64(161000) / 3001; got.Totals.AvgTokensPerSec != want {
+		t.Fatalf("total speed = %v, want %v", got.Totals.AvgTokensPerSec, want)
+	}
+	want := map[string]float64{"a": 60, "b": 40, "c": 1000}
+	for _, b := range got.Buckets {
+		if b.AvgTokensPerSec != want[b.Plan] {
+			t.Errorf("%s speed = %v, want %v", b.Plan, b.AvgTokensPerSec, want[b.Plan])
+		}
+	}
+	filtered, err := st.Aggregate("test", now.Add(-time.Second), now.Add(time.Second), "a")
+	if err != nil || filtered.Totals.AvgTokensPerSec != 60 {
+		t.Fatalf("filtered speed = %v, err = %v", filtered.Totals.AvgTokensPerSec, err)
 	}
 }

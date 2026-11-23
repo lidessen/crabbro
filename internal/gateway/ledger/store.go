@@ -33,6 +33,7 @@ type UsageEntry struct {
 	TotalTokens      int64
 	TTFTMs           int64
 	DurationMs       int64
+	GenMs            int64
 	IsRetry          bool
 }
 
@@ -98,6 +99,7 @@ CREATE TABLE IF NOT EXISTS gateway_usage (
   total_tokens       INTEGER NOT NULL DEFAULT 0,
   ttft_ms            INTEGER NOT NULL DEFAULT 0,
   duration_ms        INTEGER NOT NULL DEFAULT 0,
+  gen_ms             INTEGER NOT NULL DEFAULT 0,
   is_retry           INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_gw_usage_plan_ts ON gateway_usage(plan_id, ts);
@@ -110,7 +112,7 @@ CREATE INDEX IF NOT EXISTS idx_gw_usage_ts ON gateway_usage(ts);
 	if err != nil {
 		return err
 	}
-	hasRetry := false
+	hasRetry, hasGen := false, false
 	for rows.Next() {
 		var cid, notNull, primaryKey int
 		var name, columnType string
@@ -120,6 +122,7 @@ CREATE INDEX IF NOT EXISTS idx_gw_usage_ts ON gateway_usage(ts);
 			return err
 		}
 		hasRetry = hasRetry || name == "is_retry"
+		hasGen = hasGen || name == "gen_ms"
 	}
 	err = rows.Err()
 	rows.Close()
@@ -127,7 +130,12 @@ CREATE INDEX IF NOT EXISTS idx_gw_usage_ts ON gateway_usage(ts);
 		return err
 	}
 	if !hasRetry {
-		_, err = s.db.Exec(`ALTER TABLE gateway_usage ADD COLUMN is_retry INTEGER NOT NULL DEFAULT 0`)
+		if _, err = s.db.Exec(`ALTER TABLE gateway_usage ADD COLUMN is_retry INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return err
+		}
+	}
+	if !hasGen {
+		_, err = s.db.Exec(`ALTER TABLE gateway_usage ADD COLUMN gen_ms INTEGER NOT NULL DEFAULT 0`)
 	}
 	return err
 }
@@ -156,11 +164,11 @@ func (s *Store) Record(e UsageEntry) error {
 INSERT INTO gateway_usage (
   ts, plan_id, model, protocol, route_id, session_key, status, error_kind,
   input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, total_tokens,
-  ttft_ms, duration_ms, is_retry
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ttft_ms, duration_ms, gen_ms, is_retry
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		ts, e.PlanID, e.Model, e.Protocol, e.RouteID, e.SessionKey, e.Status, e.ErrorKind,
 		e.InputTokens, e.OutputTokens, e.CacheReadTokens, e.CacheWriteTokens, e.ReasoningTokens, e.TotalTokens,
-		e.TTFTMs, e.DurationMs, e.IsRetry,
+		e.TTFTMs, e.DurationMs, e.GenMs, e.IsRetry,
 	)
 	return err
 }
@@ -206,7 +214,12 @@ SELECT
   COALESCE(AVG(NULLIF(ttft_ms, 0)), 0),
   COALESCE(AVG(NULLIF(duration_ms, 0)), 0),
   COUNT(NULLIF(ttft_ms, 0)),
-  COUNT(NULLIF(duration_ms, 0))
+  COUNT(NULLIF(duration_ms, 0)),
+  -- Gemini reports thought tokens separately; OpenAI includes them in output.
+  COALESCE(SUM(CASE WHEN gen_ms > 0 AND (output_tokens + CASE WHEN protocol = 'gemini' THEN reasoning_tokens ELSE 0 END) > 0 AND status >= 200 AND status < 300 AND error_kind = ''
+    THEN output_tokens + CASE WHEN protocol = 'gemini' THEN reasoning_tokens ELSE 0 END ELSE 0 END), 0),
+  COALESCE(SUM(CASE WHEN gen_ms > 0 AND (output_tokens + CASE WHEN protocol = 'gemini' THEN reasoning_tokens ELSE 0 END) > 0 AND status >= 200 AND status < 300 AND error_kind = ''
+    THEN gen_ms ELSE 0 END), 0)
 FROM gateway_usage
 WHERE ts >= ? AND ts <= ?`
 	args := []any{since.UTC().UnixMilli(), until.UTC().UnixMilli()}
@@ -223,17 +236,22 @@ WHERE ts >= ? AND ts <= ?`
 	defer rows.Close()
 
 	var sumTTFTWeight, sumDurWeight float64
-	var ttftSamples, durationSamples int64
+	var ttftSamples, durationSamples, genTokens, genMillis int64
 	for rows.Next() {
 		var b shared.GatewayUsageBucket
-		var bucketTTFTSamples, bucketDurationSamples int64
+		var bucketTTFTSamples, bucketDurationSamples, bucketGenTokens, bucketGenMillis int64
 		if err := rows.Scan(
 			&b.Plan, &b.Model, &b.Requests, &b.Retries, &b.Errors,
 			&b.InputTokens, &b.OutputTokens, &b.CacheReadTokens, &b.CacheWriteTokens,
-			&b.ReasoningTokens, &b.TotalTokens, &b.AvgTTFTMs, &b.AvgDurationMs, &bucketTTFTSamples, &bucketDurationSamples,
+			&b.ReasoningTokens, &b.TotalTokens, &b.AvgTTFTMs, &b.AvgDurationMs, &bucketTTFTSamples, &bucketDurationSamples, &bucketGenTokens, &bucketGenMillis,
 		); err != nil {
 			return resp, err
 		}
+		if bucketGenMillis > 0 {
+			b.AvgTokensPerSec = float64(bucketGenTokens) * 1000 / float64(bucketGenMillis)
+		}
+		genTokens += bucketGenTokens
+		genMillis += bucketGenMillis
 		if denom := b.InputTokens + b.CacheReadTokens; denom > 0 {
 			b.CacheHitRatio = float64(b.CacheReadTokens) / float64(denom)
 		}
@@ -264,6 +282,9 @@ WHERE ts >= ? AND ts <= ?`
 		}
 		return resp.Buckets[i].Model < resp.Buckets[j].Model
 	})
+	if genMillis > 0 {
+		resp.Totals.AvgTokensPerSec = float64(genTokens) * 1000 / float64(genMillis)
+	}
 	if ttftSamples > 0 {
 		resp.Totals.AvgTTFTMs = sumTTFTWeight / float64(ttftSamples)
 	}

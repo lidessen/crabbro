@@ -392,7 +392,8 @@ func (e *Executor) tryCandidate(
 		}
 
 		// Commit streaming response downstream!
-		ttftMs = time.Since(attStart).Milliseconds()
+		streamStarted := time.Now()
+		ttftMs = streamStarted.Sub(attStart).Milliseconds()
 		*attempts = append(*attempts, shared.GatewayAttempt{
 			Plan: cand.Plan.ID, CredentialRef: cand.CredentialRef,
 			Model:     cand.Target.Model,
@@ -402,7 +403,7 @@ func (e *Executor) tryCandidate(
 			LatencyMs: ttftMs,
 		})
 
-		e.commitStream(w, r, rec, cand, sel, ingress, *attempts, resp, peeked, sseRest, bridgeState, secVal, ttftMs, accountedAttempts, exStarted)
+		e.commitStream(w, r, rec, cand, sel, ingress, *attempts, resp, peeked, sseRest, bridgeState, secVal, ttftMs, accountedAttempts, exStarted, streamStarted)
 		return attemptOutcome{committed: true}
 	}
 
@@ -485,7 +486,7 @@ func (e *Executor) tryCandidate(
 	w.WriteHeader(outStatus)
 	_, _ = w.Write(outBody)
 
-	e.recordSuccess(sel, cand, usage, ttftMs, time.Since(exStarted).Milliseconds(), accountedAttempts)
+	e.recordSuccess(sel, cand, usage, ttftMs, time.Since(exStarted).Milliseconds(), 0, accountedAttempts)
 	e.finalizeRecord(rec, cand, *attempts, usage, outStatus, outHdr, outBody, needBridge, secVal, exStarted, "")
 	return attemptOutcome{committed: true}
 }
@@ -506,6 +507,7 @@ func (e *Executor) commitStream(
 	ttftMs int64,
 	accountedAttempts *int,
 	exStarted time.Time,
+	streamStarted time.Time,
 ) {
 	defer resp.Body.Close()
 	needBridge := cand.EndpointProto != ingress.Protocol
@@ -576,7 +578,7 @@ func (e *Executor) commitStream(
 		return
 	}
 
-	e.recordSuccess(sel, cand, usage, ttftMs, totalDur, accountedAttempts)
+	e.recordSuccess(sel, cand, usage, ttftMs, totalDur, time.Since(streamStarted).Milliseconds(), accountedAttempts)
 	e.finalizeRecord(rec, cand, attempts, usage, http.StatusOK, w.Header(), preview.Bytes(), needBridge, secVal, exStarted, "")
 }
 
@@ -787,7 +789,7 @@ func (e *Executor) ExecuteDecision(ctx context.Context, snap *config.Snapshot, r
 			Plan: cand.Plan.ID, CredentialRef: cand.CredentialRef, Model: cand.Target.Model, Protocol: cand.EndpointProto,
 			Status: resp.StatusCode, LatencyMs: latMs, TTFTMs: latMs,
 		})
-		e.recordSuccess(sel, cand, dresp.Usage, latMs, time.Since(started).Milliseconds(), &accountedAttempts)
+		e.recordSuccess(sel, cand, dresp.Usage, latMs, time.Since(started).Milliseconds(), 0, &accountedAttempts)
 		e.finalizeRecord(rec, cand, attempts, dresp.Usage, resp.StatusCode, resp.Header, respBytes, needBridge, secVal, started, "")
 		return dresp, nil
 	}
@@ -909,7 +911,7 @@ func (e *Executor) applyFailure(cand router.Candidate, fc FailureClass, latencyM
 	}
 }
 
-func (e *Executor) recordSuccess(sel *router.Selection, cand router.Candidate, usage shared.TokenUsage, ttftMs, totalMs int64, accountedAttempts *int) {
+func (e *Executor) recordSuccess(sel *router.Selection, cand router.Candidate, usage shared.TokenUsage, ttftMs, totalMs, genMs int64, accountedAttempts *int) {
 	now := time.Now().UTC()
 	if e.health() != nil {
 		e.health().RecordOutcome(cand.Plan.ID, false, totalMs)
@@ -935,6 +937,7 @@ func (e *Executor) recordSuccess(sel *router.Selection, cand router.Candidate, u
 			TotalTokens:      usage.Total(),
 			TTFTMs:           ttftMs,
 			DurationMs:       totalMs,
+			GenMs:            genMs,
 			IsRetry:          accountedAttempts != nil && *accountedAttempts > 0,
 		})
 	}

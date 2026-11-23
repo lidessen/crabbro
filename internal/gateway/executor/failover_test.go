@@ -508,3 +508,60 @@ func TestDecisionCoolingDoesNotConsumeAttempt(t *testing.T) {
 		t.Fatalf("result=%+v error=%v hits=%d,%d", result, err, first.hits.Load(), second.hits.Load())
 	}
 }
+
+func TestStreamGenerationSpeedExcludesWaitAndRetry(t *testing.T) {
+	first := newTestUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(100 * time.Millisecond)
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	second := newTestUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		time.Sleep(160 * time.Millisecond)
+		fmt.Fprint(w, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\n")
+		w.(http.Flusher).Flush()
+		time.Sleep(80 * time.Millisecond)
+		fmt.Fprint(w, "event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":100}}\n\n")
+	})
+	exec, snap := newExecutorFixture(t, first, second)
+	st, err := ledger.Open(filepath.Join(t.TempDir(), "usage.db"), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	exec.Ledger = st
+	start := time.Now().Add(-time.Second)
+	rec := serveAnthropic(t, exec, snap, `{"model":"coding-main","stream":true,"messages":[]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	got, err := st.Aggregate("test", start, time.Now().Add(time.Second), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Totals.OutputTokens != 100 || got.Totals.Retries != 1 || got.Totals.AvgTTFTMs < 140 {
+		t.Fatalf("totals = %+v", got.Totals)
+	}
+	// Recover the measured generation time from the rate; it must exclude both
+	// the initial failed attempt and the successful attempt's first-token wait.
+	genMs := 100000 / got.Totals.AvgTokensPerSec
+	if genMs < 60 || genMs > 150 {
+		t.Fatalf("generation duration = %.1fms, totals = %+v", genMs, got.Totals)
+	}
+}
+
+func TestNonStreamingHasNoGenerationSpeed(t *testing.T) {
+	up := newTestUpstream(t, func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, anthropicOK) })
+	exec, snap := newExecutorFixture(t, up)
+	st, err := ledger.Open(filepath.Join(t.TempDir(), "usage.db"), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	exec.Ledger = st
+	start := time.Now().Add(-time.Second)
+	serveAnthropic(t, exec, snap, `{"model":"coding-main","messages":[]}`)
+	got, err := st.Aggregate("test", start, time.Now().Add(time.Second), "")
+	if err != nil || got.Totals.OutputTokens != 1 || got.Totals.AvgTokensPerSec != 0 {
+		t.Fatalf("totals = %+v, err = %v", got.Totals, err)
+	}
+}

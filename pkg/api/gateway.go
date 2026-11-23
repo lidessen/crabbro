@@ -273,6 +273,8 @@ type GatewayRouteListResponse struct {
 // GatewayUsageBucket aggregates gateway accounting for one (plan, model) pair.
 // Requests counts first recorded attempts; Retries counts subsequent recorded
 // attempts. Errors, tokens and latency averages include all recorded attempts.
+// AvgTokensPerSec is the generation-time-weighted rate of successful streaming
+// attempts with output usage and a measurable time after stream commit.
 type GatewayUsageBucket struct {
 	Plan             string  `json:"plan"`
 	Model            string  `json:"model"`
@@ -288,6 +290,7 @@ type GatewayUsageBucket struct {
 	CacheHitRatio    float64 `json:"cacheHitRatio,omitempty"`
 	AvgTTFTMs        float64 `json:"avgTtftMs,omitempty"`
 	AvgDurationMs    float64 `json:"avgDurationMs,omitempty"`
+	AvgTokensPerSec  float64 `json:"avgTokensPerSec,omitempty"`
 }
 
 // GatewayUsageResponse is returned by GET /v1/gateway/usage.

@@ -191,8 +191,8 @@ func gwUsageInspector(c *ui.Context, p *palette, plan gwUsagePlan, split bool) {
 			hairline(c, p)
 			ui.Column(c.Key("gw-usage-model:" + model.Model)).FillWidth().Gap(4).Children(func() {
 				ui.Text(c, model.Model).FontSize(12).FontWeight(600).Font(mono()).TextColor(p.text).FillWidth()
-				detail := fmt.Sprintf("%s tokens · %s req · %s cache · %s TTFT",
-					gwCount(model.TotalTokens), gwCount(model.Requests), gwCacheHit(model), gwMilliseconds(model.AvgTTFTMs))
+				detail := fmt.Sprintf("%s tokens · %s req · %s cache · %s TTFT · %s duration · %s tok/s",
+					gwCount(model.TotalTokens), gwCount(model.Requests), gwCacheHit(model), gwMilliseconds(model.AvgTTFTMs), gwMilliseconds(model.AvgDurationMs), gwTokensPerSec(model.AvgTokensPerSec))
 				ui.Text(c, detail).FontSize(11.5).TextColor(p.muted).FillWidth()
 				if model.Errors > 0 {
 					ui.Text(c, gwErrors(model.Errors)).FontSize(11).TextColor(p.removed)

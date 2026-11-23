@@ -169,12 +169,12 @@ func cmdGateway(cfg *clientConfig, args []string) error {
 			fmt.Println(string(raw))
 			return nil
 		}
-		fmt.Printf("window=%s total_requests=%d errors=%d retries=%d total_tokens=%d in=%d out=%d cache_read=%d avg_ttft=%.0fms\n",
+		fmt.Printf("window=%s total_requests=%d errors=%d retries=%d total_tokens=%d in=%d out=%d cache_read=%d avg_ttft=%.0fms avg_duration=%.0fms avg_tok_per_sec=%s\n",
 			out.Window, out.Totals.Requests, out.Totals.Errors, out.Totals.Retries, out.Totals.TotalTokens,
-			out.Totals.InputTokens, out.Totals.OutputTokens, out.Totals.CacheReadTokens, out.Totals.AvgTTFTMs)
+			out.Totals.InputTokens, out.Totals.OutputTokens, out.Totals.CacheReadTokens, out.Totals.AvgTTFTMs, out.Totals.AvgDurationMs, gatewayTokensPerSec(out.Totals.AvgTokensPerSec))
 		for _, b := range out.Buckets {
-			fmt.Printf("  %-18s %-24s requests=%d errors=%d retries=%d tokens=%d hit=%.0f%% ttft=%.0fms\n",
-				b.Plan, b.Model, b.Requests, b.Errors, b.Retries, b.TotalTokens, b.CacheHitRatio*100, b.AvgTTFTMs)
+			fmt.Printf("  %-18s %-24s requests=%d errors=%d retries=%d tokens=%d hit=%.0f%% ttft=%.0fms duration=%.0fms tok_per_sec=%s\n",
+				b.Plan, b.Model, b.Requests, b.Errors, b.Retries, b.TotalTokens, b.CacheHitRatio*100, b.AvgTTFTMs, b.AvgDurationMs, gatewayTokensPerSec(b.AvgTokensPerSec))
 		}
 		return nil
 	case "cooldown-clear":
@@ -478,4 +478,11 @@ func gatewayFetch(cfg *clientConfig, method, path string, body io.Reader) ([]byt
 		return nil, fmt.Errorf("%s", strings.TrimSpace(string(raw)))
 	}
 	return raw, nil
+}
+
+func gatewayTokensPerSec(rate float64) string {
+	if rate <= 0 {
+		return "—"
+	}
+	return fmt.Sprintf("%.1f", rate)
 }
