@@ -44,13 +44,26 @@ func (c *Client) EnsureDaemon(ctx context.Context) error {
 		return err
 	}
 	cmd := exec.Command(bin, "--uds-path", uds, "--tcp-addr", tcp)
+	detachDaemon(cmd)
 	cmd.Stdout = logf
 	cmd.Stderr = logf
 	if err := cmd.Start(); err != nil {
 		logf.Close()
 		return err
 	}
-	_ = os.WriteFile(filepath.Join(filepath.Dir(uds), "crabbrod.pid"), []byte(strconv.Itoa(cmd.Process.Pid)+"\n"), 0o600)
+	if err := os.WriteFile(filepath.Join(filepath.Dir(uds), "crabbrod.pid"), []byte(strconv.Itoa(cmd.Process.Pid)+"\n"), 0o600); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Process.Release()
+		logf.Close()
+		return err
+	}
+	defer cmd.Process.Release()
+	ready := false
+	defer func() {
+		if !ready {
+			_ = cmd.Process.Kill()
+		}
+	}()
 	logf.Close()
 
 	deadline := time.Now().Add(5 * time.Second)
@@ -62,11 +75,12 @@ func (c *Client) EnsureDaemon(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := c.ping(ctx); err == nil {
+		status, err := c.Status(ctx)
+		if err == nil && status.PID == cmd.Process.Pid {
+			ready = true
 			return nil
-		} else {
-			last = err
 		}
+		last = err
 		timer := time.NewTimer(100 * time.Millisecond)
 		select {
 		case <-ctx.Done():
@@ -90,6 +104,9 @@ func (c *Client) ping(ctx context.Context) error {
 
 func findDaemonBin() (string, error) {
 	if self, err := os.Executable(); err == nil {
+		if resolved, err := filepath.EvalSymlinks(self); err == nil {
+			self = resolved
+		}
 		cand := filepath.Join(filepath.Dir(self), "crabbrod")
 		if st, err := os.Stat(cand); err == nil && !st.IsDir() {
 			return cand, nil

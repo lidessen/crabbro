@@ -192,17 +192,19 @@ stop_running() {
 		log "dry-run: would stop a running daemon (crabbro daemon stop) and quit Crabbro.app"
 		return 0
 	fi
-	local cli=""
-	if [[ -n "${CLI_DIR:-}" && -x "${CLI_DIR}/crabbro" ]]; then
+	if [[ "$OS" == "Darwin" ]]; then
+		osascript -e 'tell application "Crabbro" to quit' >/dev/null 2>&1 || true
+	fi
+	local cli="${STOP_CLI:-}"
+	if [[ -n "$cli" ]]; then
+		:
+	elif [[ -n "${CLI_DIR:-}" && -x "${CLI_DIR}/crabbro" ]]; then
 		cli="${CLI_DIR}/crabbro"
 	elif command -v crabbro >/dev/null 2>&1; then
 		cli="$(command -v crabbro)"
 	fi
 	if [[ -n "$cli" ]]; then
-		"$cli" daemon stop >/dev/null 2>&1 || true
-	fi
-	if [[ "$OS" == "Darwin" ]]; then
-		osascript -e 'tell application "Crabbro" to quit' >/dev/null 2>&1 || true
+		"$cli" daemon stop || die "could not stop the running daemon"
 	fi
 }
 
@@ -381,6 +383,7 @@ install_macos() {
 	bins="${work}/bin"
 	build_bins "$bins"
 	assemble_app "$bins" "$work"
+	STOP_CLI="$bins/crabbro" stop_running
 	app="${work}/${APP_NAME}.app"
 	replace_app "$app"
 	codesign_and_unquarantine "${APP_DIR}/${APP_NAME}.app"
@@ -398,6 +401,7 @@ install_cli_only() {
 	fi
 	work="$(mktemp -d "${TMPDIR:-/tmp}/crabbro-install.XXXXXX")"
 	build_bins "$work"
+	STOP_CLI="$work/crabbro" stop_running
 	srun mkdir -p "$CLI_DIR"
 	srun cp "$work/crabbro" "$work/crabbrod" "$work/crabbro-plugin-host" "$CLI_DIR/"
 	srun chmod 755 "$CLI_DIR/crabbro" "$CLI_DIR/crabbrod" "$CLI_DIR/crabbro-plugin-host"
@@ -509,7 +513,9 @@ if [[ "$UNINSTALL" -eq 1 ]]; then
 	exit 0
 fi
 
-stop_running
+if [[ "$DRY_RUN" -eq 1 ]]; then
+	stop_running
+fi
 
 if [[ "$OS" == "Darwin" ]]; then
 	install_macos

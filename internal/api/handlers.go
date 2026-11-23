@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -30,7 +31,10 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		ruleCount = s.RuleCountFn()
 	}
 
+	executable, _ := os.Executable()
 	resp := shared.StatusResponse{
+		PID:           os.Getpid(),
+		Executable:    executable,
 		Version:       s.Version,
 		UptimeSeconds: uptime,
 		ProxyAddr:     s.ProxyAddr,

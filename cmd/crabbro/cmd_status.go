@@ -29,6 +29,8 @@ func cmdStatus(cfg *clientConfig, args []string) error {
 
 	if *pretty {
 		fmt.Printf("Version:       %s\n", status.Version)
+		fmt.Printf("PID:           %d\n", status.PID)
+		fmt.Printf("Executable:    %s\n", status.Executable)
 		fmt.Printf("Uptime:        %s\n", formatDuration(status.UptimeSeconds))
 		fmt.Printf("Proxy Addr:    %s\n", status.ProxyAddr)
 		fmt.Printf("Requests:      %d\n", status.RequestCount)

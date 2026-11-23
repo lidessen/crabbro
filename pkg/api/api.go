@@ -9,6 +9,8 @@ import "time"
 // StatusResponse is returned by GET /v1/status.
 type StatusResponse struct {
 	Version           string `json:"version"`
+	PID               int    `json:"pid,omitempty"`
+	Executable        string `json:"executable,omitempty"`
 	UptimeSeconds     int64  `json:"uptimeSeconds"`
 	ProxyAddr         string `json:"proxyAddr"`
 	GatewayAddr       string `json:"gatewayAddr,omitempty"`
