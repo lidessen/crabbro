@@ -392,18 +392,14 @@ func (e *Executor) tryCandidate(
 		}
 
 		// Commit streaming response downstream!
-		streamStarted := time.Now()
-		ttftMs = streamStarted.Sub(attStart).Milliseconds()
 		*attempts = append(*attempts, shared.GatewayAttempt{
 			Plan: cand.Plan.ID, CredentialRef: cand.CredentialRef,
-			Model:     cand.Target.Model,
-			Protocol:  cand.EndpointProto,
-			Status:    resp.StatusCode,
-			TTFTMs:    ttftMs,
-			LatencyMs: ttftMs,
+			Model:    cand.Target.Model,
+			Protocol: cand.EndpointProto,
+			Status:   resp.StatusCode,
 		})
 
-		e.commitStream(w, r, rec, cand, sel, ingress, *attempts, resp, peeked, sseRest, bridgeState, secVal, ttftMs, accountedAttempts, exStarted, streamStarted)
+		e.commitStream(w, r, rec, cand, sel, ingress, *attempts, resp, peeked, sseRest, bridgeState, secVal, accountedAttempts, exStarted, attStart)
 		return attemptOutcome{committed: true}
 	}
 
@@ -504,10 +500,9 @@ func (e *Executor) commitStream(
 	sseRest io.Reader,
 	bridgeState any,
 	secVal string,
-	ttftMs int64,
 	accountedAttempts *int,
 	exStarted time.Time,
-	streamStarted time.Time,
+	attStart time.Time,
 ) {
 	defer resp.Body.Close()
 	needBridge := cand.EndpointProto != ingress.Protocol
@@ -531,6 +526,7 @@ func (e *Executor) commitStream(
 	var usage shared.TokenUsage
 	var preview bytes.Buffer
 	var streamErr error
+	timed := &streamTimingWriter{w: w, tap: codec.NewStreamDeltaTap(ingress.Protocol)}
 
 	if !needBridge {
 		tap := codec.NewUsageTap(cand.EndpointProto)
@@ -538,13 +534,13 @@ func (e *Executor) commitStream(
 		if e.Signatures != nil {
 			sigTap = codec.NewSignatureStreamTap(cand.EndpointProto, codec.CandidateSignatureOrigin(cand), e.Signatures)
 		}
-		dst := &streamSinkWriter{w: w, f: flusher, tap: tap, preview: &preview, sigTap: sigTap}
+		dst := &streamSinkWriter{w: timed, f: flusher, tap: tap, preview: &preview, sigTap: sigTap}
 		src := io.MultiReader(bytes.NewReader(peeked), sseRest)
 		_, streamErr = io.Copy(dst, src)
 		sigTap.Close()
 		usage = tap.Usage()
 	} else {
-		capW := &limitedPreviewWriter{w: w, preview: &preview}
+		capW := &limitedPreviewWriter{w: timed, preview: &preview}
 		srcRC := struct {
 			io.Reader
 			io.Closer
@@ -552,7 +548,16 @@ func (e *Executor) commitStream(
 		usage, streamErr = e.Bridge.TranslateStream(cand, ingress, bridgeState, peeked, srcRC, capW, flusher)
 	}
 
-	totalDur := time.Since(exStarted).Milliseconds()
+	finished := time.Now()
+	firstDelta := timed.firstDelta
+	if firstDelta.IsZero() {
+		firstDelta = finished
+	}
+	ttftMs := firstDelta.Sub(attStart).Milliseconds()
+	genMs := finished.Sub(firstDelta).Milliseconds()
+	attempts[len(attempts)-1].TTFTMs = ttftMs
+	attempts[len(attempts)-1].LatencyMs = ttftMs
+	totalDur := finished.Sub(exStarted).Milliseconds()
 	if streamErr != nil {
 		if e.health() != nil {
 			e.health().RecordOutcome(cand.Plan.ID, true, totalDur)
@@ -578,7 +583,7 @@ func (e *Executor) commitStream(
 		return
 	}
 
-	e.recordSuccess(sel, cand, usage, ttftMs, totalDur, time.Since(streamStarted).Milliseconds(), accountedAttempts)
+	e.recordSuccess(sel, cand, usage, ttftMs, totalDur, genMs, accountedAttempts)
 	e.finalizeRecord(rec, cand, attempts, usage, http.StatusOK, w.Header(), preview.Bytes(), needBridge, secVal, exStarted, "")
 }
 
@@ -1168,6 +1173,24 @@ func flattenHeaders(h http.Header) ([]shared.HeaderField, shared.Headers) {
 		}
 	}
 	return list, flat
+}
+
+type streamTimingWriter struct {
+	w          io.Writer
+	tap        *codec.StreamDeltaTap
+	firstDelta time.Time
+}
+
+func (s *streamTimingWriter) Write(p []byte) (int, error) {
+	n, err := s.w.Write(p)
+	if s.firstDelta.IsZero() && n > 0 {
+		written := time.Now()
+		_, _ = s.tap.Write(p[:n])
+		if s.tap.Found() {
+			s.firstDelta = written
+		}
+	}
+	return n, err
 }
 
 type streamSinkWriter struct {

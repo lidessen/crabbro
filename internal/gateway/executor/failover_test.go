@@ -517,6 +517,10 @@ func TestStreamGenerationSpeedExcludesWaitAndRetry(t *testing.T) {
 	second := newTestUpstream(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		time.Sleep(160 * time.Millisecond)
+		fmt.Fprint(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg\",\"model\":\"test\"}}\n\n")
+		fmt.Fprint(w, "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n")
+		w.(http.Flusher).Flush()
+		time.Sleep(200 * time.Millisecond)
 		fmt.Fprint(w, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\n")
 		w.(http.Flusher).Flush()
 		time.Sleep(80 * time.Millisecond)
@@ -538,13 +542,68 @@ func TestStreamGenerationSpeedExcludesWaitAndRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Totals.OutputTokens != 100 || got.Totals.Retries != 1 || got.Totals.AvgTTFTMs < 140 {
+	if got.Totals.OutputTokens != 100 || got.Totals.Retries != 1 || got.Totals.AvgTTFTMs < 330 {
 		t.Fatalf("totals = %+v", got.Totals)
 	}
 	// Recover the measured generation time from the rate; it must exclude both
 	// the initial failed attempt and the successful attempt's first-token wait.
 	genMs := 100000 / got.Totals.AvgTokensPerSec
 	if genMs < 60 || genMs > 150 {
+		t.Fatalf("generation duration = %.1fms, totals = %+v", genMs, got.Totals)
+	}
+}
+
+func TestStreamWithoutDeltasHasNoGenerationSpeed(t *testing.T) {
+	up := newTestUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg\"}}\n\n")
+		w.(http.Flusher).Flush()
+		time.Sleep(50 * time.Millisecond)
+		fmt.Fprint(w, "event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":10}}\n\n")
+	})
+	exec, snap := newExecutorFixture(t, up)
+	st, err := ledger.Open(filepath.Join(t.TempDir(), "usage.db"), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	exec.Ledger = st
+	start := time.Now().Add(-time.Second)
+	serveAnthropic(t, exec, snap, `{"model":"coding-main","stream":true,"messages":[]}`)
+	got, err := st.Aggregate("test", start, time.Now().Add(time.Second), "")
+	if err != nil || got.Totals.OutputTokens != 10 || got.Totals.AvgTokensPerSec != 0 || got.Totals.AvgTTFTMs < 40 {
+		t.Fatalf("totals = %+v, err = %v", got.Totals, err)
+	}
+}
+
+func TestBridgedStreamGenerationStartsAtDownstreamDelta(t *testing.T) {
+	up := newTestUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\n")
+		w.(http.Flusher).Flush()
+		time.Sleep(160 * time.Millisecond)
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n")
+		w.(http.Flusher).Flush()
+		time.Sleep(60 * time.Millisecond)
+		fmt.Fprint(w, "data: {\"choices\":[],\"usage\":{\"completion_tokens\":100}}\n\ndata: [DONE]\n\n")
+	})
+	exec, snap := newExecutorFixture(t, up)
+	plan := snap.Plans["plan-0"]
+	plan.Endpoints = map[string]*config.EndpointSpec{config.ProtocolOpenAIChat: {BaseURL: up.server.URL}}
+	st, err := ledger.Open(filepath.Join(t.TempDir(), "usage.db"), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	exec.Ledger = st
+	start := time.Now().Add(-time.Second)
+	rec := serveAnthropic(t, exec, snap, `{"model":"coding-main","stream":true,"messages":[]}`)
+	got, err := st.Aggregate("test", start, time.Now().Add(time.Second), "")
+	if err != nil || rec.Code != http.StatusOK || got.Totals.OutputTokens != 100 || got.Totals.AvgTTFTMs < 140 || got.Totals.AvgTokensPerSec == 0 {
+		t.Fatalf("status = %d, totals = %+v, err = %v", rec.Code, got.Totals, err)
+	}
+	genMs := 100000 / got.Totals.AvgTokensPerSec
+	if genMs < 40 || genMs > 130 {
 		t.Fatalf("generation duration = %.1fms, totals = %+v", genMs, got.Totals)
 	}
 }
