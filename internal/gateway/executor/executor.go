@@ -342,6 +342,19 @@ func (e *Executor) tryCandidate(
 			errBody = []byte(scrub.ScrubText(string(errBody), secVal))
 		}
 		if readErr != nil {
+			latMs := time.Since(attStart).Milliseconds()
+			fc := ClassifyHTTPFailure(http.StatusBadGateway, nil, nil, cand.Plan.ID, e.health(), cand.CredentialRef)
+			e.applyFailure(cand, fc, latMs, sel.Route.ID, sel.Signals.SessionKey, http.StatusBadGateway, accountedAttempts)
+			*attempts = append(*attempts, shared.GatewayAttempt{
+				Plan: cand.Plan.ID, CredentialRef: cand.CredentialRef,
+				Model:           cand.Target.Model,
+				Protocol:        cand.EndpointProto,
+				Status:          resp.StatusCode,
+				ErrorKind:       fc.Kind,
+				ErrorMessage:    "upstream response normalization failed",
+				LatencyMs:       latMs,
+				CooldownApplied: fc.CooldownLabel,
+			})
 			return attemptOutcome{retryable: true, errMsg: "upstream response normalization failed"}
 		}
 		latMs := time.Since(attStart).Milliseconds()

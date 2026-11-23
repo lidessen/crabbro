@@ -5,12 +5,15 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/lidessen/crabbro/internal/gateway/codec"
 	"github.com/lidessen/crabbro/internal/gateway/config"
 	"github.com/lidessen/crabbro/internal/gateway/ir"
+	"github.com/lidessen/crabbro/internal/gateway/ledger"
 	"github.com/lidessen/crabbro/internal/transform"
 )
 
@@ -73,6 +76,41 @@ func TestRequestTransformsGenerationAndDecision(t *testing.T) {
 				t.Errorf("body %s", b)
 			}
 		})
+	}
+}
+
+func TestNon2xxResponseTransformFailureConsumesAttempt(t *testing.T) {
+	first := newTestUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `{"error":{"message":"bad request"}}`)
+	})
+	second := newTestUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, anthropicOK)
+	})
+	exec, snap := newExecutorFixture(t, first, second)
+	snap.Routes[0].Policy.MaxAttempts = 1
+	snap.Plans["plan-0"].Endpoints[config.ProtocolAnthropic].ResponseTransform = transform.ResponseSpec{UnwrapPath: "missing"}
+	st, err := ledger.Open(filepath.Join(t.TempDir(), "usage.db"), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	exec.Ledger = st
+	started := time.Now().Add(-time.Second)
+
+	rec := serveAnthropic(t, exec, snap, `{"model":"coding-main","messages":[]}`)
+	if rec.Code != http.StatusBadGateway || first.hits.Load() != 1 || second.hits.Load() != 0 {
+		t.Fatalf("status=%d first=%d second=%d", rec.Code, first.hits.Load(), second.hits.Load())
+	}
+	if health := exec.Router.Health.Snapshot("plan-0", time.Now()); health.ErrorEWMA <= 0 || health.Healthy {
+		t.Fatalf("health = %+v", health)
+	}
+	got, err := st.Aggregate("test", started, time.Now().Add(time.Second), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Totals.Requests != 1 || got.Totals.Errors != 1 || got.Totals.Retries != 0 {
+		t.Fatalf("totals = %+v", got.Totals)
 	}
 }
 
