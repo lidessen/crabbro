@@ -13,8 +13,7 @@ import (
 	"github.com/lidessen/crabbro/pkg/api"
 )
 
-// gwFrame renders the gateway page headlessly against st and returns the
-// tester that drew it, for text assertions on the frame it holds.
+// gwFrame renders the Gateway panels against a common snapshot for text assertions.
 func gwFrame(t *testing.T, st store) *ui.Tester {
 	t.Helper()
 	return gwFrameApp(t, newAppForTest(st, 1))
@@ -33,10 +32,23 @@ func newAppForTest(st store, winIdx int) *app {
 	return a
 }
 
-// gwFrameApp draws one gateway page frame for a.
+// gwFrameApp mounts the panels together so assertions can compare independent
+// endpoint answers. Workspace navigation is exercised through the app view.
 func gwFrameApp(t *testing.T, a *app) *ui.Tester {
 	t.Helper()
-	tt := ui.NewTester(a.view, 1280, 820)
+	tt := ui.NewTester(func(c *ui.Context) {
+		p := applyPal(c)
+		a.pal = p
+		st := a.snapshotState()
+		ui.Column(c).FillWidth().Children(func() {
+			gwConnectionState(c, p, st)
+			a.gwStatusCard(c, p, st)
+			a.gwPlansCard(c, p, st)
+			a.gwRoutesCard(c, p, st)
+			a.gwUsageCard(c, p, st)
+			a.gwSecretsCard(c, p, st)
+		})
+	}, 1280, 820)
 	tt.Frame()
 	return tt
 }
@@ -364,7 +376,7 @@ func TestGatewayRemoteQuotaSummary(t *testing.T) {
 	usage := 25.0
 	st.gwPlans[0].RemoteQuota = &api.RemoteQuotaJSON{Balance: "$17.65", UsagePct: &usage, ResetsRemaining: 2, Stale: true}
 	tt := gwFrame(t, st)
-	if !tt.HasText("Remote quota (stale) · $17.65 · 25% used · 2 resets") {
+	if !tt.HasText("Remote quota (stale) · $17.65 · 2 resets") || !tt.HasText("75%") {
 		t.Fatal("remote quota summary missing")
 	}
 	if !tt.HasText("Refresh quotas") {
@@ -384,7 +396,7 @@ func TestGatewayRemoteQuotaSummaryShowsWindowNote(t *testing.T) {
 		Windows:         []api.RemoteQuotaWindow{{Name: "Token Pass", Note: "$70.62 remaining"}},
 	}
 	tt := gwFrame(t, st)
-	if !tt.HasText("Remote quota · $17.66 · 25% used · Token Pass $70.62 remaining · 2 resets") {
+	if !tt.HasText("Remote quota · $17.66 · Token Pass $70.62 remaining · 2 resets") {
 		t.Fatal("remote quota summary should surface the token pass note")
 	}
 }

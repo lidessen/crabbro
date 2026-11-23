@@ -114,8 +114,8 @@ func TestGatewayStaleAndFreshCardsAreSaidApart(t *testing.T) {
 	if !tt.HasText("the latest status request failed") {
 		t.Error("the status card must say its data is the kept last answer")
 	}
-	if !tt.HasText("stale") {
-		t.Error("the status card header should carry the stale mark")
+	if !tt.HasText("Stale") {
+		t.Error("the Gateway connection status should carry the stale mark")
 	}
 	if tt.HasText("the latest plans request failed") {
 		t.Error("the plans card answered; it must not wear the status card's staleness")

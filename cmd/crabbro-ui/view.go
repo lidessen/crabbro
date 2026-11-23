@@ -318,14 +318,10 @@ func (a *app) statusBar(c *ui.Context, p *palette) {
 			}
 			ui.Box(c.Key("conn-dot")).Width(6).Height(6).Radius(3).Background(dotCol)
 			ui.Text(c, label).FontSize(12).TextColor(p.muted).SingleLine().Shrink(1).MinWidth(40)
+		} else if a.page == pageGateway {
+			gwConnectionState(c, p, st)
 		} else {
-			// The one place the window says where the proxy listens.
-			ui.Row(c).Gap(7).AlignItems(ui.Center).Children(func() {
-				ui.Box(c.Key("conn-dot")).Width(6).Height(6).Radius(3).Background(p.added).
-					Shadow(0, 0, 0, 2, p.added.Alpha(0.16))
-				ui.Text(c, "Listening on").FontSize(12).TextColor(p.faint).SingleLine()
-				hostText(c, st.status.ProxyAddr, p.faint, p.text.Mix(p.muted, 0.5)).FontSize(11).SingleLine()
-			})
+			listenerStatus(c, p, "Proxy", st.status.ProxyAddr, "", p.added, false)
 		}
 		if a.busy != "" {
 			ui.Row(c).Gap(5).AlignItems(ui.Center).Transition(busyFade).Children(func() {
@@ -341,6 +337,35 @@ func (a *app) statusBar(c *ui.Context, p *palette) {
 			if v := st.status.Version; v != "" {
 				ui.Text(c, "v"+v).FontSize(12).TextColor(p.faint).SingleLine()
 			}
+		}
+	})
+}
+
+func gwConnectionState(c *ui.Context, p *palette, st store) {
+	switch {
+	case st.gwStatusFetch == gwUnknown:
+		listenerStatus(c, p, "Gateway", "", "Unknown", p.faint, false)
+	case !st.gwStatus.Enabled:
+		listenerStatus(c, p, "Gateway", "", "Disabled", p.faint, st.gwStatusFetch == gwStale)
+	default:
+		listenerStatus(c, p, "Gateway", st.gwStatus.ListenAddr, "Enabled", p.added, st.gwStatusFetch == gwStale)
+	}
+}
+
+func listenerStatus(c *ui.Context, p *palette, service, address, state string, tone ui.Color, stale bool) {
+	if stale {
+		tone = p.warning()
+	}
+	ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+		ui.Box(c.Key("conn-dot")).Size(6, 6).Radius(3).Shrink(0).Background(tone)
+		ui.Text(c, service).FontSize(11.5).FontWeight(500).TextColor(p.muted).SingleLine().Shrink(0)
+		if address != "" {
+			hostText(c, address, p.faint, p.text.Mix(p.muted, 0.5)).FontSize(11).SingleLine().MinWidth(0)
+		} else if state != "" {
+			ui.Text(c, state).FontSize(11).TextColor(p.faint).SingleLine()
+		}
+		if stale {
+			ui.Text(c, "Stale").FontSize(11).TextColor(tone).SingleLine().Shrink(0)
 		}
 	})
 }

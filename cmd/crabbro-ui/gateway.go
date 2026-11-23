@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"strings"
 	"time"
@@ -73,55 +74,29 @@ func gwSafeReason(reason string) string {
 	return gwUnclassifiedReason
 }
 
-func (a *app) gatewayPage(c *ui.Context, p *palette) {
-	st := a.snapshotState()
-	ui.Scroll(c).Grow(1).Background(p.chrome).Children(func() {
-		ui.Column(c).FillWidth().MaxWidth(960).AlignSelf(ui.Center).Padding(20, 24, 32).Gap(12).Children(func() {
-			a.gwStatusCard(c, p, st)
-			a.gwPlansCard(c, p, st)
-			a.gwRoutesCard(c, p, st)
-			a.gwUsageCard(c, p, st)
-			a.gwSecretsCard(c, p, st)
-		})
-	})
-}
-
 func (a *app) gwCard(c *ui.Context, p *palette, key, title string, icon *ui.SVG, right func(), body func()) {
 	panel(c.Key("gw:"+key), p).FillWidth().Children(func() {
-		ui.Row(c).FillWidth().Height(42).Padding(0, 14, 0, 16).Gap(9).AlignItems(ui.Center).
+		ui.Row(c).FillWidth().Height(48).Padding(0, 16, 0, 18).Gap(9).AlignItems(ui.Center).
 			BorderWidth(0, 0, 1, 0).BorderColor(p.border).Children(func() {
 			ui.Icon(c, icon).FontSize(14).TextColor(p.faint)
-			ui.Text(c, title).FontSize(13).FontWeight(600).TextColor(p.text).SingleLine()
+			ui.Text(c, title).FontSize(14).FontWeight(600).TextColor(p.text).SingleLine()
 			ui.Spacer(c)
 			if right != nil {
 				right()
 			}
 		})
-		ui.Column(c).FillWidth().Padding(14, 16, 16).Gap(10).Children(body)
+		ui.Column(c).FillWidth().Padding(16, 18, 18).Gap(12).Children(body)
 	})
 }
 
 func (a *app) gwStatusCard(c *ui.Context, p *palette, st store) {
 	// Without an answered status request there is no Enabled or Disabled to
 	// assert: the zero value must not read as off. Only an answer may say.
-	state, tone := "Unknown", p.faint
 	answered := st.gwStatusFetch != gwUnknown
-	if answered {
-		state = "Disabled"
-		if st.gwStatus.Enabled {
-			state, tone = "Enabled", p.added
+	a.gwCard(c, p, "status", "Configuration", iconServer, func() {
+		if answered && st.gwStatus.Enabled {
+			a.quietButton(c, "gw-reload", "Reload configuration", iconReplay).Clicked(func() { a.actReloadGateway() })
 		}
-	}
-	a.gwCard(c, p, "status", "Gateway", iconServer, func() {
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			badge(c, p, tone, state)
-			if st.gwStatusFetch == gwStale {
-				gwStaleTag(c, p)
-			}
-			if answered && st.gwStatus.Enabled {
-				a.quietButton(c, "gw-reload", "Reload", iconReplay).Clicked(func() { a.actReloadGateway() })
-			}
-		})
 	}, func() {
 		if !answered {
 			ui.Text(c, "Gateway state unknown: crabbrod has not answered the status request, so neither on nor off is asserted.").
@@ -136,11 +111,13 @@ func (a *app) gwStatusCard(c *ui.Context, p *palette, st store) {
 				FontSize(13).TextColor(p.muted).FillWidth()
 			return
 		}
-		a.fact(c, p, "Listen addr", st.gwStatus.ListenAddr)
-		a.fact(c, p, "Generation", fmt.Sprintf("v%d", st.gwStatus.SnapshotGeneration))
-		a.fact(c, p, "Plans", gwPlanCounts(st.gwStatus))
-		// RouteCount counts every parsed route, enabled and disabled alike.
-		a.fact(c, p, "Routes", fmt.Sprintf("%d configured", st.gwStatus.RouteCount))
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Stretch).Children(func() {
+			gwMetric(c, p, "Listen address", st.gwStatus.ListenAddr, "", p.faint).Grow(2)
+			gwMetric(c, p, "Generation", fmt.Sprintf("v%d", st.gwStatus.SnapshotGeneration), "", p.faint)
+			gwMetric(c, p, "Plans", fmt.Sprint(st.gwStatus.PlanCount), "Configured", p.faint)
+			gwMetric(c, p, "Routes", fmt.Sprint(st.gwStatus.RouteCount), "Configured", p.faint)
+		})
+		ui.Text(c, gwPlanCounts(st.gwStatus)).FillWidth().FontSize(12).TextColor(p.muted)
 		if len(st.gwStatus.Diagnostics) > 0 {
 			hairline(c, p)
 			caption(c, p, "Diagnostics")
@@ -229,23 +206,20 @@ func gwOffUsageNote(c *ui.Context, p *palette, reported string) {
 
 func (a *app) gwPlansCard(c *ui.Context, p *palette, st store) {
 	plans := st.gwPlans
-	a.gwCard(c, p, "plans", "Plans & Quotas", iconSliders, func() {
-		if st.gwPlansFetch == gwUnknown {
-			// No answer yet: no count to assert either, not even zero.
-			tag(c, p, "plans unknown")
-			return
-		}
-		tag(c, p, fmt.Sprintf("%d plans", len(plans)))
-		a.ghostButton(c, "gw-refresh-quotas", "Refresh quotas", iconReplay).Clicked(func() { a.actRefreshGatewayQuotas() })
-		if st.gwPlansFetch == gwStale {
-			gwStaleTag(c, p)
-		}
-	}, func() {
+	ui.Column(c.Key("gw:plans")).FillWidth().Gap(12).Children(func() {
 		if st.gwPlansFetch == gwUnknown {
 			ui.Text(c, "Plans unknown: crabbrod has not answered the plans request, so no plan is asserted configured or absent.").
 				FontSize(13).TextColor(p.muted).FillWidth()
 			return
 		}
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, fmt.Sprintf("%d provider plans", len(plans))).FontSize(13).TextColor(p.muted)
+			if st.gwPlansFetch == gwStale {
+				gwStaleTag(c, p)
+			}
+			ui.Spacer(c)
+			a.quietButton(c, "gw-refresh-quotas", "Refresh quotas", iconReplay).Clicked(func() { a.actRefreshGatewayQuotas() })
+		})
 		if st.gwPlansFetch == gwStale {
 			gwStaleNote(c, p, "plans")
 		}
@@ -278,164 +252,139 @@ func (a *app) gwPlansCard(c *ui.Context, p *palette, st store) {
 			}
 			return
 		}
-		for i, pl := range plans {
-			if i > 0 {
-				hairline(c, p)
-			}
-			ui.Column(c.Key("gw-plan:" + pl.ID)).FillWidth().Gap(6).Children(func() {
-				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, pl.ID).FontSize(13).FontWeight(600).Font(mono()).TextColor(p.text).SingleLine()
-					if !pl.Enabled {
-						tag(c, p, "disabled")
-					} else if !pl.HasSecret {
-						// A plan whose secret is missing cannot be routed to
-						// at all, whatever its cooldown state, so it must not
-						// wear the green Ready badge: say why it is ineligible
-						// in a warning tone instead.
-						stateDot(c, p, p.warning(), "Missing credential")
-					} else if pl.Healthy {
-						// Healthy only means no plan-level cooldown: the API
-						// reports no provider or per-model verdict here.
-						stateDot(c, p, p.added, "Ready")
-					} else {
-						lbl, col := "Unhealthy", p.removed
-						if pl.CooldownUntil == nil || pl.CooldownUntil.IsZero() {
-							lbl = "Unhealthy (cooldown time not reported)"
-						} else {
-							rem := time.Until(*pl.CooldownUntil)
-							if rem > 0 {
-								lbl = fmt.Sprintf("Cooling (%s left)", rem.Round(time.Second))
-							} else {
-								// The window this answer describes has
-								// already closed: the answer is older than
-								// its own cooldown. Say that; do not assert
-								// the cooldown is still active.
-								col = p.warning()
-								lbl = fmt.Sprintf("Cooldown ended %s ago (as last reported); plan state not refreshed",
-									(-rem).Truncate(time.Second))
-							}
-						}
-						stateDot(c, p, col, lbl)
-					}
-					if pl.HasSecret {
-						tag(c, p, "secret:"+pl.Credential)
-					} else {
-						ui.Text(c, "missing:"+pl.Credential).FontSize(11).Font(mono()).TextColor(p.removed).
-							Padding(2, 7).Radius(6).Background(p.removed.Alpha(p.wash())).SingleLine()
-					}
-					ui.Spacer(c)
-					if !pl.Healthy {
-						a.ghostButton(c, "gw-reset:"+pl.ID, "Reset cooldown", iconUndo).Clicked(func() {
-							a.actResetCooldown(pl.ID)
-						})
-					}
-				})
-				ui.Row(c).FillWidth().Gap(6).Wrap().AlignItems(ui.Center).Children(func() {
-					for _, ep := range pl.Endpoints {
-						tag(c, p, ep)
-					}
-					for _, m := range pl.Models {
-						ui.Text(c, m).FontSize(11).Font(mono()).TextColor(p.text).
-							Padding(2, 7).Radius(6).Background(p.text.Alpha(0.06)).SingleLine()
-					}
-				})
-				if reason := gwSafeReason(pl.LastError); reason != "" && !pl.Healthy {
-					// LastError is populated only while the plan is
-					// unhealthy; an expired timer makes the snapshot stale. The
-					// reason is sanitized here as well as in the router so
-					// raw snapshot text never reaches the frame.
-					label := "Current error"
-					if pl.CooldownUntil != nil && pl.CooldownUntil.After(time.Now()) {
-						label = "Current cooldown reason"
-					} else if pl.CooldownUntil != nil && !pl.CooldownUntil.IsZero() {
-						label = "Last reported error (state not refreshed)"
-					}
-					ui.Text(c.Key("gw-plan-err:"+pl.ID),
-						fmt.Sprintf("%s: %s", label, reason)).
-						FontSize(11.5).Font(mono()).TextColor(p.removed).FillWidth()
-				}
-				if reason := gwSafeReason(pl.HistoricalLastError); reason != "" {
-					// HistoricalLastError survives its cooldown and carries
-					// no time or model: label it as the historical reason it
-					// is, never as a live failure of a plan shown as fine.
-					ui.Text(c.Key("gw-plan-hist-err:"+pl.ID),
-						fmt.Sprintf("Last cooldown reason (historical, time & model not reported): %s", reason)).
-						FontSize(11.5).Font(mono()).TextColor(p.removed).FillWidth()
-				}
-				if q := pl.RemoteQuota; q != nil {
-					summary := "Remote quota"
-					if q.Stale {
-						summary += " (stale)"
-					}
-					if q.Balance != "" {
-						summary += " · " + q.Balance
-					}
-					if q.UsagePct != nil {
-						summary += fmt.Sprintf(" · %.0f%% used", *q.UsagePct)
-					}
-					for _, w := range q.Windows {
-						// Windows whose usage is not a percentage (e.g. a
-						// token pass reporting only remaining credit) surface
-						// their sanitized note instead.
-						if w.Note != "" {
-							summary += " · " + w.Name + " " + w.Note
-						}
-					}
-					summary += fmt.Sprintf(" · %d resets", q.ResetsRemaining)
-					if q.SoonestResetExpiry != nil {
-						summary += " (exp " + q.SoonestResetExpiry.Format("2006-01-02 15:04 MST") + ")"
-					}
-					ui.Text(c, summary).FontSize(11.5).TextColor(p.muted).FillWidth()
-				}
-				for wi, w := range pl.Windows {
-					a.gwWindowBar(c, p, fmt.Sprintf("%s:%d", pl.ID, wi), w)
-				}
-			})
-		}
-		hairline(c, p)
+		gwCardColumns(c, gwGridColumns(c, 334, 2), len(plans), func(i int) {
+			a.gwPlanTile(c, p, plans[i])
+		})
 		ui.Text(c, "Plan state above is plan-level cooldown only; model-level cooldowns are not reported, so a plan not cooling may still hold cooling models.").
 			FontSize(11.5).TextColor(p.faint).FillWidth()
 	})
 }
 
+func (a *app) gwPlanTile(c *ui.Context, p *palette, pl api.GatewayPlanStatus) {
+	panel(c.Key("gw-plan:"+pl.ID), p).MinWidth(0).Padding(16).Gap(10).Children(func() {
+		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
+			gwGlyph(c, p, iconServer, p.accent)
+			ui.Text(c, pl.ID).Grow(1).MinWidth(0).FontSize(15).FontWeight(600).Font(mono()).TextColor(p.text)
+		})
+		label, tone := gwPlanState(p, pl)
+		gwPlanStatusDot(c, tone, label)
+		if len(pl.Windows) > 0 || pl.RemoteQuota != nil {
+			hairline(c, p)
+		}
+		if reason := gwSafeReason(pl.LastError); reason != "" && !pl.Healthy {
+			// LastError is populated only while the plan is
+			// unhealthy; an expired timer makes the snapshot stale. The
+			// reason is sanitized here as well as in the router so
+			// raw snapshot text never reaches the frame.
+			label := "Current error"
+			if pl.CooldownUntil != nil && pl.CooldownUntil.After(time.Now()) {
+				label = "Current cooldown reason"
+			} else if pl.CooldownUntil != nil && !pl.CooldownUntil.IsZero() {
+				label = "Last reported error (state not refreshed)"
+			}
+			ui.Text(c.Key("gw-plan-err:"+pl.ID),
+				fmt.Sprintf("%s: %s", label, reason)).
+				FontSize(11.5).Font(mono()).TextColor(p.removed).FillWidth()
+		}
+		if reason := gwSafeReason(pl.HistoricalLastError); reason != "" {
+			// HistoricalLastError survives its cooldown and carries
+			// no time or model: label it as the historical reason it
+			// is, never as a live failure of a plan shown as fine.
+			ui.Text(c.Key("gw-plan-hist-err:"+pl.ID),
+				fmt.Sprintf("Last cooldown reason (historical, time & model not reported): %s", reason)).
+				FontSize(11.5).Font(mono()).TextColor(p.muted).FillWidth()
+		}
+		if pl.RemoteQuota != nil {
+			gwRemoteQuota(c, p, pl.RemoteQuota)
+		}
+		if len(pl.Windows) > 0 {
+			caption(c, p, "Local limits")
+		}
+		for wi, w := range pl.Windows {
+			a.gwWindowBar(c, p, fmt.Sprintf("%s:%d", pl.ID, wi), w)
+		}
+		hairline(c, p)
+		gwMetadata(c, p, "Credential", []string{pl.Credential})
+		gwMetadata(c, p, "Endpoints", pl.Endpoints)
+		gwMetadata(c, p, "Models", pl.Models)
+		if !pl.Healthy {
+			a.ghostButton(c, "gw-reset:"+pl.ID, "Reset cooldown", iconUndo).Clicked(func() {
+				a.actResetCooldown(pl.ID)
+			})
+		}
+	})
+}
+
+func gwQuotaTone(p *palette, remaining float64) ui.Color {
+	switch {
+	case remaining < 0.15:
+		return p.removed
+	case remaining < 0.35:
+		return p.warning()
+	default:
+		return p.added
+	}
+}
+
+func gwPlanStatusDot(c *ui.Context, tone ui.Color, label string) {
+	ui.Row(c).FillWidth().Gap(7).AlignItems(ui.Center).Children(func() {
+		ui.Box(c).Size(6, 6).Radius(3).Shrink(0).Background(tone)
+		ui.Text(c, label).Grow(1).MinWidth(0).FontSize(12).FontWeight(500).TextColor(tone)
+	})
+}
+
+func gwPlanState(p *palette, plan api.GatewayPlanStatus) (string, ui.Color) {
+	switch {
+	case !plan.Enabled:
+		return "disabled", p.faint
+	case !plan.HasSecret:
+		return "Missing credential", p.warning()
+	case plan.Healthy:
+		return "Ready", p.added
+	case plan.CooldownUntil == nil || plan.CooldownUntil.IsZero():
+		return "Unhealthy (cooldown time not reported)", p.removed
+	}
+	remaining := time.Until(*plan.CooldownUntil)
+	if remaining > 0 {
+		return fmt.Sprintf("Cooling (%s left)", remaining.Round(time.Second)), p.removed
+	}
+	return fmt.Sprintf("Cooldown ended %s ago (as last reported); plan state not refreshed",
+		(-remaining).Truncate(time.Second)), p.warning()
+}
+
 func (a *app) gwWindowBar(c *ui.Context, p *palette, key string, w api.GatewayWindowUsage) {
-	rem := w.RemainingRatio
-	if rem < 0 {
-		rem = 0
-	}
-	if rem > 1 {
-		rem = 1
-	}
-	usedPct := float32((1.0 - rem) * 100.0)
-	barCol := p.added
-	if rem < 0.15 {
-		barCol = p.removed
-	} else if rem < 0.35 {
-		barCol = p.warning()
-	}
+	rem := max(0, min(1, w.RemainingRatio))
+	barCol := gwQuotaTone(p, rem)
 	label := w.Name
 	if label == "" {
 		label = w.Duration
 	}
-	ui.Column(c.Key("gw-win:"+key)).FillWidth().Gap(3).Padding(2, 0).Children(func() {
-		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, fmt.Sprintf("%s (%s %s)", label, w.Duration, w.Mode)).FontSize(11.5).Font(mono()).TextColor(p.muted).SingleLine()
-			ui.Spacer(c)
-			detail := fmt.Sprintf("%.0f%% left · %d/%d tok · surplus %+.2f", rem*100, w.UsedTokens, w.MaxTokens, w.Surplus)
-			if w.MaxRequests > 0 {
-				detail = fmt.Sprintf("%.0f%% left · %d/%d req · surplus %+.2f", rem*100, w.UsedRequests, w.MaxRequests, w.Surplus)
-			}
-			ui.Text(c, detail).FontSize(11).Font(mono()).TextColor(p.faint).SingleLine()
+	ui.Column(c.Key("gw-win:"+key)).FillWidth().Gap(5).Padding(9, 10).Radius(7).
+		Background(p.text.Alpha(0.04)).Children(func() {
+		ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, label).Grow(1).MinWidth(0).FontSize(12).FontWeight(600).TextColor(p.text)
+			ui.Text(c, fmt.Sprintf("%.0f%% used", (1-rem)*100)).FontSize(12).FontWeight(500).
+				Font(mono()).TextColor(barCol).SingleLine().Shrink(0)
 		})
-		ui.Row(c).FillWidth().Height(6).Radius(3).Background(p.text.Alpha(0.07)).Clip().Children(func() {
-			ui.Box(c).WidthPercent(usedPct).Height(6).Radius(3).Background(barCol)
-		})
+		gwProgress(c, p, float32((1-rem)*100), barCol)
+		detail := fmt.Sprintf("%s / %s tokens", gwCount(w.UsedTokens), gwCount(w.MaxTokens))
+		if w.MaxRequests > 0 {
+			detail = fmt.Sprintf("%s / %s requests", gwCount(w.UsedRequests), gwCount(w.MaxRequests))
+		}
+		ui.Text(c, fmt.Sprintf("%s · %s %s · surplus %+.2f", detail, w.Duration, w.Mode, w.Surplus)).
+			FontSize(10.5).Font(mono()).TextColor(p.muted).FillWidth()
+	})
+}
+
+func gwProgress(c *ui.Context, p *palette, pct float32, tone ui.Color) {
+	ui.Row(c).FillWidth().Height(5).Radius(3).Background(p.text.Alpha(0.08)).Clip().Children(func() {
+		ui.Box(c).WidthPercent(max(0, min(100, pct))).Height(5).Radius(3).Background(tone)
 	})
 }
 
 func (a *app) gwRoutesCard(c *ui.Context, p *palette, st store) {
 	routes := st.gwRoutes
-	a.gwCard(c, p, "routes", "Routes", iconRule, func() {
+	a.gwCard(c, p, "routes", "Configured routes", iconRoute, func() {
 		if st.gwRoutesFetch == gwUnknown {
 			tag(c, p, "routes unknown")
 			return
@@ -470,40 +419,101 @@ func (a *app) gwRoutesCard(c *ui.Context, p *palette, st store) {
 			}
 			return
 		}
-		for i, rt := range routes {
+		for i, route := range routes {
 			if i > 0 {
 				hairline(c, p)
 			}
-			ui.Column(c.Key("gw-route:" + rt.ID)).FillWidth().Gap(5).Children(func() {
-				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, rt.ID).FontSize(13).FontWeight(600).Font(mono()).TextColor(p.text).SingleLine()
-					tag(c, p, rt.Family)
-					if rt.Preset != "" {
-						tag(c, p, rt.Preset)
+			a.gwRouteRow(c, p, route)
+		}
+	})
+}
+
+func (a *app) gwRouteRow(c *ui.Context, p *palette, route api.GatewayRouteStatus) {
+	ui.Column(c.Key("gw-route:" + route.ID)).FillWidth().Gap(8).Children(func() {
+		expanded := a.gwExpandedRoute == route.ID
+		chevron, action := iconChevronRight, "Show route "
+		if expanded {
+			chevron, action = iconChevronDown, "Hide route "
+		}
+		b := ui.ButtonBase(c.Key("gw-route-toggle:"+route.ID)).Label(action+route.ID).
+			FillWidth().Padding(8, 10).Gap(10).Radius(7).AlignItems(ui.Center)
+		if expanded || b.Hovered() {
+			b.Background(p.text.Alpha(0.045))
+		}
+		b.Children(func() {
+			ui.Icon(c, chevron).FontSize(14).TextColor(p.faint).Shrink(0)
+			ui.Column(c).Grow(1).MinWidth(0).Gap(4).Children(func() {
+				ui.Text(c, route.ID).FontSize(14).FontWeight(600).Font(mono()).TextColor(p.text).FillWidth()
+				ui.Row(c).Gap(6).Wrap().AlignItems(ui.Center).Children(func() {
+					if route.Family != "" {
+						tag(c, p, route.Family)
 					}
-					if !rt.Enabled {
-						tag(c, p, "disabled")
+					if route.Preset != "" {
+						tag(c, p, route.Preset)
 					}
-					ui.Spacer(c)
-					var tgts []string
-					for _, t := range rt.Targets {
-						tgts = append(tgts, t.Plan+"/"+t.Model)
+					if !route.Enabled {
+						badge(c, p, p.warning(), "Disabled")
 					}
-					ui.Text(c, strings.Join(tgts, " -> ")).FontSize(11.5).Font(mono()).TextColor(p.muted).SingleLine()
 				})
-				ui.Row(c).FillWidth().Gap(6).Wrap().Children(func() {
-					if len(rt.Profiles) > 0 {
-						tag(c, p, "profiles:"+strings.Join(rt.Profiles, ","))
+			})
+			ui.Text(c, fmt.Sprintf("%d targets", len(route.Targets))).FontSize(12).TextColor(p.muted).SingleLine().Shrink(0)
+		})
+		if b.Clicked() {
+			if expanded {
+				a.gwExpandedRoute = ""
+			} else {
+				a.gwExpandedRoute = route.ID
+			}
+		}
+		if expanded {
+			a.gwRouteDetails(c, p, route)
+		}
+	})
+}
+
+func (a *app) gwRouteDetails(c *ui.Context, p *palette, route api.GatewayRouteStatus) {
+	ui.Column(c).FillWidth().Padding(4, 10, 8, 34).Gap(10).Children(func() {
+		if route.Description != "" {
+			ui.Text(c, route.Description).FontSize(12.5).TextColor(p.muted).FillWidth()
+		}
+		gwMetadata(c, p, "Priority", []string{fmt.Sprint(route.Priority)})
+		gwMetadata(c, p, "Profiles", route.Profiles)
+		gwMetadata(c, p, "Protocols", route.Protocols)
+		gwMetadata(c, p, "Models", route.Models)
+		if len(route.Targets) == 0 {
+			return
+		}
+		caption(c, p, "Targets in configuration order")
+		for i, target := range route.Targets {
+			ui.Row(c.Key(fmt.Sprintf("gw-target:%d", i))).FillWidth().Padding(8, 10).Gap(10).
+				AlignItems(ui.Center).Radius(6).Background(p.text.Alpha(0.035)).Children(func() {
+				ui.Text(c, fmt.Sprint(i+1)).Width(24).FontSize(11).Font(mono()).TextColor(p.faint)
+				ui.Column(c).Grow(1).MinWidth(0).Gap(3).Children(func() {
+					ui.Text(c, target.Model).FontSize(12.5).FontWeight(500).Font(mono()).TextColor(p.text).FillWidth()
+					ui.Text(c, target.Plan).FontSize(11.5).Font(mono()).TextColor(p.muted).FillWidth()
+					gwMetadata(c, p, "Tiers", target.WhenTier)
+				})
+				ui.Column(c).Width(132).Gap(4).AlignItems(ui.End).Children(func() {
+					ui.Text(c, fmt.Sprintf("Priority %d", target.Priority)).FontSize(11).TextColor(p.muted).SingleLine()
+					if target.EndpointProtocol != "" {
+						ui.Text(c, target.EndpointProtocol).FontSize(11).Font(mono()).TextColor(p.muted).SingleLine()
 					}
-					if len(rt.Protocols) > 0 {
-						tag(c, p, "proto:"+strings.Join(rt.Protocols, ","))
-					}
-					if len(rt.Models) > 0 {
-						tag(c, p, "models:"+strings.Join(rt.Models, ","))
+					if !target.Enabled {
+						badge(c, p, p.warning(), "Disabled")
 					}
 				})
 			})
 		}
+	})
+}
+
+func gwMetadata(c *ui.Context, p *palette, label string, values []string) {
+	if len(values) == 0 || (len(values) == 1 && values[0] == "") {
+		return
+	}
+	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Start).Children(func() {
+		ui.Text(c, label).Width(62).Shrink(0).FontSize(11.5).FontWeight(500).TextColor(p.muted)
+		ui.Text(c, strings.Join(values, " · ")).Grow(1).MinWidth(0).FontSize(11.5).Font(mono()).TextColor(p.text)
 	})
 }
 
@@ -542,23 +552,39 @@ func (w gwUsageWindowFact) described() string {
 
 func (a *app) gwUsageCard(c *ui.Context, p *palette, st store) {
 	usage := st.gwUsage
-	selected := windowForIndex(a.gwUsageWinIdx)
-	win := gwUsageWindowFact{selected: selected, asked: st.gwUsageAsked, reported: usage.Window}
-	// Only an answered fetch leaves a range to describe at all.
 	answered := st.gwUsageFetch != gwUnknown
-	mismatch := answered && win.mismatch()
-	unconfirmed := answered && win.unconfirmed()
-	a.gwCard(c, p, "usage", "Usage Ledger", iconClock, func() {
+	hasTotals := answered && !(len(usage.Buckets) == 0 && st.gwUsageFetch == gwFresh && gwOffNow(st))
+	pending := a.gwUsageRevision > st.gwUsageCompleted
+	ui.Row(c.Key("gw:usage-header")).FillWidth().Gap(12).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, "Usage").FontSize(26).FontWeight(600).TextColor(p.text).SingleLine()
+		ui.Spacer(c)
 		prev := a.gwUsageWinIdx
 		a.words(c, "gw-usage-win", &a.gwUsageWinIdx, "1h", "24h", "7d")
 		if a.gwUsageWinIdx != prev {
+			a.gwUsageRevision++
+			pending = true
 			a.mirrorView()
 			a.nudge(a.search)
 		}
-		if st.gwUsageFetch == gwStale {
+		if !pending && st.gwUsageFetch == gwStale {
 			gwStaleTag(c, p)
 		}
-	}, func() {
+	})
+	panel(c.Key("gw:usage-summary"), p).FillWidth().Padding(16).Gap(10).Children(func() {
+		selected := windowForIndex(a.gwUsageWinIdx)
+		if pending {
+			label := "Loading " + selected
+			if hasTotals && usage.Window != "" && usage.Window != selected {
+				label += " · Showing " + usage.Window
+			}
+			a.fact(c, p, "Range", label)
+			if hasTotals && usage.Window != "" {
+				gwUsageMetrics(c, p, usage.Totals)
+			}
+			return
+		}
+		win := gwUsageWindowFact{selected: selected, asked: st.gwUsageAsked, reported: usage.Window}
+		mismatch, unconfirmed := win.mismatch(), win.unconfirmed()
 		if st.gwUsageFetch == gwUnknown {
 			ui.Text(c, "Usage unknown: crabbrod has not answered the usage request.").
 				FontSize(13).TextColor(p.muted).FillWidth()
@@ -587,14 +613,15 @@ func (a *app) gwUsageCard(c *ui.Context, p *palette, st store) {
 				selected)).
 				FontSize(11.5).Font(mono()).TextColor(p.warning()).FillWidth()
 		default:
-			a.fact(c, p, "Range", fmt.Sprintf("%s (as answered)", selected))
+			rangeLabel := fmt.Sprintf("%s (as answered)", selected)
+			if !usage.Since.IsZero() && !usage.Until.IsZero() {
+				const dateTime = "Jan 2, 15:04"
+				rangeLabel = usage.Since.Local().Format(dateTime) + " – " + usage.Until.Local().Format(dateTime)
+			}
+			ui.Text(c, rangeLabel).FontSize(11.5).TextColor(p.muted).FillWidth()
 		}
-		tot := usage.Totals
-		a.fact(c, p, "Totals", fmt.Sprintf("%d reqs (%d err) · %d tokens (%d in / %d out / %d cache read)",
-			tot.Requests, tot.Errors, tot.TotalTokens, tot.InputTokens, tot.OutputTokens, tot.CacheReadTokens))
-		if tot.AvgTTFTMs > 0 {
-			a.fact(c, p, "Cache & TTFT", fmt.Sprintf("cache hit %.0f%% · avg TTFT %.0fms · avg dur %.0fms",
-				tot.CacheHitRatio*100, tot.AvgTTFTMs, tot.AvgDurationMs))
+		if hasTotals {
+			gwUsageMetrics(c, p, usage.Totals)
 		}
 		if len(usage.Buckets) == 0 {
 			// Zero buckets is what the endpoint answered. With the gateway
@@ -623,21 +650,68 @@ func (a *app) gwUsageCard(c *ui.Context, p *palette, st store) {
 			}
 			return
 		}
-		hairline(c, p)
-		for i, b := range usage.Buckets {
-			ui.Row(c.Key(fmt.Sprintf("gw-use:%d:%s:%s", i, b.Plan, b.Model))).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, b.Plan+"/"+b.Model).FontSize(12).Font(mono()).TextColor(p.text).SingleLine().Grow(1).MinWidth(80)
-				ui.Text(c, fmt.Sprintf("%d req · %d tok · hit %.0f%% · %.0fms",
-					b.Requests, b.TotalTokens, b.CacheHitRatio*100, b.AvgTTFTMs)).
-					FontSize(11.5).Font(mono()).TextColor(p.muted).SingleLine()
-			})
+	})
+	if answered && len(usage.Buckets) > 0 && (!pending || usage.Window != "") {
+		a.gwUsageBreakdown(c, p, usage.Buckets)
+	}
+}
+
+func gwUsageMetrics(c *ui.Context, p *palette, total api.GatewayUsageBucket) {
+	errorTone := p.faint
+	if total.Errors > 0 {
+		errorTone = p.removed
+	}
+	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Stretch).Children(func() {
+		gwMetric(c, p, "Requests", gwCount(total.Requests), gwErrors(total.Errors), errorTone)
+		gwMetric(c, p, "Tokens", gwCount(total.TotalTokens), "", p.faint)
+		gwMetric(c, p, "Cache hit", gwCacheHit(total), "", p.faint)
+		gwMetric(c, p, "Avg. TTFT", gwMilliseconds(total.AvgTTFTMs), "", p.faint)
+	})
+	ui.Row(c).FillWidth().Gap(8).Wrap().Children(func() {
+		ui.Text(c, fmt.Sprintf("%s input · %s output · %s cache read", gwCount(total.InputTokens),
+			gwCount(total.OutputTokens), gwCount(total.CacheReadTokens))).FontSize(11.5).TextColor(p.muted)
+		if total.AvgDurationMs > 0 {
+			ui.Text(c, "·  Avg. duration "+gwMilliseconds(total.AvgDurationMs)).FontSize(11.5).TextColor(p.muted)
 		}
 	})
 }
 
+func gwCount(n int64) string {
+	digits := fmt.Sprint(n)
+	start := 0
+	if n < 0 {
+		start = 1
+	}
+	for i := len(digits) - 3; i > start; i -= 3 {
+		digits = digits[:i] + "," + digits[i:]
+	}
+	return digits
+}
+
+func gwErrors(count int64) string {
+	if count == 1 {
+		return "1 error"
+	}
+	return gwCount(count) + " errors"
+}
+
+func gwMilliseconds(ms float64) string {
+	if ms <= 0 {
+		return "—"
+	}
+	return fmt.Sprintf("%s ms", gwCount(int64(math.Round(ms))))
+}
+
+func gwCacheHit(bucket api.GatewayUsageBucket) string {
+	if bucket.TotalTokens == 0 {
+		return "—"
+	}
+	return fmt.Sprintf("%.0f%%", bucket.CacheHitRatio*100)
+}
+
 func (a *app) gwSecretsCard(c *ui.Context, p *palette, st store) {
 	secrets := st.gwSecrets
-	a.gwCard(c, p, "secrets", "Credentials", iconLock, func() {
+	a.gwCard(c, p, "secrets", "Stored credentials", iconLock, func() {
 		if st.gwSecretsFetch == gwUnknown {
 			tag(c, p, "secrets unknown")
 			return
@@ -647,6 +721,19 @@ func (a *app) gwSecretsCard(c *ui.Context, p *palette, st store) {
 			gwStaleTag(c, p)
 		}
 	}, func() {
+		caption(c, p, "Store an API key")
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.TextInput(c.Key("gw-sec-name"), &a.gwSecretName).Placeholder("Credential name").Width(160)
+			ui.TextInput(c.Key("gw-sec-val"), &a.gwSecretVal).Placeholder("API key value").Password().Grow(1).MinWidth(120)
+			a.fillButton(c, "gw-sec-save", "Save", iconSave, a.gwSecretName == "" || a.gwSecretVal == "").
+				Clicked(func() {
+					name := a.gwSecretName
+					val := a.gwSecretVal
+					a.gwSecretVal = ""
+					a.actSaveSecret(name, val)
+				})
+		})
+		hairline(c, p)
 		if st.gwSecretsFetch == gwUnknown {
 			ui.Text(c, "Credentials unknown: crabbrod has not answered the secrets request, so none is asserted stored or absent.").
 				FontSize(13).TextColor(p.muted).FillWidth()
@@ -660,28 +747,16 @@ func (a *app) gwSecretsCard(c *ui.Context, p *palette, st store) {
 					ui.Text(c, s.Name).FontSize(12.5).Font(mono()).TextColor(p.text).SingleLine().Grow(1).MinWidth(60)
 					ui.Text(c, fmt.Sprintf("%d B · %s", s.SizeBytes, s.UpdatedAt.Local().Format("2006-01-02 15:04"))).
 						FontSize(11).Font(mono()).TextColor(p.faint).SingleLine()
-					a.ghostButton(c, "gw-sec-del:"+s.Name, "", iconTrash).Clicked(func() {
-						a.actDeleteSecret(s.Name)
-					})
+					remove := a.ghostButton(c, "gw-sec-del:"+s.Name, "", iconTrash)
+					ui.Element(remove).Label("Delete " + s.Name).Tooltip("Delete credential")
+					remove.Clicked(func() { a.actDeleteSecret(s.Name) })
 				})
 			}
 			if len(secrets) == 0 {
 				ui.Text(c, "No secrets stored yet under ~/.crabbro/secrets/.").FontSize(13).TextColor(p.muted).FillWidth()
 			}
 		}
-		hairline(c, p)
-		caption(c, p, "Store API Key (mode 0600)")
-		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.TextInput(c.Key("gw-sec-name"), &a.gwSecretName).Placeholder("secret_name").Width(180)
-			ui.TextInput(c.Key("gw-sec-val"), &a.gwSecretVal).Placeholder("API key value").Password().Grow(1).MinWidth(120)
-			a.fillButton(c, "gw-sec-save", "Save", iconSave, a.gwSecretName == "" || a.gwSecretVal == "").
-				Clicked(func() {
-					name := a.gwSecretName
-					val := a.gwSecretVal
-					a.gwSecretVal = ""
-					a.actSaveSecret(name, val)
-				})
-		})
+
 	})
 }
 

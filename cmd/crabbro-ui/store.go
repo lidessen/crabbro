@@ -53,21 +53,25 @@ const (
 )
 
 // gwAnswers is one round of the five gateway endpoint answers, each
-// paired with whether that endpoint answered at all. usageWindow is the
-// range that round asked usage for: without it the response's own window
-// is all that says which range the numbers describe.
+// paired with whether that endpoint answered at all. usageRequest ties
+// the usage response to the exact selection the round fetched.
 type gwAnswers struct {
-	status      api.GatewayStatusResponse
-	statusOK    bool
-	plans       []api.GatewayPlanStatus
-	plansOK     bool
-	routes      []api.GatewayRouteStatus
-	routesOK    bool
-	usage       api.GatewayUsageResponse
-	usageOK     bool
-	usageWindow string
-	secrets     []api.SecretSummary
-	secretsOK   bool
+	status       api.GatewayStatusResponse
+	statusOK     bool
+	plans        []api.GatewayPlanStatus
+	plansOK      bool
+	routes       []api.GatewayRouteStatus
+	routesOK     bool
+	usage        api.GatewayUsageResponse
+	usageOK      bool
+	usageRequest gwUsageRequest
+	secrets      []api.SecretSummary
+	secretsOK    bool
+}
+
+type gwUsageRequest struct {
+	window   string
+	revision uint64
 }
 
 // gwNext moves one card's fetch state across a round: an answer is fresh,
@@ -100,13 +104,14 @@ func (st *store) applyGateway(ans gwAnswers) {
 	if ans.routesOK {
 		st.gwRoutes = ans.routes
 	}
+	st.gwUsageCompleted = ans.usageRequest.revision
 	st.gwUsageFetch = gwNext(st.gwUsageFetch, ans.usageOK)
 	if ans.usageOK {
 		st.gwUsage = ans.usage
 		// Keep the range that was asked for beside the answer: the selected
 		// range may move on before this answer, and a stale answer keeps the
 		// range it was fetched for, not the range asked for now.
-		st.gwUsageAsked = ans.usageWindow
+		st.gwUsageAsked = ans.usageRequest.window
 	}
 	st.gwSecretsFetch = gwNext(st.gwSecretsFetch, ans.secretsOK)
 	if ans.secretsOK {
@@ -151,9 +156,10 @@ type store struct {
 	// gwUsageAsked is the range the kept usage answer was requested with,
 	// "" before any answer. The view reads the selected range itself; the
 	// two together say whether these numbers cover that range.
-	gwUsageAsked   string
-	gwSecrets      []api.SecretSummary
-	gwSecretsFetch gwFetch
+	gwUsageAsked     string
+	gwUsageCompleted uint64 // selection revision of the latest completed attempt
+	gwSecrets        []api.SecretSummary
+	gwSecretsFetch   gwFetch
 }
 
 // app is the state of the Crabbro window: the client of the daemon, the
@@ -194,6 +200,10 @@ type app struct {
 	section          int // the daemon pane's segmented choice
 	sessionName      string
 	reqKindIdx       int // 0: all, 1: proxy, 2: gateway
+	gwSection        gatewaySection
+	gwExpandedRoute  string
+	gwSelectedUsage  string
+	gwUsageRevision  uint64
 	gwUsageWinIdx    int // 0: 1h, 1: 24h, 2: 7d
 	gwSecretName     string
 	gwSecretVal      string
@@ -201,27 +211,27 @@ type app struct {
 	// mirror* are the view thread's search, hidden switch and page as of the
 	// last frame, under mu: the sync goroutine reads these, never the fields
 	// the widgets write.
-	mirrorSearch   string
-	mirrorHidden   bool
-	mirrorPage     string
-	mirrorKind     string
-	mirrorUsageWin string
-	trajAt         time.Time
-	notes          []string
-	busy           string // what an action is doing, shown in the status bar
-	win            *mygo.Window
-	pal            *palette // the frame's look, set as each frame begins
+	mirrorSearch string
+	mirrorHidden bool
+	mirrorPage   string
+	mirrorKind   string
+	mirrorUsage  gwUsageRequest
+	trajAt       time.Time
+	notes        []string
+	busy         string // what an action is doing, shown in the status bar
+	win          *mygo.Window
+	pal          *palette // the frame's look, set as each frame begins
 }
 
 var hoverFade = ui.ElementTransition{Colors: true, Duration: 150 * time.Millisecond}
 
 func newApp(c *client.Client, ctx context.Context) *app {
 	a := &app{
-		c:              c,
-		ctx:            ctx,
-		page:           pageTrajectory,
-		gwUsageWinIdx:  1,
-		mirrorUsageWin: "24h",
+		c:             c,
+		ctx:           ctx,
+		page:          pageTrajectory,
+		gwUsageWinIdx: 1,
+		mirrorUsage:   gwUsageRequest{window: "24h"},
 	}
 	a.refresh = make(chan refreshMsg, 1)
 	return a
@@ -267,7 +277,7 @@ func (a *app) mirrorView() {
 	a.mu.Lock()
 	a.mirrorSearch, a.mirrorHidden, a.mirrorPage = a.search, a.showHidden, a.page
 	a.mirrorKind = kindForIndex(a.reqKindIdx)
-	a.mirrorUsageWin = windowForIndex(a.gwUsageWinIdx)
+	a.mirrorUsage = gwUsageRequest{window: windowForIndex(a.gwUsageWinIdx), revision: a.gwUsageRevision}
 	a.mu.Unlock()
 }
 
@@ -299,13 +309,10 @@ func (a *app) currentKind() string {
 	return a.mirrorKind
 }
 
-func (a *app) currentUsageWindow() string {
+func (a *app) currentUsageRequest() gwUsageRequest {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.mirrorUsageWin == "" {
-		return "24h"
-	}
-	return a.mirrorUsageWin
+	return a.mirrorUsage
 }
 
 func (a *app) setServices(sv ui.Services) {
@@ -446,8 +453,8 @@ func (a *app) snapshot(ctx context.Context, query string) error {
 	gwRoutes, gwRoutesErr := a.c.ListGatewayRoutes(ctx)
 	// Take the range once, and keep it with the answer: reading it again
 	// after the fetch could pair one range's numbers with another's label.
-	usageWindow := a.currentUsageWindow()
-	gwUsage, gwUsageErr := a.c.GatewayUsage(ctx, usageWindow, "")
+	usageRequest := a.currentUsageRequest()
+	gwUsage, gwUsageErr := a.c.GatewayUsage(ctx, usageRequest.window, "")
 	gwSecrets, gwSecretsErr := a.c.ListSecrets(ctx)
 
 	a.mu.Lock()
@@ -466,17 +473,17 @@ func (a *app) snapshot(ctx context.Context, query string) error {
 	a.st.traj = reverseActivity(traj.Items)
 	a.st.traceReqs = traceReqs
 	a.st.applyGateway(gwAnswers{
-		status:      gwSt,
-		statusOK:    gwStErr == nil,
-		plans:       gwPlans,
-		plansOK:     gwPlansErr == nil,
-		routes:      gwRoutes,
-		routesOK:    gwRoutesErr == nil,
-		usage:       gwUsage,
-		usageOK:     gwUsageErr == nil,
-		usageWindow: usageWindow,
-		secrets:     gwSecrets,
-		secretsOK:   gwSecretsErr == nil,
+		status:       gwSt,
+		statusOK:     gwStErr == nil,
+		plans:        gwPlans,
+		plansOK:      gwPlansErr == nil,
+		routes:       gwRoutes,
+		routesOK:     gwRoutesErr == nil,
+		usage:        gwUsage,
+		usageOK:      gwUsageErr == nil,
+		usageRequest: usageRequest,
+		secrets:      gwSecrets,
+		secretsOK:    gwSecretsErr == nil,
 	})
 	a.mu.Unlock()
 	a.invalidate()
@@ -561,8 +568,8 @@ func (a *app) refreshNow(ctx context.Context) {
 	gwRoutes, gwRoutesErr := a.c.ListGatewayRoutes(ctx)
 	// Take the range once, and keep it with the answer: reading it again
 	// after the fetch could pair one range's numbers with another's label.
-	usageWindow := a.currentUsageWindow()
-	gwUsage, gwUsageErr := a.c.GatewayUsage(ctx, usageWindow, "")
+	usageRequest := a.currentUsageRequest()
+	gwUsage, gwUsageErr := a.c.GatewayUsage(ctx, usageRequest.window, "")
 	gwSecrets, gwSecretsErr := a.c.ListSecrets(ctx)
 
 	a.mu.Lock()
@@ -593,17 +600,17 @@ func (a *app) refreshNow(ctx context.Context) {
 		a.st.traceReqs = traceReqs
 	}
 	a.st.applyGateway(gwAnswers{
-		status:      gwSt,
-		statusOK:    gwStErr == nil,
-		plans:       gwPlans,
-		plansOK:     gwPlansErr == nil,
-		routes:      gwRoutes,
-		routesOK:    gwRoutesErr == nil,
-		usage:       gwUsage,
-		usageOK:     gwUsageErr == nil,
-		usageWindow: usageWindow,
-		secrets:     gwSecrets,
-		secretsOK:   gwSecretsErr == nil,
+		status:       gwSt,
+		statusOK:     gwStErr == nil,
+		plans:        gwPlans,
+		plansOK:      gwPlansErr == nil,
+		routes:       gwRoutes,
+		routesOK:     gwRoutesErr == nil,
+		usage:        gwUsage,
+		usageOK:      gwUsageErr == nil,
+		usageRequest: usageRequest,
+		secrets:      gwSecrets,
+		secretsOK:    gwSecretsErr == nil,
 	})
 	a.mu.Unlock()
 

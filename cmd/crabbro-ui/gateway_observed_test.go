@@ -133,8 +133,8 @@ func TestGatewayUsageMatchingRangeIsNotLabeledMismatch(t *testing.T) {
 func TestGatewayUsageStaleAfterRangeSwitchSaysBoth(t *testing.T) {
 	st := store{conn: connConnected}
 	st.applyGateway(gwAnswers{
-		usageOK:     true,
-		usageWindow: "24h",
+		usageOK:      true,
+		usageRequest: gwUsageRequest{window: "24h"},
 		usage: api.GatewayUsageResponse{
 			Window:  "24h",
 			Totals:  api.GatewayUsageBucket{Requests: 5},
@@ -143,7 +143,7 @@ func TestGatewayUsageStaleAfterRangeSwitchSaysBoth(t *testing.T) {
 	})
 	// The range moves to 1h and the next usage fetch fails: the 24h answer
 	// is kept, now both stale and for a range that is not selected.
-	st.applyGateway(gwAnswers{usageWindow: "1h"})
+	st.applyGateway(gwAnswers{usageRequest: gwUsageRequest{window: "1h"}})
 	if st.gwUsageAsked != "24h" {
 		t.Error("a failed fetch must keep the range the kept answer was fetched for")
 	}
