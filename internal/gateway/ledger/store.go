@@ -33,6 +33,7 @@ type UsageEntry struct {
 	TotalTokens      int64
 	TTFTMs           int64
 	DurationMs       int64
+	IsRetry          bool
 }
 
 // Store is the dedicated SQLite quota & usage ledger (~/.crabbro/gateway/usage.db).
@@ -96,11 +97,38 @@ CREATE TABLE IF NOT EXISTS gateway_usage (
   reasoning_tokens   INTEGER NOT NULL DEFAULT 0,
   total_tokens       INTEGER NOT NULL DEFAULT 0,
   ttft_ms            INTEGER NOT NULL DEFAULT 0,
-  duration_ms        INTEGER NOT NULL DEFAULT 0
+  duration_ms        INTEGER NOT NULL DEFAULT 0,
+  is_retry           INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_gw_usage_plan_ts ON gateway_usage(plan_id, ts);
 CREATE INDEX IF NOT EXISTS idx_gw_usage_ts ON gateway_usage(ts);
 `)
+	if err != nil {
+		return err
+	}
+	rows, err := s.db.Query(`PRAGMA table_info(gateway_usage)`)
+	if err != nil {
+		return err
+	}
+	hasRetry := false
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			rows.Close()
+			return err
+		}
+		hasRetry = hasRetry || name == "is_retry"
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	if !hasRetry {
+		_, err = s.db.Exec(`ALTER TABLE gateway_usage ADD COLUMN is_retry INTEGER NOT NULL DEFAULT 0`)
+	}
 	return err
 }
 
@@ -128,16 +156,16 @@ func (s *Store) Record(e UsageEntry) error {
 INSERT INTO gateway_usage (
   ts, plan_id, model, protocol, route_id, session_key, status, error_kind,
   input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, total_tokens,
-  ttft_ms, duration_ms
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ttft_ms, duration_ms, is_retry
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		ts, e.PlanID, e.Model, e.Protocol, e.RouteID, e.SessionKey, e.Status, e.ErrorKind,
 		e.InputTokens, e.OutputTokens, e.CacheReadTokens, e.CacheWriteTokens, e.ReasoningTokens, e.TotalTokens,
-		e.TTFTMs, e.DurationMs,
+		e.TTFTMs, e.DurationMs, e.IsRetry,
 	)
 	return err
 }
 
-// WindowTotals returns total requests and total tokens recorded for planID since the given timestamp.
+// WindowTotals returns upstream attempts and tokens for planID since the given timestamp.
 func (s *Store) WindowTotals(planID string, since time.Time) (requests int64, tokens int64, err error) {
 	if s == nil || s.db == nil {
 		return 0, 0, nil
@@ -166,7 +194,8 @@ func (s *Store) Aggregate(window string, since, until time.Time, planFilter stri
 SELECT
   plan_id,
   model,
-  COUNT(*),
+	SUM(CASE WHEN is_retry = 0 THEN 1 ELSE 0 END),
+	SUM(CASE WHEN is_retry != 0 THEN 1 ELSE 0 END),
   SUM(CASE WHEN status >= 400 OR error_kind != '' THEN 1 ELSE 0 END),
   COALESCE(SUM(input_tokens), 0),
   COALESCE(SUM(output_tokens), 0),
@@ -175,7 +204,9 @@ SELECT
   COALESCE(SUM(reasoning_tokens), 0),
   COALESCE(SUM(total_tokens), 0),
   COALESCE(AVG(NULLIF(ttft_ms, 0)), 0),
-  COALESCE(AVG(NULLIF(duration_ms, 0)), 0)
+  COALESCE(AVG(NULLIF(duration_ms, 0)), 0),
+  COUNT(NULLIF(ttft_ms, 0)),
+  COUNT(NULLIF(duration_ms, 0))
 FROM gateway_usage
 WHERE ts >= ? AND ts <= ?`
 	args := []any{since.UTC().UnixMilli(), until.UTC().UnixMilli()}
@@ -192,12 +223,14 @@ WHERE ts >= ? AND ts <= ?`
 	defer rows.Close()
 
 	var sumTTFTWeight, sumDurWeight float64
+	var ttftSamples, durationSamples int64
 	for rows.Next() {
 		var b shared.GatewayUsageBucket
+		var bucketTTFTSamples, bucketDurationSamples int64
 		if err := rows.Scan(
-			&b.Plan, &b.Model, &b.Requests, &b.Errors,
+			&b.Plan, &b.Model, &b.Requests, &b.Retries, &b.Errors,
 			&b.InputTokens, &b.OutputTokens, &b.CacheReadTokens, &b.CacheWriteTokens,
-			&b.ReasoningTokens, &b.TotalTokens, &b.AvgTTFTMs, &b.AvgDurationMs,
+			&b.ReasoningTokens, &b.TotalTokens, &b.AvgTTFTMs, &b.AvgDurationMs, &bucketTTFTSamples, &bucketDurationSamples,
 		); err != nil {
 			return resp, err
 		}
@@ -206,6 +239,7 @@ WHERE ts >= ? AND ts <= ?`
 		}
 		resp.Buckets = append(resp.Buckets, b)
 		resp.Totals.Requests += b.Requests
+		resp.Totals.Retries += b.Retries
 		resp.Totals.Errors += b.Errors
 		resp.Totals.InputTokens += b.InputTokens
 		resp.Totals.OutputTokens += b.OutputTokens
@@ -213,8 +247,10 @@ WHERE ts >= ? AND ts <= ?`
 		resp.Totals.CacheWriteTokens += b.CacheWriteTokens
 		resp.Totals.ReasoningTokens += b.ReasoningTokens
 		resp.Totals.TotalTokens += b.TotalTokens
-		sumTTFTWeight += b.AvgTTFTMs * float64(b.Requests)
-		sumDurWeight += b.AvgDurationMs * float64(b.Requests)
+		sumTTFTWeight += b.AvgTTFTMs * float64(bucketTTFTSamples)
+		sumDurWeight += b.AvgDurationMs * float64(bucketDurationSamples)
+		ttftSamples += bucketTTFTSamples
+		durationSamples += bucketDurationSamples
 	}
 	if err := rows.Err(); err != nil {
 		return resp, err
@@ -228,9 +264,11 @@ WHERE ts >= ? AND ts <= ?`
 		}
 		return resp.Buckets[i].Model < resp.Buckets[j].Model
 	})
-	if resp.Totals.Requests > 0 {
-		resp.Totals.AvgTTFTMs = sumTTFTWeight / float64(resp.Totals.Requests)
-		resp.Totals.AvgDurationMs = sumDurWeight / float64(resp.Totals.Requests)
+	if ttftSamples > 0 {
+		resp.Totals.AvgTTFTMs = sumTTFTWeight / float64(ttftSamples)
+	}
+	if durationSamples > 0 {
+		resp.Totals.AvgDurationMs = sumDurWeight / float64(durationSamples)
 	}
 	if denom := resp.Totals.InputTokens + resp.Totals.CacheReadTokens; denom > 0 {
 		resp.Totals.CacheHitRatio = float64(resp.Totals.CacheReadTokens) / float64(denom)

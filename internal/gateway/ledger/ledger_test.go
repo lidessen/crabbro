@@ -1,11 +1,82 @@
 package ledger
 
 import (
+	"database/sql"
 	"net/http"
 	"path/filepath"
 	"testing"
 	"time"
 )
+
+func TestAggregateWeightsNonzeroSamples(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "usage.db"), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	now := time.Now().UTC()
+	for _, entry := range []UsageEntry{
+		{Timestamp: now, PlanID: "a", Model: "m", TTFTMs: 100, DurationMs: 400},
+		{Timestamp: now, PlanID: "a", Model: "m"},
+		{Timestamp: now, PlanID: "b", Model: "m", TTFTMs: 300, DurationMs: 200},
+		{Timestamp: now, PlanID: "c", Model: "m", DurationMs: 600},
+	} {
+		if err := st.Record(entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := st.Aggregate("test", now.Add(-time.Second), now.Add(time.Second), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Totals.Requests != 4 || got.Totals.AvgTTFTMs != 200 || got.Totals.AvgDurationMs != 400 {
+		t.Fatalf("totals = %+v, want 4 requests, TTFT 200, duration 400", got.Totals)
+	}
+	filtered, err := st.Aggregate("test", now.Add(-time.Second), now.Add(time.Second), "a")
+	if err != nil || filtered.Totals.AvgTTFTMs != 100 || filtered.Totals.AvgDurationMs != 400 {
+		t.Fatalf("filtered totals = %+v, err = %v", filtered.Totals, err)
+	}
+}
+
+func TestMigrateLegacyUsage(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "usage.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE gateway_usage (
+		id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, plan_id TEXT NOT NULL, model TEXT NOT NULL,
+		protocol TEXT NOT NULL, route_id TEXT NOT NULL, session_key TEXT NOT NULL,
+		status INTEGER NOT NULL, error_kind TEXT NOT NULL DEFAULT '', input_tokens INTEGER NOT NULL DEFAULT 0,
+		output_tokens INTEGER NOT NULL DEFAULT 0, cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+		cache_write_tokens INTEGER NOT NULL DEFAULT 0, reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+		total_tokens INTEGER NOT NULL DEFAULT 0, ttft_ms INTEGER NOT NULL DEFAULT 0,
+		duration_ms INTEGER NOT NULL DEFAULT 0)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	_, err = db.Exec(`INSERT INTO gateway_usage (ts, plan_id, model, protocol, route_id, session_key, status) VALUES (?, 'p', 'm', '', '', '', 200)`, now.UnixMilli())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		st, err := Open(path, time.Hour)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := st.Aggregate("test", now.Add(-time.Second), now.Add(time.Second), "")
+		if err != nil || got.Totals.Requests != 1 || got.Totals.Retries != 0 {
+			t.Fatalf("legacy totals = %+v, err = %v", got.Totals, err)
+		}
+		if err := st.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
 
 func TestLedgerRecordWindowAndAggregate(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "usage.db")

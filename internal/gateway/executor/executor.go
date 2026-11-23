@@ -130,6 +130,7 @@ func (e *Executor) ServeHTTP(w http.ResponseWriter, r *http.Request, snap *confi
 	}
 
 	var attempts []shared.GatewayAttempt
+	accountedAttempts := 0
 	minContextNeeded := 0
 	var lastStatus int
 	var lastHeaders http.Header
@@ -145,7 +146,7 @@ func (e *Executor) ServeHTTP(w http.ResponseWriter, r *http.Request, snap *confi
 			continue
 		}
 
-		res := e.tryCandidate(r, w, rec, cand, sel, ingress, rawBody, &attempts, started)
+		res := e.tryCandidate(r, w, rec, cand, sel, ingress, rawBody, &attempts, &accountedAttempts, started)
 		if res.committed {
 			return
 		}
@@ -197,6 +198,7 @@ func (e *Executor) tryCandidate(
 	ingress codec.IngressInfo,
 	rawBody []byte,
 	attempts *[]shared.GatewayAttempt,
+	accountedAttempts *int,
 	exStarted time.Time,
 ) attemptOutcome {
 	attStart := time.Now()
@@ -304,7 +306,7 @@ func (e *Executor) tryCandidate(
 	ttftMs := time.Since(attStart).Milliseconds()
 	if err != nil {
 		fc := ClassifyHTTPFailure(0, []byte(err.Error()), nil, cand.Plan.ID, e.health(), cand.CredentialRef)
-		e.applyFailure(cand, fc, ttftMs, sel.Route.ID, sel.Signals.SessionKey, 0)
+		e.applyFailure(cand, fc, ttftMs, sel.Route.ID, sel.Signals.SessionKey, 0, accountedAttempts)
 		*attempts = append(*attempts, shared.GatewayAttempt{
 			Plan: cand.Plan.ID, CredentialRef: cand.CredentialRef,
 			Model:           cand.Target.Model,
@@ -313,7 +315,6 @@ func (e *Executor) tryCandidate(
 			ErrorKind:       fc.Kind,
 			ErrorMessage:    secret.ScrubText(err.Error(), secVal),
 			LatencyMs:       ttftMs,
-			TTFTMs:          ttftMs,
 			CooldownApplied: fc.CooldownLabel,
 		})
 		return attemptOutcome{retryable: r.Context().Err() == nil, errMsg: err.Error()}
@@ -329,7 +330,7 @@ func (e *Executor) tryCandidate(
 		resp.Body.Close()
 		latMs := time.Since(attStart).Milliseconds()
 		fc := ClassifyHTTPFailure(resp.StatusCode, errBody, resp.Header, cand.Plan.ID, e.health(), cand.CredentialRef)
-		e.applyFailure(cand, fc, latMs, sel.Route.ID, sel.Signals.SessionKey, resp.StatusCode)
+		e.applyFailure(cand, fc, latMs, sel.Route.ID, sel.Signals.SessionKey, resp.StatusCode, accountedAttempts)
 
 		ctxMin := 0
 		if fc.ContextOnly && cand.ModelSpec != nil {
@@ -343,7 +344,6 @@ func (e *Executor) tryCandidate(
 			ErrorKind:       fc.Kind,
 			ErrorMessage:    secret.ScrubText(fc.Summary, secVal),
 			LatencyMs:       latMs,
-			TTFTMs:          ttftMs,
 			CooldownApplied: fc.CooldownLabel,
 		})
 		return attemptOutcome{
@@ -366,7 +366,7 @@ func (e *Executor) tryCandidate(
 				sseErrCode, sseErrMsg = "empty_stream", "upstream SSE stream closed with no events"
 			}
 			fc := ClassifySSEFailure(sseErrCode, sseErrMsg, cand.Plan.ID, e.health(), cand.CredentialRef)
-			e.applyFailure(cand, fc, latMs, sel.Route.ID, sel.Signals.SessionKey, http.StatusTooManyRequests)
+			e.applyFailure(cand, fc, latMs, sel.Route.ID, sel.Signals.SessionKey, http.StatusTooManyRequests, accountedAttempts)
 			ctxMin := 0
 			if fc.ContextOnly && cand.ModelSpec != nil {
 				ctxMin = cand.ModelSpec.ContextWindow
@@ -379,7 +379,6 @@ func (e *Executor) tryCandidate(
 				ErrorKind:       fc.Kind,
 				ErrorMessage:    secret.ScrubText(sseErrMsg, secVal),
 				LatencyMs:       latMs,
-				TTFTMs:          ttftMs,
 				CooldownApplied: fc.CooldownLabel,
 			})
 			return attemptOutcome{retryable: fc.Retryable, contextMin: ctxMin, errMsg: sseErrMsg}
@@ -396,7 +395,7 @@ func (e *Executor) tryCandidate(
 			LatencyMs: ttftMs,
 		})
 
-		e.commitStream(w, r, rec, cand, sel, ingress, *attempts, resp, peeked, sseRest, bridgeState, secVal, ttftMs, exStarted)
+		e.commitStream(w, r, rec, cand, sel, ingress, *attempts, resp, peeked, sseRest, bridgeState, secVal, ttftMs, accountedAttempts, exStarted)
 		return attemptOutcome{committed: true}
 	}
 
@@ -406,7 +405,7 @@ func (e *Executor) tryCandidate(
 	latMs := time.Since(attStart).Milliseconds()
 	if readErr != nil {
 		fc := ClassifyHTTPFailure(http.StatusBadGateway, []byte(readErr.Error()), nil, cand.Plan.ID, e.health(), cand.CredentialRef)
-		e.applyFailure(cand, fc, latMs, sel.Route.ID, sel.Signals.SessionKey, http.StatusBadGateway)
+		e.applyFailure(cand, fc, latMs, sel.Route.ID, sel.Signals.SessionKey, http.StatusBadGateway, accountedAttempts)
 		*attempts = append(*attempts, shared.GatewayAttempt{
 			Plan: cand.Plan.ID, CredentialRef: cand.CredentialRef,
 			Model:           cand.Target.Model,
@@ -415,7 +414,6 @@ func (e *Executor) tryCandidate(
 			ErrorKind:       fc.Kind,
 			ErrorMessage:    secret.ScrubText(readErr.Error(), secVal),
 			LatencyMs:       latMs,
-			TTFTMs:          ttftMs,
 			CooldownApplied: fc.CooldownLabel,
 		})
 		return attemptOutcome{retryable: true, errMsg: readErr.Error()}
@@ -436,7 +434,7 @@ func (e *Executor) tryCandidate(
 			}
 			if decErr != nil {
 				fc := ClassifyHTTPFailure(http.StatusBadGateway, []byte(decErr.Error()), nil, cand.Plan.ID, e.health(), cand.CredentialRef)
-				e.applyFailure(cand, fc, latMs, sel.Route.ID, sel.Signals.SessionKey, http.StatusBadGateway)
+				e.applyFailure(cand, fc, latMs, sel.Route.ID, sel.Signals.SessionKey, http.StatusBadGateway, accountedAttempts)
 				*attempts = append(*attempts, shared.GatewayAttempt{Plan: cand.Plan.ID, CredentialRef: cand.CredentialRef, Model: cand.Target.Model, Protocol: cand.EndpointProto, Status: http.StatusBadGateway, ErrorKind: fc.Kind, ErrorMessage: decErr.Error(), LatencyMs: latMs})
 				return attemptOutcome{retryable: true, errMsg: decErr.Error()}
 			}
@@ -447,7 +445,7 @@ func (e *Executor) tryCandidate(
 		outStatus, outHdr, outBody, usage, trErr = e.Bridge.TranslateResponse(cand, ingress, bridgeState, resp.StatusCode, resp.Header, respBytes)
 		if trErr != nil {
 			fc := ClassifyHTTPFailure(http.StatusBadGateway, []byte(trErr.Error()), nil, cand.Plan.ID, e.health(), cand.CredentialRef)
-			e.applyFailure(cand, fc, latMs, sel.Route.ID, sel.Signals.SessionKey, http.StatusBadGateway)
+			e.applyFailure(cand, fc, latMs, sel.Route.ID, sel.Signals.SessionKey, http.StatusBadGateway, accountedAttempts)
 			*attempts = append(*attempts, shared.GatewayAttempt{
 				Plan: cand.Plan.ID, CredentialRef: cand.CredentialRef,
 				Model:        cand.Target.Model,
@@ -480,7 +478,7 @@ func (e *Executor) tryCandidate(
 	w.WriteHeader(outStatus)
 	_, _ = w.Write(outBody)
 
-	e.recordSuccess(sel, cand, usage, ttftMs, time.Since(exStarted).Milliseconds())
+	e.recordSuccess(sel, cand, usage, ttftMs, time.Since(exStarted).Milliseconds(), accountedAttempts)
 	e.finalizeRecord(rec, cand, *attempts, usage, outStatus, outHdr, outBody, needBridge, secVal, exStarted, "")
 	return attemptOutcome{committed: true}
 }
@@ -499,6 +497,7 @@ func (e *Executor) commitStream(
 	bridgeState any,
 	secVal string,
 	ttftMs int64,
+	accountedAttempts *int,
 	exStarted time.Time,
 ) {
 	defer resp.Body.Close()
@@ -562,6 +561,7 @@ func (e *Executor) commitStream(
 				ErrorKind:  "downstream_stream",
 				TTFTMs:     ttftMs,
 				DurationMs: totalDur,
+				IsRetry:    *accountedAttempts > 0,
 			})
 		}
 		writeMidStreamError(w, flusher, ingress.Protocol, streamErr.Error())
@@ -569,7 +569,7 @@ func (e *Executor) commitStream(
 		return
 	}
 
-	e.recordSuccess(sel, cand, usage, ttftMs, totalDur)
+	e.recordSuccess(sel, cand, usage, ttftMs, totalDur, accountedAttempts)
 	e.finalizeRecord(rec, cand, attempts, usage, http.StatusOK, w.Header(), preview.Bytes(), needBridge, secVal, exStarted, "")
 }
 
@@ -643,6 +643,7 @@ func (e *Executor) ExecuteDecision(ctx context.Context, snap *config.Snapshot, r
 	}
 
 	var attempts []shared.GatewayAttempt
+	accountedAttempts := 0
 	var lastErr error
 	upstreamAttempts := 0
 	for _, cand := range sel.Candidates {
@@ -708,7 +709,7 @@ func (e *Executor) ExecuteDecision(ctx context.Context, snap *config.Snapshot, r
 		if err != nil {
 			cancelReq()
 			fc := ClassifyHTTPFailure(0, []byte(err.Error()), nil, cand.Plan.ID, e.health(), cand.CredentialRef)
-			e.applyFailure(cand, fc, latMs, sel.Route.ID, "", 0)
+			e.applyFailure(cand, fc, latMs, sel.Route.ID, "", 0, &accountedAttempts)
 			attempts = append(attempts, shared.GatewayAttempt{
 				Plan: cand.Plan.ID, CredentialRef: cand.CredentialRef, Model: cand.Target.Model, Protocol: cand.EndpointProto,
 				Status: http.StatusBadGateway, ErrorKind: fc.Kind, ErrorMessage: secret.ScrubText(err.Error(), secVal),
@@ -722,12 +723,14 @@ func (e *Executor) ExecuteDecision(ctx context.Context, snap *config.Snapshot, r
 		resp.Body.Close()
 		cancelReq()
 		if readErr != nil {
+			fc := ClassifyHTTPFailure(http.StatusBadGateway, []byte(readErr.Error()), nil, cand.Plan.ID, e.health(), cand.CredentialRef)
+			e.applyFailure(cand, fc, time.Since(attStart).Milliseconds(), sel.Route.ID, "", http.StatusBadGateway, &accountedAttempts)
 			lastErr = readErr
 			continue
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			fc := ClassifyHTTPFailure(resp.StatusCode, respBytes, resp.Header, cand.Plan.ID, e.health(), cand.CredentialRef)
-			e.applyFailure(cand, fc, latMs, sel.Route.ID, "", resp.StatusCode)
+			e.applyFailure(cand, fc, latMs, sel.Route.ID, "", resp.StatusCode, &accountedAttempts)
 			attempts = append(attempts, shared.GatewayAttempt{
 				Plan: cand.Plan.ID, CredentialRef: cand.CredentialRef, Model: cand.Target.Model, Protocol: cand.EndpointProto,
 				Status: resp.StatusCode, ErrorKind: fc.Kind, ErrorMessage: fc.Summary,
@@ -744,6 +747,8 @@ func (e *Executor) ExecuteDecision(ctx context.Context, snap *config.Snapshot, r
 		if !needBridge {
 			var parsed ir.DecisionResponse
 			if uErr := json.Unmarshal(respBytes, &parsed); uErr != nil {
+				fc := ClassifyHTTPFailure(http.StatusBadGateway, []byte(uErr.Error()), nil, cand.Plan.ID, e.health(), cand.CredentialRef)
+				e.applyFailure(cand, fc, time.Since(attStart).Milliseconds(), sel.Route.ID, "", http.StatusBadGateway, &accountedAttempts)
 				lastErr = uErr
 				continue
 			}
@@ -754,6 +759,8 @@ func (e *Executor) ExecuteDecision(ctx context.Context, snap *config.Snapshot, r
 		} else {
 			dresp, err = e.Bridge.DecodeDecisionResponse(cand, bridgeState, respBytes)
 			if err != nil {
+				fc := ClassifyHTTPFailure(http.StatusBadGateway, []byte(err.Error()), nil, cand.Plan.ID, e.health(), cand.CredentialRef)
+				e.applyFailure(cand, fc, time.Since(attStart).Milliseconds(), sel.Route.ID, "", http.StatusBadGateway, &accountedAttempts)
 				lastErr = err
 				continue
 			}
@@ -765,7 +772,7 @@ func (e *Executor) ExecuteDecision(ctx context.Context, snap *config.Snapshot, r
 			Plan: cand.Plan.ID, CredentialRef: cand.CredentialRef, Model: cand.Target.Model, Protocol: cand.EndpointProto,
 			Status: resp.StatusCode, LatencyMs: latMs, TTFTMs: latMs,
 		})
-		e.recordSuccess(sel, cand, dresp.Usage, latMs, time.Since(started).Milliseconds())
+		e.recordSuccess(sel, cand, dresp.Usage, latMs, time.Since(started).Milliseconds(), &accountedAttempts)
 		e.finalizeRecord(rec, cand, attempts, dresp.Usage, resp.StatusCode, resp.Header, respBytes, needBridge, secVal, started, "")
 		return dresp, nil
 	}
@@ -849,7 +856,7 @@ func (e *Executor) health() *router.HealthStore {
 	return e.Router.Health
 }
 
-func (e *Executor) applyFailure(cand router.Candidate, fc FailureClass, latencyMs int64, routeID, sessionKey string, status int) {
+func (e *Executor) applyFailure(cand router.Candidate, fc FailureClass, latencyMs int64, routeID, sessionKey string, status int, accountedAttempts *int) {
 	now := time.Now().UTC()
 	if e.health() != nil {
 		e.health().RecordOutcome(cand.Plan.ID, true, latencyMs)
@@ -878,13 +885,16 @@ func (e *Executor) applyFailure(cand router.Candidate, fc FailureClass, latencyM
 			SessionKey: sessionKey,
 			Status:     status,
 			ErrorKind:  fc.Kind,
-			TTFTMs:     latencyMs,
 			DurationMs: latencyMs,
+			IsRetry:    accountedAttempts != nil && *accountedAttempts > 0,
 		})
+	}
+	if accountedAttempts != nil {
+		*accountedAttempts++
 	}
 }
 
-func (e *Executor) recordSuccess(sel *router.Selection, cand router.Candidate, usage shared.TokenUsage, ttftMs, totalMs int64) {
+func (e *Executor) recordSuccess(sel *router.Selection, cand router.Candidate, usage shared.TokenUsage, ttftMs, totalMs int64, accountedAttempts *int) {
 	now := time.Now().UTC()
 	if e.health() != nil {
 		e.health().RecordOutcome(cand.Plan.ID, false, totalMs)
@@ -910,6 +920,7 @@ func (e *Executor) recordSuccess(sel *router.Selection, cand router.Candidate, u
 			TotalTokens:      usage.Total(),
 			TTFTMs:           ttftMs,
 			DurationMs:       totalMs,
+			IsRetry:          accountedAttempts != nil && *accountedAttempts > 0,
 		})
 	}
 	if e.Router != nil && e.Router.Sessions != nil && sel.Signals.SessionKey != "" {

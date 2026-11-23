@@ -271,10 +271,13 @@ type GatewayRouteListResponse struct {
 }
 
 // GatewayUsageBucket aggregates gateway accounting for one (plan, model) pair.
+// Requests counts first recorded attempts; Retries counts subsequent recorded
+// attempts. Errors, tokens and latency averages include all recorded attempts.
 type GatewayUsageBucket struct {
 	Plan             string  `json:"plan"`
 	Model            string  `json:"model"`
 	Requests         int64   `json:"requests"`
+	Retries          int64   `json:"retries,omitempty"`
 	Errors           int64   `json:"errors"`
 	InputTokens      int64   `json:"inputTokens"`
 	OutputTokens     int64   `json:"outputTokens"`

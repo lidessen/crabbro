@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"github.com/lidessen/crabbro/internal/gateway/codec"
 	"github.com/lidessen/crabbro/internal/gateway/config"
 	"github.com/lidessen/crabbro/internal/gateway/ir"
+	"github.com/lidessen/crabbro/internal/gateway/ledger"
 	"github.com/lidessen/crabbro/internal/gateway/router"
 	"github.com/lidessen/crabbro/internal/secret"
 )
@@ -100,6 +102,51 @@ func serveAnthropicAs(t *testing.T, exec *Executor, snap *config.Snapshot, model
 }
 
 const anthropicOK = `{"id":"msg_1","type":"message","role":"assistant","model":"claude","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":1}}`
+
+func TestFailoverLedgerSeparatesRetriesAndMissingTTFT(t *testing.T) {
+	first := newTestUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(15 * time.Millisecond)
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprint(w, `{"error":{"type":"server_error"}}`)
+	})
+	second := newTestUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(25 * time.Millisecond)
+		fmt.Fprint(w, anthropicOK)
+	})
+	exec, snap := newExecutorFixture(t, first, second)
+	st, err := ledger.Open(filepath.Join(t.TempDir(), "usage.db"), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	exec.Ledger = st
+	started := time.Now().Add(-time.Second)
+	rec := serveAnthropic(t, exec, snap, `{"model":"coding-main","messages":[]}`)
+	if rec.Code != http.StatusOK || first.hits.Load() != 1 || second.hits.Load() != 1 {
+		t.Fatalf("status=%d first=%d second=%d", rec.Code, first.hits.Load(), second.hits.Load())
+	}
+	got, err := st.Aggregate("test", started, time.Now().Add(time.Second), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Totals.Requests != 1 || got.Totals.Retries != 1 || got.Totals.Errors != 1 {
+		t.Fatalf("totals = %+v", got.Totals)
+	}
+	for _, b := range got.Buckets {
+		switch b.Plan {
+		case "plan-0":
+			if b.Requests != 1 || b.Retries != 0 || b.AvgTTFTMs != 0 {
+				t.Fatalf("failed bucket = %+v", b)
+			}
+		case "plan-1":
+			if b.Requests != 0 || b.Retries != 1 || b.AvgTTFTMs <= 0 || got.Totals.AvgTTFTMs != b.AvgTTFTMs {
+				t.Fatalf("retry bucket = %+v, totals = %+v", b, got.Totals)
+			}
+		default:
+			t.Fatalf("unexpected bucket = %+v", b)
+		}
+	}
+}
 
 // Same-protocol failover across providers must not forward a signature minted
 // by the first provider to the fallback provider.

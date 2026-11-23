@@ -31,7 +31,7 @@ func TestApplyFailureRaisesAutoResetSignal(t *testing.T) {
 	}
 	for _, tc := range cases {
 		raised = nil
-		e.applyFailure(cand, FailureClass{Kind: tc.kind, CooldownScope: "plan", CooldownDur: time.Minute, Summary: "classified"}, 3, "route", "session", 429)
+		e.applyFailure(cand, FailureClass{Kind: tc.kind, CooldownScope: "plan", CooldownDur: time.Minute, Summary: "classified"}, 3, "route", "session", 429, nil)
 		if (len(raised) == 1) != tc.want {
 			t.Fatalf("kind %s: raised = %v, want signal = %t", tc.kind, raised, tc.want)
 		}
@@ -42,5 +42,5 @@ func TestApplyFailureRaisesAutoResetSignal(t *testing.T) {
 
 	// Without a hook the failure path stays inert.
 	e.AutoResetSignal = nil
-	e.applyFailure(cand, FailureClass{Kind: ErrKindQuotaExhausted, CooldownScope: "plan", CooldownDur: time.Minute}, 3, "route", "session", 429)
+	e.applyFailure(cand, FailureClass{Kind: ErrKindQuotaExhausted, CooldownScope: "plan", CooldownDur: time.Minute}, 3, "route", "session", 429, nil)
 }
