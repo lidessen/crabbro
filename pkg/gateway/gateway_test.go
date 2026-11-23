@@ -70,6 +70,62 @@ func TestCatalogAndStreaming(t *testing.T) {
 	}
 	close(release)
 	_, _ = io.Copy(io.Discard, resp.Body)
+
+	routeConfig := e.gateway.Config.Snapshot().AllRoutes[0]
+	routeConfig.Match.Profiles = []string{"profile"}
+	routeConfig.Match.Protocols = []string{"anthropic"}
+	routeConfig.Match.Models = []string{"group/test"}
+	routeConfig.Targets[0].WhenTier = []string{"strong"}
+	first := e.Catalog()
+	first.Routes[0].Profiles[0] = "changed"
+	first.Routes[0].Protocols[0] = "changed"
+	first.Routes[0].Models[0] = "changed"
+	first.Routes[0].Targets[0].WhenTier[0] = "changed"
+	second := e.Catalog().Routes[0]
+	if second.Profiles[0] != "profile" || second.Protocols[0] != "anthropic" || second.Models[0] != "group/test" || second.Targets[0].WhenTier[0] != "strong" {
+		t.Fatalf("catalog mutation changed configuration: %+v", second)
+	}
+}
+
+func TestResponseBodyCloseCancelsIdleUpstream(t *testing.T) {
+	canceled := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+		close(canceled)
+	}))
+	defer upstream.Close()
+	tr := transport{handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, upstream.URL, nil)
+		if err != nil {
+			return
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return
+		}
+		defer resp.Body.Close()
+		w.WriteHeader(resp.StatusCode)
+		w.(http.Flusher).Flush()
+		_, _ = io.Copy(w, resp.Body)
+	})}
+	req, err := http.NewRequest(http.MethodGet, "http://gateway.local/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := tr.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resp.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-canceled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("closing response did not cancel idle upstream")
+	}
 }
 
 func TestNoForbiddenDependencies(t *testing.T) {

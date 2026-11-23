@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -114,6 +115,12 @@ func (e *Engine) Catalog() Catalog {
 	var c Catalog
 	for _, r := range e.gateway.Routes().Routes {
 		if r.Enabled {
+			r.Profiles = slices.Clone(r.Profiles)
+			r.Protocols = slices.Clone(r.Protocols)
+			r.Models = slices.Clone(r.Models)
+			for i := range r.Targets {
+				r.Targets[i].WhenTier = slices.Clone(r.Targets[i].WhenTier)
+			}
 			c.Routes = append(c.Routes, r)
 		}
 	}
@@ -142,6 +149,8 @@ func (t transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err := req.Context().Err(); err != nil {
 		return nil, err
 	}
+	ctx, cancel := context.WithCancel(req.Context())
+	handlerReq := req.WithContext(ctx)
 	r, w := io.Pipe()
 	pw := &pipeWriter{header: make(http.Header), body: w, ready: make(chan struct{}), finished: make(chan struct{})}
 	go func() {
@@ -158,22 +167,34 @@ func (t transport) RoundTrip(req *http.Request) (*http.Response, error) {
 				_ = req.Body.Close()
 			}
 		}()
-		t.handler.ServeHTTP(pw, req)
+		t.handler.ServeHTTP(pw, handlerReq)
 	}()
 	go func() {
 		select {
-		case <-req.Context().Done():
-			_ = r.CloseWithError(req.Context().Err())
+		case <-ctx.Done():
+			_ = r.CloseWithError(ctx.Err())
 		case <-pw.finished:
+			cancel()
 		}
 	}()
 	select {
 	case <-pw.ready:
-		return &http.Response{StatusCode: pw.status, Status: fmt.Sprintf("%d %s", pw.status, http.StatusText(pw.status)), Header: pw.resultHeader, Body: r, Request: req, Proto: "HTTP/1.1", ProtoMajor: 1, ProtoMinor: 1, ContentLength: -1}, nil
+		return &http.Response{StatusCode: pw.status, Status: fmt.Sprintf("%d %s", pw.status, http.StatusText(pw.status)), Header: pw.resultHeader, Body: &responseBody{PipeReader: r, cancel: cancel}, Request: req, Proto: "HTTP/1.1", ProtoMajor: 1, ProtoMinor: 1, ContentLength: -1}, nil
 	case <-req.Context().Done():
+		cancel()
 		_ = r.CloseWithError(req.Context().Err())
 		return nil, req.Context().Err()
 	}
+}
+
+type responseBody struct {
+	*io.PipeReader
+	cancel context.CancelFunc
+}
+
+func (b *responseBody) Close() error {
+	b.cancel()
+	return b.PipeReader.Close()
 }
 
 type pipeWriter struct {
