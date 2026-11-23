@@ -9,8 +9,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/lidessen/crabbro/internal/gateway/config"
-	"github.com/lidessen/crabbro/internal/gateway/router"
+	"github.com/lidessen/crabbro/internal/gateway/protocol"
 )
 
 // SignatureOrigin identifies the upstream that minted an opaque thinking
@@ -39,15 +38,11 @@ func (o SignatureOrigin) matches(target SignatureOrigin) bool {
 
 // CandidateSignatureOrigin derives the provenance identity for a routed
 // candidate without retaining endpoint credentials or query parameters.
-func CandidateSignatureOrigin(cand router.Candidate) SignatureOrigin {
-	origin := SignatureOrigin{Protocol: cand.EndpointProto, Model: cand.Target.Model}
-	if cand.Plan != nil {
-		origin.PlanID = cand.Plan.ID
-	}
-	if cand.Endpoint != nil {
-		origin.Provider = endpointIdentity(cand.Endpoint.BaseURL)
-	}
-	return origin
+func CandidateSignatureOrigin(cand interface {
+	CodecOrigin() (planID, baseURL, protocol, model string)
+}) SignatureOrigin {
+	planID, baseURL, protocol, model := cand.CodecOrigin()
+	return SignatureOrigin{PlanID: planID, Provider: endpointIdentity(baseURL), Protocol: protocol, Model: model}
 }
 
 func endpointIdentity(raw string) string {
@@ -130,9 +125,9 @@ func (p *SignatureProvenance) RecordResponse(proto string, origin SignatureOrigi
 		return
 	}
 	switch proto {
-	case config.ProtocolAnthropic:
+	case protocol.ProtocolAnthropic:
 		recordAnthropicSignatures(p, origin, body)
-	case config.ProtocolGemini:
+	case protocol.ProtocolGemini:
 		recordGeminiSignatures(p, origin, body)
 	}
 }
@@ -190,12 +185,12 @@ func NormalizeSameProtocolBody(body []byte, proto string, target SignatureOrigin
 		return body, nil
 	}
 	switch proto {
-	case config.ProtocolAnthropic:
+	case protocol.ProtocolAnthropic:
 		if !bytes.Contains(body, []byte(`"thinking"`)) && !bytes.Contains(body, []byte(`"signature"`)) && !bytes.Contains(body, []byte(`"redacted_thinking"`)) {
 			return body, nil
 		}
 		return normalizeAnthropicBody(body, target, prov)
-	case config.ProtocolGemini:
+	case protocol.ProtocolGemini:
 		if !bytes.Contains(body, []byte(`"thought"`)) && !bytes.Contains(body, []byte(`"thoughtSignature"`)) {
 			return body, nil
 		}
@@ -433,9 +428,9 @@ func (t *SignatureStreamTap) dispatch() {
 		return
 	}
 	switch t.proto {
-	case config.ProtocolAnthropic:
+	case protocol.ProtocolAnthropic:
 		t.observeAnthropic(event, data)
-	case config.ProtocolGemini:
+	case protocol.ProtocolGemini:
 		t.observeGemini(data)
 	}
 }

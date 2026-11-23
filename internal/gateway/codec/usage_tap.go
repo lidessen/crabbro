@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/lidessen/crabbro/internal/gateway/config"
+	"github.com/lidessen/crabbro/internal/gateway/protocol"
 	"github.com/lidessen/crabbro/internal/shared"
 )
 
@@ -15,35 +15,35 @@ func ExtractUsageJSON(proto string, body []byte) shared.TokenUsage {
 		return shared.TokenUsage{}
 	}
 	switch proto {
-	case config.ProtocolOpenAIChat:
+	case protocol.ProtocolOpenAIChat:
 		var doc struct {
 			Usage *oaChatUsage `json:"usage"`
 		}
 		if json.Unmarshal(body, &doc) == nil && doc.Usage != nil {
 			return doc.Usage.toTokenUsage()
 		}
-	case config.ProtocolOpenAIResponses, config.ProtocolOpenAIDecisions:
+	case protocol.ProtocolOpenAIResponses, protocol.ProtocolOpenAIDecisions:
 		var doc struct {
 			Usage *oaResponsesUsage `json:"usage"`
 		}
 		if json.Unmarshal(body, &doc) == nil && doc.Usage != nil {
 			return doc.Usage.toTokenUsage()
 		}
-	case config.ProtocolAnthropic:
+	case protocol.ProtocolAnthropic:
 		var doc struct {
 			Usage *anthUsage `json:"usage"`
 		}
 		if json.Unmarshal(body, &doc) == nil && doc.Usage != nil {
 			return doc.Usage.toTokenUsage()
 		}
-	case config.ProtocolGemini:
+	case protocol.ProtocolGemini:
 		var doc struct {
 			UsageMetadata *gemUsage `json:"usageMetadata"`
 		}
 		if json.Unmarshal(body, &doc) == nil && doc.UsageMetadata != nil {
 			return doc.UsageMetadata.toTokenUsage()
 		}
-	case config.ProtocolGeminiDecisions:
+	case protocol.ProtocolGeminiDecisions:
 		var doc struct {
 			Usage struct {
 				Input  int64 `json:"total_input_tokens"`
@@ -53,7 +53,7 @@ func ExtractUsageJSON(proto string, body []byte) shared.TokenUsage {
 		if json.Unmarshal(body, &doc) == nil {
 			return shared.TokenUsage{InputTokens: doc.Usage.Input, OutputTokens: doc.Usage.Output}
 		}
-	case config.ProtocolTypeSafeJev:
+	case protocol.ProtocolTypeSafeJev:
 		var doc struct {
 			Usage *struct {
 				InputTokens  int64 `json:"input_tokens"`
@@ -143,7 +143,7 @@ func (t *UsageTap) flushEvent() {
 	}
 
 	switch t.proto {
-	case config.ProtocolOpenAIChat:
+	case protocol.ProtocolOpenAIChat:
 		var doc struct {
 			Usage *oaChatUsage `json:"usage"`
 		}
@@ -151,7 +151,7 @@ func (t *UsageTap) flushEvent() {
 			u := doc.Usage.toTokenUsage()
 			mergeMaxUsage(&t.usage, u)
 		}
-	case config.ProtocolOpenAIResponses, config.ProtocolOpenAIDecisions:
+	case protocol.ProtocolOpenAIResponses, protocol.ProtocolOpenAIDecisions:
 		var doc struct {
 			Type     string `json:"type"`
 			Response *struct {
@@ -166,7 +166,7 @@ func (t *UsageTap) flushEvent() {
 				mergeMaxUsage(&t.usage, doc.Usage.toTokenUsage())
 			}
 		}
-	case config.ProtocolAnthropic:
+	case protocol.ProtocolAnthropic:
 		var doc struct {
 			Type    string `json:"type"`
 			Message *struct {
@@ -187,7 +187,7 @@ func (t *UsageTap) flushEvent() {
 				mergeMaxUsage(&t.usage, u.toTokenUsage())
 			}
 		}
-	case config.ProtocolGemini:
+	case protocol.ProtocolGemini:
 		var doc struct {
 			UsageMetadata *gemUsage `json:"usageMetadata"`
 		}
@@ -260,7 +260,7 @@ func DetectSSEError(proto, eventName string, data []byte) (code, msg string, isE
 		}
 		return c, m, true
 	}
-	if proto == config.ProtocolOpenAIChat && len(env.Choices) > 0 && env.Choices[0].FinishReason == "error" {
+	if proto == protocol.ProtocolOpenAIChat && len(env.Choices) > 0 && env.Choices[0].FinishReason == "error" {
 		return "upstream_error", "choice finish_reason=error", true
 	}
 	return "", "", false

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lidessen/crabbro/internal/gateway/protocol"
 	"github.com/lidessen/crabbro/internal/shared"
 )
 
@@ -15,16 +16,16 @@ const (
 	KindPlan  = "gateway-plan"
 	KindRoute = "gateway-route"
 
-	ProtocolOpenAIChat      = "openai-chat"
-	ProtocolOpenAIResponses = "openai-responses"
-	ProtocolAnthropic       = "anthropic"
-	ProtocolGemini          = "gemini"
-	ProtocolTypeSafeJev     = "typesafe-jev"
-	ProtocolOpenAIDecisions = "openai-decisions"
-	ProtocolGeminiDecisions = "gemini-decisions"
+	ProtocolOpenAIChat      = protocol.ProtocolOpenAIChat
+	ProtocolOpenAIResponses = protocol.ProtocolOpenAIResponses
+	ProtocolAnthropic       = protocol.ProtocolAnthropic
+	ProtocolGemini          = protocol.ProtocolGemini
+	ProtocolTypeSafeJev     = protocol.ProtocolTypeSafeJev
+	ProtocolOpenAIDecisions = protocol.ProtocolOpenAIDecisions
+	ProtocolGeminiDecisions = protocol.ProtocolGeminiDecisions
 
-	FamilyGenerative = "generative"
-	FamilyDecision   = "decision"
+	FamilyGenerative = protocol.FamilyGenerative
+	FamilyDecision   = protocol.FamilyDecision
 
 	TierFast     = "fast"
 	TierStrong   = "strong"
@@ -410,6 +411,14 @@ type EndpointSpec struct {
 	AuthPrefix string            `yaml:"authPrefix,omitempty" json:"authPrefix,omitempty"`
 	Headers    map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
 	APIVersion string            `yaml:"apiVersion,omitempty" json:"apiVersion,omitempty"`
+}
+
+// CodecAuth exposes endpoint authentication settings to transport codecs.
+func (e *EndpointSpec) CodecAuth() (string, string, string, map[string]string) {
+	if e == nil {
+		return "", "", "", nil
+	}
+	return e.AuthHeader, e.AuthPrefix, e.APIVersion, e.Headers
 }
 
 // ModelSpec describes a model offered on a plan.

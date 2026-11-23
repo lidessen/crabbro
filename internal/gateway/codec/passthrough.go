@@ -7,8 +7,8 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/lidessen/crabbro/internal/gateway/config"
-	"github.com/lidessen/crabbro/internal/secret"
+	"github.com/lidessen/crabbro/internal/gateway/protocol"
+	"github.com/lidessen/crabbro/internal/scrub"
 )
 
 // PatchModelAndExtraBody performs a surgical top-level JSON patch on body:
@@ -26,7 +26,7 @@ func PatchModelAndExtraBody(body []byte, proto, targetModel string, extra map[st
 	if obj == nil {
 		obj = map[string]json.RawMessage{}
 	}
-	if proto != config.ProtocolGemini && targetModel != "" {
+	if proto != protocol.ProtocolGemini && targetModel != "" {
 		mb, err := json.Marshal(targetModel)
 		if err != nil {
 			return nil, err
@@ -58,7 +58,7 @@ func BuildUpstreamURL(baseURL, proto, action, targetModel, cleanQuery string, st
 
 	var suffix string
 	switch proto {
-	case config.ProtocolOpenAIChat:
+	case protocol.ProtocolOpenAIChat:
 		switch {
 		case strings.HasSuffix(basePath, "/chat/completions"):
 			suffix = basePath
@@ -67,7 +67,7 @@ func BuildUpstreamURL(baseURL, proto, action, targetModel, cleanQuery string, st
 		default:
 			suffix = "/v1/chat/completions"
 		}
-	case config.ProtocolGeminiDecisions:
+	case protocol.ProtocolGeminiDecisions:
 		switch {
 		case strings.HasSuffix(basePath, "/decisions"):
 			suffix = basePath
@@ -76,7 +76,7 @@ func BuildUpstreamURL(baseURL, proto, action, targetModel, cleanQuery string, st
 		default:
 			suffix = "/v1beta/decisions"
 		}
-	case config.ProtocolOpenAIDecisions:
+	case protocol.ProtocolOpenAIDecisions:
 		switch {
 		case strings.HasSuffix(basePath, "/decisions"):
 			suffix = basePath
@@ -85,7 +85,7 @@ func BuildUpstreamURL(baseURL, proto, action, targetModel, cleanQuery string, st
 		default:
 			suffix = "/v1/decisions"
 		}
-	case config.ProtocolOpenAIResponses:
+	case protocol.ProtocolOpenAIResponses:
 		switch {
 		case strings.HasSuffix(basePath, "/responses"):
 			suffix = basePath
@@ -94,7 +94,7 @@ func BuildUpstreamURL(baseURL, proto, action, targetModel, cleanQuery string, st
 		default:
 			suffix = "/v1/responses"
 		}
-	case config.ProtocolAnthropic:
+	case protocol.ProtocolAnthropic:
 		epTail := "/messages"
 		if action == "count_tokens" {
 			epTail = "/messages/count_tokens"
@@ -109,7 +109,7 @@ func BuildUpstreamURL(baseURL, proto, action, targetModel, cleanQuery string, st
 		default:
 			suffix = basePath + "/v1" + epTail
 		}
-	case config.ProtocolGemini:
+	case protocol.ProtocolGemini:
 		gemAction := action
 		if gemAction != "generateContent" && gemAction != "streamGenerateContent" {
 			if stream {
@@ -128,7 +128,7 @@ func BuildUpstreamURL(baseURL, proto, action, targetModel, cleanQuery string, st
 		default:
 			suffix = "/v1beta" + modelPath
 		}
-	case config.ProtocolTypeSafeJev:
+	case protocol.ProtocolTypeSafeJev:
 		switch {
 		case strings.HasSuffix(basePath, "/systemone"):
 			suffix = basePath
@@ -152,7 +152,7 @@ func BuildUpstreamURL(baseURL, proto, action, targetModel, cleanQuery string, st
 			}
 		}
 	}
-	if proto == config.ProtocolGemini && stream && !q.Has("alt") {
+	if proto == protocol.ProtocolGemini && stream && !q.Has("alt") {
 		q.Set("alt", "sse")
 	}
 	u.RawQuery = q.Encode()
@@ -161,54 +161,61 @@ func BuildUpstreamURL(baseURL, proto, action, targetModel, cleanQuery string, st
 
 // InjectUpstreamAuth strips client auth headers, writes the plan credential using
 // endpoint overrides or protocol defaults, and applies static endpoint headers.
-func InjectUpstreamAuth(h http.Header, ep *config.EndpointSpec, proto, secretVal string) {
+// AuthOptions describes endpoint-specific authentication headers.
+type AuthOptions struct {
+	Header  string
+	Prefix  string
+	Version string
+	Headers map[string]string
+}
+
+// AuthEndpoint provides authentication options without coupling the codec to configuration storage.
+type AuthEndpoint interface {
+	CodecAuth() (header, prefix, version string, headers map[string]string)
+}
+
+func InjectUpstreamAuth(h http.Header, ep AuthEndpoint, proto, secretVal string) {
 	if h == nil {
 		return
 	}
-	extraStrip := ""
-	if ep != nil && ep.AuthHeader != "" {
-		extraStrip = ep.AuthHeader
+	var opts AuthOptions
+	if ep != nil {
+		opts.Header, opts.Prefix, opts.Version, opts.Headers = ep.CodecAuth()
 	}
-	cleaned := secret.StripAuthHeaders(h, extraStrip)
+	cleaned := scrub.StripAuthHeaders(h, opts.Header)
 	for k := range h {
 		delete(h, k)
 	}
 	for k, vs := range cleaned {
 		h[k] = vs
 	}
-
-	headerName := "Authorization"
-	prefix := "Bearer "
+	headerName, prefix := "Authorization", "Bearer "
 	switch proto {
-	case config.ProtocolAnthropic:
-		headerName = "x-api-key"
-		prefix = ""
-	case config.ProtocolGemini, config.ProtocolGeminiDecisions:
-		headerName = "x-goog-api-key"
-		prefix = ""
+	case protocol.ProtocolAnthropic:
+		headerName, prefix = "x-api-key", ""
+	case protocol.ProtocolGemini, protocol.ProtocolGeminiDecisions:
+		headerName, prefix = "x-goog-api-key", ""
 	}
-	if ep != nil && ep.AuthHeader != "" {
-		headerName = ep.AuthHeader
-		prefix = ep.AuthPrefix
-	} else if ep != nil && ep.AuthPrefix != "" {
-		prefix = ep.AuthPrefix
+	if opts.Header != "" {
+		headerName, prefix = opts.Header, opts.Prefix
+	} else if opts.Prefix != "" {
+		prefix = opts.Prefix
 	}
 	if secretVal != "" {
 		h.Set(headerName, prefix+secretVal)
 	}
+	if proto == protocol.ProtocolAnthropic && h.Get("anthropic-version") == "" {
+		ver := opts.Version
+		if ver == "" {
+			ver = "2023-06-01"
+		}
+		h.Set("anthropic-version", ver)
+	}
+	for k, v := range opts.Headers {
+		h.Set(k, v)
+	}
+}
 
-	if proto == config.ProtocolAnthropic {
-		ver := "2023-06-01"
-		if ep != nil && ep.APIVersion != "" {
-			ver = ep.APIVersion
-		}
-		if h.Get("anthropic-version") == "" {
-			h.Set("anthropic-version", ver)
-		}
-	}
-	if ep != nil {
-		for k, v := range ep.Headers {
-			h.Set(k, v)
-		}
-	}
+func (o AuthOptions) CodecAuth() (string, string, string, map[string]string) {
+	return o.Header, o.Prefix, o.Version, o.Headers
 }

@@ -9,9 +9,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/lidessen/crabbro/internal/gateway/config"
 	"github.com/lidessen/crabbro/internal/gateway/ir"
-	"github.com/lidessen/crabbro/internal/gateway/router"
+	"github.com/lidessen/crabbro/internal/gateway/protocol"
 	"github.com/lidessen/crabbro/internal/shared"
 )
 
@@ -35,6 +34,11 @@ type streamEncoder interface {
 }
 
 // Bridge translates between wire protocols and DecisionIR <-> GenIR using canonical IRs.
+// Target supplies only the information required to translate a request.
+type Target interface {
+	CodecTarget() (protocol, model string, extraBody map[string]any)
+}
+
 type Bridge struct{}
 
 // NewBridge constructs a cross-protocol BridgeHandler.
@@ -50,13 +54,13 @@ type bridgeState struct {
 
 func codecFor(proto string) (protocolCodec, error) {
 	switch proto {
-	case config.ProtocolOpenAIChat:
+	case protocol.ProtocolOpenAIChat:
 		return oaChatCodec{}, nil
-	case config.ProtocolOpenAIResponses:
+	case protocol.ProtocolOpenAIResponses:
 		return oaResponsesCodec{}, nil
-	case config.ProtocolAnthropic:
+	case protocol.ProtocolAnthropic:
 		return anthropicCodec{}, nil
-	case config.ProtocolGemini:
+	case protocol.ProtocolGemini:
 		return geminiCodec{}, nil
 	default:
 		return nil, fmt.Errorf("no generative codec for protocol %q", proto)
@@ -65,23 +69,24 @@ func codecFor(proto string) (protocolCodec, error) {
 
 // BuildUpstreamBody converts an incoming HTTP or Decision request into the upstream
 // target's native protocol JSON payload, stripping cross-provider vendor signatures.
-func (b *Bridge) BuildUpstreamBody(cand router.Candidate, ingress IngressInfo, rawBody []byte) ([]byte, any, error) {
-	if ingress.Action == "count_tokens" && cand.EndpointProto != config.ProtocolAnthropic {
+func (b *Bridge) BuildUpstreamBody(cand Target, ingress IngressInfo, rawBody []byte) ([]byte, any, error) {
+	proto, model, extra := cand.CodecTarget()
+	if ingress.Action == "count_tokens" && proto != protocol.ProtocolAnthropic {
 		return nil, nil, fmt.Errorf("count_tokens is only supported by native anthropic targets")
 	}
 	st := &bridgeState{
 		ingressProto:   ingress.Protocol,
-		upstreamProto:  cand.EndpointProto,
+		upstreamProto:  proto,
 		requestedModel: ingress.RequestedModel,
-		targetModel:    cand.Target.Model,
+		targetModel:    model,
 	}
 
 	var greq *ir.GenRequest
 	var err error
-	if ingress.Family == config.FamilyDecision {
+	if ingress.Family == protocol.FamilyDecision {
 		var dreq *ir.DecisionRequest
 		var decErr error
-		if ingress.Protocol == config.ProtocolOpenAIDecisions {
+		if ingress.Protocol == protocol.ProtocolOpenAIDecisions {
 			dreq, decErr = DecodeOpenAIDecisionsRequest(rawBody)
 		} else {
 			dreq, decErr = DecodeDecisionRequest(rawBody)
@@ -89,37 +94,37 @@ func (b *Bridge) BuildUpstreamBody(cand router.Candidate, ingress IngressInfo, r
 		if decErr != nil {
 			return nil, nil, decErr
 		}
-		if ingress.Protocol == config.ProtocolTypeSafeJev {
+		if ingress.Protocol == protocol.ProtocolTypeSafeJev {
 			_, _, hasImage, imageErr := decisionImage(dreq)
 			if imageErr != nil {
 				return nil, nil, imageErr
 			}
-			if hasImage && cand.EndpointProto != config.ProtocolOpenAIDecisions && cand.EndpointProto != config.ProtocolGeminiDecisions {
-				return nil, nil, fmt.Errorf("image decision translation unsupported for %q", cand.EndpointProto)
+			if hasImage && proto != protocol.ProtocolOpenAIDecisions && proto != protocol.ProtocolGeminiDecisions {
+				return nil, nil, fmt.Errorf("image decision translation unsupported for %q", proto)
 			}
 		}
 		st.origDecisionReq = dreq
-		if config.ProtocolFamily(cand.EndpointProto) == config.FamilyDecision {
+		if protocol.ProtocolFamily(proto) == protocol.FamilyDecision {
 			copyReq := *dreq
-			copyReq.Model = cand.Target.Model
+			copyReq.Model = model
 			var body []byte
-			switch cand.EndpointProto {
-			case config.ProtocolOpenAIDecisions:
+			switch proto {
+			case protocol.ProtocolOpenAIDecisions:
 				body, err = EncodeOpenAIDecisionsRequest(&copyReq)
-			case config.ProtocolGeminiDecisions:
-				body, err = EncodeGeminiDecisionRequest(&copyReq, cand.Target.Model)
+			case protocol.ProtocolGeminiDecisions:
+				body, err = EncodeGeminiDecisionRequest(&copyReq, model)
 			default:
 				body, err = EncodeDecisionRequest(&copyReq)
 			}
 			if err != nil {
 				return nil, nil, err
 			}
-			if cand.ModelSpec != nil {
-				body, err = PatchModelAndExtraBody(body, cand.EndpointProto, cand.Target.Model, cand.ModelSpec.ExtraBody)
+			if len(extra) > 0 {
+				body, err = PatchModelAndExtraBody(body, proto, model, extra)
 			}
 			return body, st, err
 		}
-		greq, err = ir.DecisionToGenRequest(dreq, cand.Target.Model)
+		greq, err = ir.DecisionToGenRequest(dreq, model)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -132,17 +137,17 @@ func (b *Bridge) BuildUpstreamBody(cand router.Candidate, ingress IngressInfo, r
 		if err != nil {
 			return nil, nil, err
 		}
-		greq.Model = cand.Target.Model
+		greq.Model = model
 		greq.Stream = ingress.Stream
-		if ingress.Protocol != cand.EndpointProto {
+		if ingress.Protocol != proto {
 			stripForeignThinkingSignatures(greq)
 		}
 	}
 
-	if cand.ModelSpec != nil && len(cand.ModelSpec.ExtraBody) > 0 {
-		greq.ExtraBody = cand.ModelSpec.ExtraBody
+	if len(extra) > 0 {
+		greq.ExtraBody = extra
 	}
-	upCodec, err := codecFor(cand.EndpointProto)
+	upCodec, err := codecFor(proto)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -154,14 +159,15 @@ func (b *Bridge) BuildUpstreamBody(cand router.Candidate, ingress IngressInfo, r
 }
 
 // TranslateResponse decodes the upstream response and re-encodes it into the ingress format.
-func (b *Bridge) TranslateResponse(cand router.Candidate, ingress IngressInfo, state any, status int, hdr http.Header, body []byte) (int, http.Header, []byte, shared.TokenUsage, error) {
-	if st, ok := state.(*bridgeState); ok && st.origDecisionReq != nil && config.ProtocolFamily(cand.EndpointProto) == config.FamilyDecision {
+func (b *Bridge) TranslateResponse(cand Target, ingress IngressInfo, state any, status int, hdr http.Header, body []byte) (int, http.Header, []byte, shared.TokenUsage, error) {
+	proto, model, _ := cand.CodecTarget()
+	if st, ok := state.(*bridgeState); ok && st.origDecisionReq != nil && protocol.ProtocolFamily(proto) == protocol.FamilyDecision {
 		dresp, err := b.DecodeDecisionResponse(cand, state, body)
 		if err != nil {
 			return status, nil, nil, shared.TokenUsage{}, err
 		}
 		var out []byte
-		if ingress.Protocol == config.ProtocolOpenAIDecisions {
+		if ingress.Protocol == protocol.ProtocolOpenAIDecisions {
 			out, err = EncodeOpenAIDecisionsResponse(dresp)
 		} else {
 			out, err = EncodeDecisionResponse(dresp)
@@ -171,12 +177,12 @@ func (b *Bridge) TranslateResponse(cand router.Candidate, ingress IngressInfo, s
 		// This gateway-generated marker means the referenced PNG was validated and
 		// encoded into a supported translated decision request; it does not attest
 		// that the upstream model understood or used the image.
-		if _, _, hasImage, imageErr := decisionImage(st.origDecisionReq); imageErr == nil && hasImage && st.ingressProto == config.ProtocolTypeSafeJev && (cand.EndpointProto == config.ProtocolOpenAIDecisions || cand.EndpointProto == config.ProtocolGeminiDecisions) {
+		if _, _, hasImage, imageErr := decisionImage(st.origDecisionReq); imageErr == nil && hasImage && st.ingressProto == protocol.ProtocolTypeSafeJev && (proto == protocol.ProtocolOpenAIDecisions || proto == protocol.ProtocolGeminiDecisions) {
 			h.Set("X-Crabbro-Decision-Images", "preserved")
 		}
 		return status, h, out, dresp.Usage, err
 	}
-	upCodec, err := codecFor(cand.EndpointProto)
+	upCodec, err := codecFor(proto)
 	if err != nil {
 		return status, nil, nil, shared.TokenUsage{}, err
 	}
@@ -185,7 +191,7 @@ func (b *Bridge) TranslateResponse(cand router.Candidate, ingress IngressInfo, s
 		return status, nil, nil, shared.TokenUsage{}, err
 	}
 	if gresp.Model == "" {
-		gresp.Model = firstNonEmpty(ingress.RequestedModel, cand.Target.Model)
+		gresp.Model = firstNonEmpty(ingress.RequestedModel, model)
 	}
 
 	outHdr := make(http.Header)
@@ -198,7 +204,7 @@ func (b *Bridge) TranslateResponse(cand router.Candidate, ingress IngressInfo, s
 		}
 		var outBody []byte
 		var eErr error
-		if ingress.Protocol == config.ProtocolOpenAIDecisions {
+		if ingress.Protocol == protocol.ProtocolOpenAIDecisions {
 			outBody, eErr = EncodeOpenAIDecisionsResponse(dresp)
 		} else {
 			outBody, eErr = EncodeDecisionResponse(dresp)
@@ -221,8 +227,9 @@ func (b *Bridge) TranslateResponse(cand router.Candidate, ingress IngressInfo, s
 }
 
 // TranslateStream streams upstream SSE events through the upstream decoder -> GenIR -> ingress encoder.
-func (b *Bridge) TranslateStream(cand router.Candidate, ingress IngressInfo, _ any, peeked []byte, src io.ReadCloser, dst io.Writer, flusher http.Flusher) (shared.TokenUsage, error) {
-	upCodec, err := codecFor(cand.EndpointProto)
+func (b *Bridge) TranslateStream(cand Target, ingress IngressInfo, _ any, peeked []byte, src io.ReadCloser, dst io.Writer, flusher http.Flusher) (shared.TokenUsage, error) {
+	proto, model, _ := cand.CodecTarget()
+	upCodec, err := codecFor(proto)
 	if err != nil {
 		return shared.TokenUsage{}, err
 	}
@@ -231,7 +238,7 @@ func (b *Bridge) TranslateStream(cand router.Candidate, ingress IngressInfo, _ a
 		return shared.TokenUsage{}, err
 	}
 	dec := upCodec.NewStreamDecoder()
-	enc := inCodec.NewStreamEncoder(firstNonEmpty(ingress.RequestedModel, cand.Target.Model), dst)
+	enc := inCodec.NewStreamEncoder(firstNonEmpty(ingress.RequestedModel, model), dst)
 
 	var totalUsage shared.TokenUsage
 	emitAll := func(evs []ir.StreamEvent) error {
@@ -281,18 +288,19 @@ func (b *Bridge) EncodeDecision(dreq *ir.DecisionRequest) ([]byte, error) {
 }
 
 // DecodeDecisionResponse converts an emulated generative response back into DecisionResponse.
-func (b *Bridge) DecodeDecisionResponse(cand router.Candidate, state any, body []byte) (*ir.DecisionResponse, error) {
+func (b *Bridge) DecodeDecisionResponse(cand Target, state any, body []byte) (*ir.DecisionResponse, error) {
+	proto, model, _ := cand.CodecTarget()
 	st, ok := state.(*bridgeState)
 	if !ok || st.origDecisionReq == nil {
 		return nil, fmt.Errorf("missing original decision request state")
 	}
-	if cand.EndpointProto == config.ProtocolGeminiDecisions {
-		return DecodeGeminiDecisionResponse(body, st.origDecisionReq, cand.Target.Model)
+	if proto == protocol.ProtocolGeminiDecisions {
+		return DecodeGeminiDecisionResponse(body, st.origDecisionReq, model)
 	}
-	if cand.EndpointProto == config.ProtocolOpenAIDecisions {
+	if proto == protocol.ProtocolOpenAIDecisions {
 		return DecodeOpenAIDecisionsResponse(body, st.origDecisionReq)
 	}
-	if cand.EndpointProto == config.ProtocolTypeSafeJev {
+	if proto == protocol.ProtocolTypeSafeJev {
 		var d ir.DecisionResponse
 		if err := json.Unmarshal(body, &d); err != nil {
 			return nil, err
@@ -304,10 +312,10 @@ func (b *Bridge) DecodeDecisionResponse(cand router.Candidate, state any, body [
 		}
 		d.Mode = "native"
 		d.Calibrated = true
-		d.Usage = ExtractUsageJSON(cand.EndpointProto, body)
+		d.Usage = ExtractUsageJSON(proto, body)
 		return &d, nil
 	}
-	upCodec, err := codecFor(cand.EndpointProto)
+	upCodec, err := codecFor(proto)
 	if err != nil {
 		return nil, err
 	}

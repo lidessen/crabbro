@@ -38,11 +38,11 @@ const (
 // BridgeHandler adapts cross-protocol Generative requests and Decision->Generative
 // emulation requests across the canonical IRs.
 type BridgeHandler interface {
-	BuildUpstreamBody(cand router.Candidate, ingress codec.IngressInfo, rawBody []byte) (upstreamBody []byte, state any, err error)
-	TranslateResponse(cand router.Candidate, ingress codec.IngressInfo, state any, status int, hdr http.Header, body []byte) (outStatus int, outHdr http.Header, outBody []byte, usage shared.TokenUsage, err error)
-	TranslateStream(cand router.Candidate, ingress codec.IngressInfo, state any, peeked []byte, src io.ReadCloser, dst io.Writer, flusher http.Flusher) (shared.TokenUsage, error)
+	BuildUpstreamBody(cand codec.Target, ingress codec.IngressInfo, rawBody []byte) (upstreamBody []byte, state any, err error)
+	TranslateResponse(cand codec.Target, ingress codec.IngressInfo, state any, status int, hdr http.Header, body []byte) (outStatus int, outHdr http.Header, outBody []byte, usage shared.TokenUsage, err error)
+	TranslateStream(cand codec.Target, ingress codec.IngressInfo, state any, peeked []byte, src io.ReadCloser, dst io.Writer, flusher http.Flusher) (shared.TokenUsage, error)
 	EncodeDecision(dreq *ir.DecisionRequest) ([]byte, error)
-	DecodeDecisionResponse(cand router.Candidate, state any, body []byte) (*ir.DecisionResponse, error)
+	DecodeDecisionResponse(cand codec.Target, state any, body []byte) (*ir.DecisionResponse, error)
 }
 
 // Executor executes routed HTTP and internal Decision calls.

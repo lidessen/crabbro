@@ -6,8 +6,8 @@ import (
 	"sort"
 	"strconv"
 
-	"github.com/lidessen/crabbro/internal/gateway/config"
 	"github.com/lidessen/crabbro/internal/gateway/ir"
+	"github.com/lidessen/crabbro/internal/gateway/protocol"
 )
 
 type geminiDecisionQuestion struct {
@@ -121,7 +121,7 @@ func DecodeGeminiDecisionResponse(body []byte, orig *ir.DecisionRequest, model s
 	if err := json.Unmarshal(body, &wire); err != nil {
 		return nil, err
 	}
-	result := &ir.DecisionResponse{Model: model, Answers: map[string]ir.DecisionAnswer{}, Usage: ExtractUsageJSON(config.ProtocolGeminiDecisions, body), Mode: "native", Calibrated: true}
+	result := &ir.DecisionResponse{Model: model, Answers: map[string]ir.DecisionAnswer{}, Usage: ExtractUsageJSON(protocol.ProtocolGeminiDecisions, body), Mode: "native", Calibrated: true}
 	for name, a := range wire.Answers {
 		if a.Type != ir.DecisionKindNoul && a.Type != ir.DecisionKindChoice && a.Type != ir.DecisionKindScore {
 			return nil, fmt.Errorf("unknown answer type %q", a.Type)

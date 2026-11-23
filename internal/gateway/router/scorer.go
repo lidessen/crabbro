@@ -54,6 +54,27 @@ type Candidate struct {
 	RejectReason   string
 }
 
+// CodecTarget provides the minimal translation descriptor for a routed candidate.
+func (c Candidate) CodecTarget() (string, string, map[string]any) {
+	var extra map[string]any
+	if c.ModelSpec != nil {
+		extra = c.ModelSpec.ExtraBody
+	}
+	return c.EndpointProto, c.Target.Model, extra
+}
+
+// CodecOrigin provides signature provenance without exposing credentials.
+func (c Candidate) CodecOrigin() (string, string, string, string) {
+	var planID, baseURL string
+	if c.Plan != nil {
+		planID = c.Plan.ID
+	}
+	if c.Endpoint != nil {
+		baseURL = c.Endpoint.BaseURL
+	}
+	return planID, baseURL, c.EndpointProto, c.Target.Model
+}
+
 // Selection is the explainable routing plan returned by Router.Select.
 type Selection struct {
 	Route            *config.Route

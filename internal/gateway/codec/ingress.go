@@ -11,8 +11,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/lidessen/crabbro/internal/gateway/config"
-	"github.com/lidessen/crabbro/internal/secret"
+	"github.com/lidessen/crabbro/internal/gateway/protocol"
+	"github.com/lidessen/crabbro/internal/scrub"
 )
 
 var profilePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
@@ -73,28 +73,28 @@ func ParseIngress(r *http.Request, body []byte) (IngressInfo, error) {
 
 	switch {
 	case cleanPath == "/v1/chat/completions":
-		info.Protocol = config.ProtocolOpenAIChat
-		info.Family = config.FamilyGenerative
+		info.Protocol = protocol.ProtocolOpenAIChat
+		info.Family = protocol.FamilyGenerative
 		info.Action = "chat"
 	case cleanPath == "/v1/responses":
-		info.Protocol = config.ProtocolOpenAIResponses
-		info.Family = config.FamilyGenerative
+		info.Protocol = protocol.ProtocolOpenAIResponses
+		info.Family = protocol.FamilyGenerative
 		info.Action = "responses"
 	case cleanPath == "/v1/messages":
-		info.Protocol = config.ProtocolAnthropic
-		info.Family = config.FamilyGenerative
+		info.Protocol = protocol.ProtocolAnthropic
+		info.Family = protocol.FamilyGenerative
 		info.Action = "messages"
 	case cleanPath == "/v1/messages/count_tokens":
-		info.Protocol = config.ProtocolAnthropic
-		info.Family = config.FamilyGenerative
+		info.Protocol = protocol.ProtocolAnthropic
+		info.Family = protocol.FamilyGenerative
 		info.Action = "count_tokens"
 	case cleanPath == "/v1/decisions":
-		info.Protocol = config.ProtocolOpenAIDecisions
-		info.Family = config.FamilyDecision
+		info.Protocol = protocol.ProtocolOpenAIDecisions
+		info.Family = protocol.FamilyDecision
 		info.Action = "decisions"
 	case cleanPath == "/v1/systemone":
-		info.Protocol = config.ProtocolTypeSafeJev
-		info.Family = config.FamilyDecision
+		info.Protocol = protocol.ProtocolTypeSafeJev
+		info.Family = protocol.FamilyDecision
 		info.Action = "systemone"
 	case strings.HasPrefix(cleanPath, "/v1beta/models/"):
 		tail := strings.TrimPrefix(cleanPath, "/v1beta/models/")
@@ -102,8 +102,8 @@ func ParseIngress(r *http.Request, body []byte) (IngressInfo, error) {
 		if colon <= 0 || colon >= len(tail)-1 {
 			return IngressInfo{}, fmt.Errorf("invalid gemini endpoint %q", cleanPath)
 		}
-		info.Protocol = config.ProtocolGemini
-		info.Family = config.FamilyGenerative
+		info.Protocol = protocol.ProtocolGemini
+		info.Family = protocol.FamilyGenerative
 		info.RequestedModel = tail[:colon]
 		info.Action = tail[colon+1:]
 		switch info.Action {
@@ -167,7 +167,7 @@ func ScrubbedDisplayURL(r *http.Request) string {
 		host = "127.0.0.1"
 	}
 	raw := scheme + "://" + host + r.URL.RequestURI()
-	return secret.ScrubURL(raw)
+	return scrub.ScrubURL(raw)
 }
 
 func scrubRawQuery(rawQuery string) string {
@@ -186,3 +186,6 @@ func scrubRawQuery(rawQuery string) string {
 	}
 	return q.Encode()
 }
+
+// CleanQuery removes credential query parameters before forwarding.
+func CleanQuery(raw string) string { return scrubRawQuery(raw) }

@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/lidessen/crabbro/internal/gateway/config"
 	"github.com/lidessen/crabbro/internal/gateway/ir"
+	"github.com/lidessen/crabbro/internal/gateway/protocol"
 )
 
 type decisionOption struct {
@@ -254,7 +254,7 @@ func DecodeOpenAIDecisionsResponse(body []byte, req *ir.DecisionRequest) (*ir.De
 	if err := json.Unmarshal(body, &w); err != nil {
 		return nil, err
 	}
-	r := &ir.DecisionResponse{Model: w.Model, Answers: map[string]ir.DecisionAnswer{}, Usage: ExtractUsageJSON(config.ProtocolOpenAIDecisions, body), Mode: "native", Calibrated: true}
+	r := &ir.DecisionResponse{Model: w.Model, Answers: map[string]ir.DecisionAnswer{}, Usage: ExtractUsageJSON(protocol.ProtocolOpenAIDecisions, body), Mode: "native", Calibrated: true}
 	for _, a := range w.Answers {
 		if a.Type == "refusal" {
 			return nil, fmt.Errorf("decision question %q refused", a.Name)
