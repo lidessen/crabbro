@@ -211,6 +211,75 @@ func TestSameProtocolStripsUnverifiedSignaturesAndCustomAuth(t *testing.T) {
 	}
 }
 
+func TestSameProtocolSignatureProvenance(t *testing.T) {
+	ep := provider.Endpoint{BaseURL: "https://provider.example/anthropic/?ignored=value#fragment", Protocol: provider.Anthropic, Model: "target", SignaturePlanID: "plan-a"}
+	origin := ep.SignatureOrigin()
+	if origin != (provider.SignatureOrigin{PlanID: "plan-a", Provider: "https://provider.example/anthropic", Protocol: provider.Anthropic, Model: "target"}) {
+		t.Fatalf("origin = %+v", origin)
+	}
+	for _, tc := range []struct {
+		name       string
+		origin     provider.SignatureOrigin
+		registry   bool
+		register   bool
+		stream     bool
+		omitPlan   bool
+		wantSigned bool
+	}{
+		{name: "omitted"},
+		{name: "empty registry", registry: true},
+		{name: "empty origin", registry: true, register: true},
+		{name: "missing target plan", origin: origin, registry: true, register: true, omitPlan: true},
+		{name: "matching origin", origin: origin, registry: true, register: true, wantSigned: true},
+		{name: "matching origin streaming", origin: origin, registry: true, register: true, stream: true, wantSigned: true},
+		{name: "different plan", origin: provider.SignatureOrigin{PlanID: "other", Provider: origin.Provider, Protocol: origin.Protocol, Model: origin.Model}, registry: true, register: true},
+		{name: "different provider", origin: provider.SignatureOrigin{PlanID: origin.PlanID, Provider: "https://other.example", Protocol: origin.Protocol, Model: origin.Model}, registry: true, register: true},
+		{name: "different protocol", origin: provider.SignatureOrigin{PlanID: origin.PlanID, Provider: origin.Provider, Protocol: provider.Gemini, Model: origin.Model}, registry: true, register: true},
+		{name: "different model", origin: provider.SignatureOrigin{PlanID: origin.PlanID, Provider: origin.Provider, Protocol: origin.Protocol, Model: "other"}, registry: true, register: true},
+		{name: "incomplete origin", origin: provider.SignatureOrigin{PlanID: origin.PlanID, Provider: origin.Provider, Protocol: origin.Protocol}, registry: true, register: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var prov *provider.SignatureProvenance
+			if tc.registry {
+				prov = provider.NewSignatureProvenance()
+			}
+			if tc.register {
+				prov.Record("signed-known", tc.origin)
+				prov.Record("redacted-known", tc.origin)
+			}
+			client := provider.Client{HTTPClient: &http.Client{Transport: transportFunc(func(r *http.Request) (*http.Response, error) {
+				body, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, value := range []string{"signed-known", "redacted-known"} {
+					if bytes.Contains(body, []byte(value)) != tc.wantSigned {
+						t.Errorf("presence of %s in %s: want %v", value, body, tc.wantSigned)
+					}
+				}
+				if bytes.Contains(body, []byte("signed-unknown")) || bytes.Contains(body, []byte("redacted-unknown")) || !bytes.Contains(body, []byte("answer")) {
+					t.Errorf("unexpected normalized body: %s", body)
+				}
+				return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{}`))}, nil
+			})}}
+			req := provider.Request{Protocol: provider.Anthropic, SignatureProvenance: prov, Body: []byte(`{"messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"known","signature":"signed-known"},{"type":"redacted_thinking","data":"redacted-known"},{"type":"thinking","thinking":"unknown","signature":"signed-unknown"},{"type":"redacted_thinking","data":"redacted-unknown"},{"type":"text","text":"answer"}]}]}`)}
+			target := ep
+			if tc.omitPlan {
+				target.SignaturePlanID = ""
+			}
+			var err error
+			if tc.stream {
+				_, err = client.DoStream(context.Background(), target, req, io.Discard)
+			} else {
+				_, err = client.Do(context.Background(), target, req)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 type failingWriter struct{}
 
 func (failingWriter) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }

@@ -30,23 +30,28 @@ const (
 )
 
 type (
-	RequestTransform  = transform.Spec
-	ResponseTransform = transform.ResponseSpec
-	GenRequest        = ir.GenRequest
-	GenResponse       = ir.GenResponse
-	Message           = ir.Message
-	ContentPart       = ir.ContentPart
-	ToolDecl          = ir.ToolDecl
-	ToolChoice        = ir.ToolChoice
-	ThinkingConfig    = ir.ThinkingConfig
-	StreamEvent       = ir.StreamEvent
-	Usage             = api.TokenUsage
-	DecisionRequest   = ir.DecisionRequest
-	DecisionResponse  = ir.DecisionResponse
-	DecisionQuestion  = ir.DecisionQuestion
-	DecisionAnswer    = ir.DecisionAnswer
-	DecisionAsset     = ir.DecisionAsset
+	RequestTransform    = transform.Spec
+	ResponseTransform   = transform.ResponseSpec
+	GenRequest          = ir.GenRequest
+	GenResponse         = ir.GenResponse
+	Message             = ir.Message
+	ContentPart         = ir.ContentPart
+	ToolDecl            = ir.ToolDecl
+	ToolChoice          = ir.ToolChoice
+	ThinkingConfig      = ir.ThinkingConfig
+	StreamEvent         = ir.StreamEvent
+	Usage               = api.TokenUsage
+	DecisionRequest     = ir.DecisionRequest
+	DecisionResponse    = ir.DecisionResponse
+	DecisionQuestion    = ir.DecisionQuestion
+	DecisionAnswer      = ir.DecisionAnswer
+	DecisionAsset       = ir.DecisionAsset
+	SignatureOrigin     = codec.SignatureOrigin
+	SignatureProvenance = codec.SignatureProvenance
 )
+
+// NewSignatureProvenance creates an in-memory registry for opaque signatures.
+func NewSignatureProvenance() *SignatureProvenance { return codec.NewSignatureProvenance() }
 
 const (
 	PartText             = ir.PartText
@@ -85,6 +90,7 @@ type Endpoint struct {
 	BaseURL                string
 	Protocol               string
 	Model                  string
+	SignaturePlanID        string
 	CredentialRef          string
 	AuthHeader             string
 	AuthPrefix             string
@@ -95,6 +101,19 @@ type Endpoint struct {
 	ModelRequestTransform  RequestTransform
 	ResponseTransform      ResponseTransform
 	ModelResponseTransform ResponseTransform
+}
+
+// SignatureOrigin returns the identity used to verify signatures sent to e.
+// SignaturePlanID must be nonempty, and BaseURL must identify an endpoint.
+// URL credentials, query parameters, and fragments are excluded.
+func (e Endpoint) SignatureOrigin() SignatureOrigin {
+	return codec.CandidateSignatureOrigin(endpointOrigin{e})
+}
+
+type endpointOrigin struct{ Endpoint }
+
+func (e endpointOrigin) CodecOrigin() (string, string, string, string) {
+	return e.SignaturePlanID, e.BaseURL, e.Protocol, e.Model
 }
 
 func (e Endpoint) CodecTarget() (string, string, map[string]any) {
@@ -114,6 +133,9 @@ type Request struct {
 	Header   http.Header
 	Body     []byte
 	Stream   bool
+	// SignatureProvenance identifies opaque signatures obtained from upstreams.
+	// A nil or empty registry causes unverified thinking blocks to be stripped.
+	SignatureProvenance *SignatureProvenance
 }
 
 // Response holds the status and translated wire body. For streaming calls Body
@@ -187,7 +209,7 @@ func (c *Client) call(ctx context.Context, ep Endpoint, req Request, dst io.Writ
 			}
 		}
 		if err == nil {
-			body, err = codec.NormalizeSameProtocolBody(body, ep.Protocol, codec.SignatureOrigin{}, nil)
+			body, err = codec.NormalizeSameProtocolBody(body, ep.Protocol, ep.SignatureOrigin(), req.SignatureProvenance)
 		}
 	} else {
 		body, state, err = bridge.BuildUpstreamBody(ep, ingress, req.Body)
