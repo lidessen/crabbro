@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sort"
 	"sync"
 	"time"
 
@@ -189,11 +188,12 @@ type app struct {
 	searchAt         time.Time
 	showHidden       bool
 	reqState         ui.ListState
-	reqListHeight    float32 // percentage of the request workspace above the divider
 	reqSel           int
 	reqShownID       string
 	pendingRequestID string
 	detailTab        int
+	ruleState        ui.ListState
+	ruleSel          int
 	ruleShownID      string
 	ruleEditMode     int // 0 overview, 1 code
 	scriptDraft      string
@@ -231,7 +231,6 @@ func newApp(c *client.Client, ctx context.Context) *app {
 		ctx:           ctx,
 		page:          pageTrajectory,
 		gwUsageWinIdx: 1,
-		reqListHeight: 42,
 		mirrorUsage:   gwUsageRequest{window: "24h"},
 	}
 	a.refresh = make(chan refreshMsg, 1)
@@ -446,7 +445,6 @@ func (a *app) snapshot(ctx context.Context, query string) error {
 	reqs, reqErr := a.c.SearchRequests(ctx, query, client.RequestQuery{Limit: requestListLimit, All: a.showHiddenNow(), Kind: a.currentKind()})
 	traceReqs, _ := a.traceRequests(ctx, query, reqs, reqErr)
 	rules, _ := a.c.ListRules(ctx)
-	sortRules(rules)
 	mitm, mitmErr := a.c.CAStatus(ctx)
 	hist, _ := a.c.History(ctx)
 	traj, _ := a.c.Activity(ctx, "", "", trajFetch)
@@ -561,7 +559,6 @@ func (a *app) refreshNow(ctx context.Context) {
 	status, err := a.c.Status(ctx)
 	reqs, reqErr := a.c.SearchRequests(ctx, query, client.RequestQuery{Limit: requestListLimit, All: a.showHiddenNow(), Kind: a.currentKind()})
 	rules, rulesErr := a.c.ListRules(ctx)
-	sortRules(rules)
 	sess, sessErr := a.c.CurrentSession(ctx)
 	scope, hasScope := a.scopeIfNeeded(ctx, sess)
 	mitm, mitmErr := a.c.CAStatus(ctx)
@@ -989,16 +986,6 @@ func reverseRequests(in []api.RequestSummary) []api.RequestSummary {
 		out[len(in)-1-i] = r
 	}
 	return out
-}
-
-// Match the daemon's evaluation order so the rule list stays stable across snapshots.
-func sortRules(rules []api.Rule) {
-	sort.Slice(rules, func(i, j int) bool {
-		if rules[i].Priority != rules[j].Priority {
-			return rules[i].Priority < rules[j].Priority
-		}
-		return rules[i].ID < rules[j].ID
-	})
 }
 
 // reverseActivity returns the trajectory newest first.

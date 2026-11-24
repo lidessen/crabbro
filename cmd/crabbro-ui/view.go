@@ -7,131 +7,126 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
+// The pages the sidebar chooses among.
 const (
 	pageRequests   = "requests"
 	pageRules      = "rules"
 	pageGateway    = "gateway"
 	pageTrajectory = "trajectory"
 	pageDaemon     = "daemon"
-	workspaceInset = 24
 )
-
-var workspaces = [...]struct {
-	key, title string
-	icon       *ui.SVG
-}{
-	{pageTrajectory, "Trace", iconClock},
-	{pageRequests, "Requests", iconList},
-	{pageRules, "Rules", iconRule},
-	{pageGateway, "Gateway", iconRoute},
-	{pageDaemon, "Daemon", iconServer},
-}
 
 // mono is the family code, paths and ids draw in.
 func mono() string { return fontMono }
 
+// fadePage brings a page in as the sidebar chooses it, as Mayoi's are: it
+// fades in, without moving. Give the element a key that carries the page,
+// so the fade replays at each switch.
+func fadePage(e ui.Element) ui.Element {
+	return e.Opacity(e.Keyframes("show", []ui.Keyframe{{Value: 0}, {At: 150 * time.Millisecond, Value: 1, Ease: ui.EaseOut}}))
+}
+
+// pillMotion is how a small thing of the chrome comes and goes, as the
+// sidebar's count does, after Mayoi's terminal pill: it drops in from a
+// little above where it settles, and goes back up as it leaves. Only its
+// colors follow it after.
+var pillMotion = ui.ElementTransition{Duration: 160 * time.Millisecond, Colors: true, Enter: &ui.Motion{Y: -6}, Exit: &ui.Motion{Y: -4}}
+
+// busyFade is how the status bar's busy line comes and goes: it fades in
+// place, as Mayoi's reveals do, rather than popping or shoving its
+// neighbors about.
 var busyFade = ui.ElementTransition{Duration: 130 * time.Millisecond, Enter: &ui.Motion{}, Exit: &ui.Motion{}}
 
+// view builds the window: the title bar, which is also where the pages are
+// chosen, the page, and the status line. There is no sidebar: four pages
+// are four words, and the page keeps the window's whole width.
 func (a *app) view(c *ui.Context) {
 	a.setServices(c.Services())
 	a.drainQueue()
 	a.mirrorView()
 	p := applyPal(c)
 	a.pal = p
-	st := a.snapshotState()
 
 	ui.Column(c).Fill().Background(p.editor).Children(func() {
-		a.titleBar(c, p, st)
-		ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
-			a.sidebar(c, p)
-			ui.Column(c.Key("page:" + a.page)).Grow(1).MinWidth(0).MinHeight(0).Clip().Children(func() {
-				a.pageBody(c, p, st)
-			})
+		a.titleBar(c, p)
+		ui.Column(c.Key("page:" + a.page)).Grow(1).MinHeight(0).Children(func() {
+			a.pageBody(c, p)
 		})
-		a.statusBar(c, p, st)
+		a.statusBar(c, p)
 	})
 	a.toasts(c)
 }
 
-func (a *app) titleBar(c *ui.Context, p *palette, st store) {
+// titleBar is the window's top: the mark, the pages as words, and the
+// recording at its right.
+func (a *app) titleBar(c *ui.Context, p *palette) {
 	bar := c.TitleBar()
-	ui.Row(c).Height(max(bar.Height, titleBarH)).Shrink(0).Padding(0, bar.Right+16, 0, bar.Left+16).
-		AlignItems(ui.Center).Background(p.chrome).BorderWidth(0, 0, 1, 0).BorderColor(p.border).
+	st := a.snapshotState()
+	ui.Row(c).Height(max(bar.Height, titleBarH)).Padding(0, bar.Right+12, 0, bar.Left+14).
+		AlignItems(ui.Stretch).Background(p.chrome).BorderWidth(0, 0, 1, 0).BorderColor(p.border).
 		DragWindow().Children(func() {
-		ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
-			brandMark(c, p, 23)
-			ui.Text(c, "Crabbro").FontSize(14).FontWeight(600).TextColor(p.text).SingleLine()
+		ui.Row(c).AlignItems(ui.Center).Margin(0, 20, 0, 0).Children(func() { brandMark(c, p, 20) })
+		ui.Row(c.Key("nav")).Gap(22).AlignItems(ui.Stretch).Children(func() {
+			a.navWord(c, p, pageTrajectory, "Trace", len(foldTrace(st.traj)))
+			a.navWord(c, p, pageRequests, "Requests", len(st.requests))
+			a.navWord(c, p, pageRules, "Rules", len(st.rules))
+			a.navWord(c, p, pageGateway, "Gateway", len(st.gwPlans))
+			a.navWord(c, p, pageDaemon, "Daemon", 0)
 		})
 		ui.Spacer(c)
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() { a.recordControls(c, p, st) })
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() { a.recordControls(c, p) })
 	})
 }
 
-// Keep the data panes wide enough to read at the minimum window size.
-func sidebarWidth(c *ui.Context) float32 {
-	if width, _ := c.Size(); width < 1060 {
-		return 58
+// navWord is one page of the title bar: its name, the count of what it
+// holds set small beside it, and under the chosen one an accent stroke
+// that rests on the bar's own hairline.
+func (a *app) navWord(c *ui.Context, p *palette, key, label string, count int) {
+	on := a.page == key
+	b := ui.ButtonBase(c.Key("nav:" + key)).Gap(6).AlignItems(ui.Center).Label(label)
+	col := p.muted
+	if on || b.Hovered() {
+		col = p.text
 	}
-	return 150
-}
-
-func (a *app) sidebar(c *ui.Context, p *palette) {
-	width := sidebarWidth(c)
-	compact := width < 100
-	ui.Column(c.Key("workspaces")).Width(width).Shrink(0).Padding(12, 9).Gap(3).
-		Background(p.chrome).BorderWidth(0, 1, 0, 0).BorderColor(p.border).Label("Workspaces").Children(func() {
-		for _, workspace := range workspaces {
-			on := a.page == workspace.key
-			b := ui.ButtonBase(c.Key("nav:" + workspace.key)).FillWidth().Height(36).Shrink(0).
-				Gap(9).Radius(7).AlignItems(ui.Center).Label(workspace.title).Tooltip(workspace.title).Selected(on)
-			if compact {
-				b.Justify(ui.Center)
-			} else {
-				b.Padding(0, 12).Justify(ui.Start)
-			}
-			ink, iconInk := p.muted, p.faint
-			switch {
-			case on:
-				b.Background(p.surface).Border(1, p.border)
-				ink, iconInk = p.text, p.accent
-			case b.Pressed(), b.Hovered():
-				b.Background(p.hover)
-				ink, iconInk = p.text, p.text
-			}
-			b.Transition(hoverFade).Children(func() {
-				if on && !compact {
-					ui.Box(c).Absolute().Left(0).Top(10).Width(2).Height(16).Radius(1).Background(p.accent)
-				}
-				ui.Icon(c, workspace.icon).FontSize(16).TextColor(iconInk).Shrink(0)
-				if !compact {
-					ui.Text(c, workspace.title).FontSize(13).FontWeight(500).TextColor(ink).SingleLine()
-				}
-			})
-			if b.Clicked() {
-				a.setPage(workspace.key)
-			}
+	under := float32(0)
+	if on {
+		under = 1
+	}
+	under = b.Animate("under", under, 180*time.Millisecond)
+	b.Children(func() {
+		ui.Text(c, label).FontSize(13).FontWeight(500).TextColor(col).SingleLine()
+		if count > 0 {
+			ui.Text(c, fmt.Sprint(count)).FontSize(11).Font(mono()).TextColor(p.faint).SingleLine().
+				ContentTransition(ui.ContentTransition{Numeric: true})
 		}
+		ui.Box(c).Absolute().Left(0).Right(0).Bottom(-1).Height(2).Background(p.accent.Alpha(under))
 	})
+	if b.Clicked() {
+		a.page = key
+	}
 }
 
 // recordControls is the recording at the title bar's right: while one is
 // open, its mark and how long it has run, and Stop; otherwise Record.
-func (a *app) recordControls(c *ui.Context, p *palette, st store) {
+func (a *app) recordControls(c *ui.Context, p *palette) {
+	st := a.snapshotState()
 	// Read the session from the one snapshot: asking the store twice lets it
 	// change in between, and a session gone by the second look is a nil.
 	if s := st.session; s != nil && s.Recording && s.Name != "scope" {
-		ui.Row(c.Key("rec-pill")).Gap(7).AlignItems(ui.Center).Height(26).Padding(0, 6).Children(func() {
+		ui.Row(c.Key("rec-pill")).Gap(7).AlignItems(ui.Center).Height(26).Padding(0, 11).
+			Radius(13).Background(p.removed.Alpha(0.09)).InsetShadow(0, 0, 0, 1, p.removed.Alpha(0.14)).Children(func() {
 			// The dot breathes while the daemon records: 0.7s down and
 			// back, a 1.4s round, as the daemon page's does.
 			dot := ui.Box(c.Key("rec-pill-dot")).Width(7).Height(7).Radius(4).Background(p.removed).
 				Shadow(0, 0, 0, 2.5, p.removed.Alpha(0.18))
 			dot.Opacity(dot.Keyframes("breathe", []ui.Keyframe{
 				{Value: 1},
-				{At: 700 * time.Millisecond, Value: 0.55, Ease: ui.EaseInOut},
+				{At: 700 * time.Millisecond, Value: 0.35, Ease: ui.EaseInOut},
 			}, ui.KeyframeOptions{Repeat: ui.RepeatForever, Alternate: true}))
-			ui.Text(c, "Recording").FontSize(12).FontWeight(500).TextColor(p.text).SingleLine()
+			ui.Text(c, "Recording").FontSize(12).FontWeight(600).TextColor(p.removed).SingleLine()
 			if run := c.Now().Sub(s.StartedAt); run >= 0 {
-				ui.Text(c, clockLabel(run)).FontSize(11).Font(mono()).TextColor(p.muted).SingleLine()
+				ui.Text(c, clockLabel(run)).FontSize(11).Font(mono()).TextColor(p.removed.Alpha(0.8)).SingleLine().
+					ContentTransition(ui.ContentTransition{Numeric: true})
 				// Draw again as the second flips, so the clock keeps time
 				// while nothing else moves.
 				c.After(time.Second - run%time.Second + 5*time.Millisecond)
@@ -233,6 +228,7 @@ func (a *app) plainButton(c *ui.Context, key, label string, icon *ui.SVG, faced 
 	col := p.muted
 	if faced {
 		b.Background(p.surface).Border(1, p.border)
+		p.lift(ui.Element(b))
 		col = p.text
 	}
 	switch {
@@ -264,65 +260,61 @@ func (a *app) plainButton(c *ui.Context, key, label string, icon *ui.SVG, faced 
 }
 
 // pageBody is the page the sidebar chose.
-func (a *app) pageBody(c *ui.Context, p *palette, st store) {
+func (a *app) pageBody(c *ui.Context, p *palette) {
 	// Without a daemon there is nothing to show but how to get one: every
 	// page but the daemon's says so, rather than an empty table that reads
 	// as no traffic.
-	if st.conn != connConnected && a.page != pageDaemon {
+	if st := a.snapshotState(); st.conn != connConnected && a.page != pageDaemon {
 		a.offlinePage(c, p, st)
 		return
 	}
 	switch a.page {
 	case pageRequests:
-		a.requestsPage(c, p, st)
+		a.requestsPage(c, p)
 	case pageRules:
-		a.rulesPage(c, p, st)
+		a.rulesPage(c, p)
 	case pageGateway:
-		a.gatewayPage(c, p, st)
+		a.gatewayPage(c, p)
 	case pageDaemon:
-		a.daemonPage(c, p, st)
+		a.daemonPage(c, p)
 	default:
-		a.trajectoryPage(c, p, st)
+		a.trajectoryPage(c, p)
 	}
 }
 
 // offlinePage stands where a page would be while the daemon is not there.
 func (a *app) offlinePage(c *ui.Context, p *palette, st store) {
-	ui.Column(c.Key("offline")).Grow(1).MinHeight(0).Padding(18, workspaceInset, 16).Gap(12).Children(func() {
-		for _, workspace := range workspaces {
-			if workspace.key == a.page {
-				workspaceTitle(c, p, workspace.title).Shrink(0)
-				break
-			}
+	ui.Column(c.Key("offline")).Grow(1).Center().Padding(24).Gap(10).Children(func() {
+		emptyMark(c, p, iconServer)
+		if st.conn == connConnecting {
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Margin(4, 0, 0, 0).Children(func() {
+				ui.Spinner(c).Size(13, 13)
+				ui.Text(c, "Looking for the daemon…").FontSize(15).FontWeight(600).TextColor(p.text).SingleLine()
+			})
+			return
 		}
-		panel(c, p).Grow(1).Center().Padding(24).Gap(10).Children(func() {
-			emptyMark(c, p, iconServer)
-			if st.conn == connConnecting {
-				ui.Row(c).Gap(8).AlignItems(ui.Center).Margin(4, 0, 0, 0).Children(func() {
-					ui.Spinner(c).Size(13, 13)
-					ui.Text(c, "Connecting to crabbrod…").FontSize(15).FontWeight(600).TextColor(p.text).SingleLine()
-				})
-				return
-			}
-			ui.Text(c, "Daemon offline").FontSize(15).FontWeight(600).TextColor(p.text).Margin(6, 0, 0, 0).SingleLine()
-			ui.Text(c, "Start crabbrod to connect this window to the proxy and gateway.").
-				FontSize(13).TextColor(p.muted).TextAlign(ui.Center).LineHeight(1.5).MaxWidth(380)
-			a.fillButton(c, "offline-start", "Start crabbrod", iconPlay, false).Clicked(func() { a.actStartDaemon() })
-			if st.connErr != "" {
-				ui.Text(c, st.connErr).FontSize(11).Font(mono()).TextColor(p.faint).TextAlign(ui.Center).MaxWidth(520).Selectable()
-			}
-		})
+		ui.Text(c, "The daemon isn't running").FontSize(15).FontWeight(600).TextColor(p.text).Margin(6, 0, 0, 0).SingleLine()
+		ui.Text(c, "Capture, rules and MITM live in crabbrod. Start it and this window picks up where it left off.").
+			FontSize(13).TextColor(p.muted).TextAlign(ui.Center).LineHeight(1.5).MaxWidth(380)
+		a.fillButton(c, "offline-start", "Start crabbrod", iconPlay, false).Clicked(func() { a.actStartDaemon() })
+		if st.connErr != "" {
+			ui.Text(c, st.connErr).FontSize(11).Font(mono()).TextColor(p.faint).TextAlign(ui.Center).MaxWidth(520)
+		}
 	})
 }
 
 // statusBar is the chrome's bottom: how the daemon is, and the counts.
-func (a *app) statusBar(c *ui.Context, p *palette, st store) {
-	ui.Row(c).Height(statusBarH).Shrink(0).Padding(0, 16).Gap(12).AlignItems(ui.Center).
+func (a *app) statusBar(c *ui.Context, p *palette) {
+	st := a.snapshotState()
+	ui.Row(c).Height(statusBarH).Padding(0, 12).Gap(12).AlignItems(ui.Center).
 		Background(p.chrome).BorderWidth(1, 0, 0, 0).BorderColor(p.border).Children(func() {
 		if st.conn != connConnected {
-			dotCol, label := p.warning(), "Connecting"
+			dotCol, label := p.faint, "connecting"
 			if st.conn == connDown {
-				dotCol, label = p.removed, "Daemon offline"
+				dotCol, label = p.removed, "daemon down"
+			}
+			if st.connErr != "" {
+				label += " — " + st.connErr
 			}
 			ui.Box(c.Key("conn-dot")).Width(6).Height(6).Radius(3).Background(dotCol)
 			ui.Text(c, label).FontSize(12).TextColor(p.muted).SingleLine().Shrink(1).MinWidth(40)
@@ -338,12 +330,12 @@ func (a *app) statusBar(c *ui.Context, p *palette, st store) {
 			})
 		}
 		ui.Spacer(c)
-		if a.page == pageRequests && st.listHiddenCount > 0 {
+		if st.listHiddenCount > 0 {
 			ui.Text(c, fmt.Sprintf("%d hidden", st.listHiddenCount)).FontSize(12).TextColor(p.faint).SingleLine()
 		}
 		if st.conn == connConnected {
 			if v := st.status.Version; v != "" {
-				ui.Text(c, "v"+v).Font(mono()).FontSize(11).TextColor(p.faint).SingleLine()
+				ui.Text(c, "v"+v).FontSize(12).TextColor(p.faint).SingleLine()
 			}
 		}
 	})

@@ -16,6 +16,15 @@ import (
 	"github.com/lidessen/crabbro/pkg/api"
 )
 
+// The requests page: the live table of captured exchanges and the detail
+// of the one chosen.
+
+// tableSplit is the share of the page, in percent, the table takes above
+// the request detail, as the page's splitter keeps it. A share rather than
+// a height: the table is the page's subject, and a taller window should
+// show more lines of it, not only more of the one chosen.
+var tableSplit float32 = 46
+
 // requestListLimit is how many exchanges the table asks the daemon for; at
 // that count the toolbar says the list is the latest of more.
 const requestListLimit = 200
@@ -38,8 +47,11 @@ var (
 // the replay.
 const replayBusyFor = 25 * time.Second
 
-// requestsPage shows the live table above the selected exchange.
-func (a *app) requestsPage(c *ui.Context, p *palette, st store) {
+// requestsPage is the live table of captured exchanges and, below it, the
+// detail of the one chosen.
+func (a *app) requestsPage(c *ui.Context, p *palette) {
+	st := a.snapshotState()
+
 	// The rows are the search's matches; the state keeps the table's own
 	// sort, which reorders them.
 	rows := a.sortRequests(st.requests)
@@ -63,25 +75,54 @@ func (a *app) requestsPage(c *ui.Context, p *palette, st store) {
 		a.pendingRequestID = ""
 	}
 
-	ui.Column(c).Grow(1).MinHeight(0).Padding(18, workspaceInset, 16).Gap(12).Children(func() {
-		ui.Row(c).Shrink(0).Gap(10).AlignItems(ui.Center).Children(func() {
-			workspaceTitle(c, p, "Requests")
-			ui.Spacer(c)
-			a.requestCounts(c, p, rows)
+	// The table takes a quiet theme: its choice is a tint of the accent,
+	// not the accent itself, which would swallow the pills' colors.
+	base := *c.Theme()
+	p.quiet(c)
+	// With nothing captured there is no detail to split the page with: the
+	// empty state takes the whole of it, rather than half over a blank pane.
+	if len(rows) == 0 {
+		ui.Column(c).Grow(1).MinHeight(0).Children(func() {
+			a.requestsToolbar(c, p)
+			a.requestsEmpty(c, p, st)
 		})
-		panel(c.Key("requests:panel"), p).Grow(1).MinHeight(0).Children(func() {
-			a.requestsToolbar(c)
-			hairline(c, p)
-			if len(rows) == 0 {
-				a.requestsEmpty(c, p, st)
-				return
-			}
-			ui.SplitVerticalPercent(c.Key("requests:split"), &a.reqListHeight,
-				func() { a.requestsTable(c, p, rows, st.traj) },
-				func() { a.requestDetail(c, p, st, rows) },
-			).Grow(1).MinHeight(0)
-		})
-	})
+		c.SetTheme(&base)
+		if a.reqShownID != "" {
+			a.reqShownID = ""
+			a.selectRequest("")
+		}
+		return
+	}
+	ui.SplitVerticalPercent(c, &tableSplit,
+		func() {
+			ui.Column(c).Fill().MinHeight(0).Children(func() {
+				a.requestsToolbar(c, p)
+				// The columns read as a line of the trace does: when,
+				// what, where, then how long and what came back.
+				cols := []ui.TableColumn{
+					{Title: "Time", ID: "at", Width: 92},
+					{Title: "Method", ID: "method", Width: 84, Sortable: true},
+					{Title: "Host", ID: "host", Width: 190, Sortable: true},
+					{Title: "Path", ID: "path"},
+					{Title: "Latency", ID: "time", Width: 140, Align: ui.End, Sortable: true},
+					{Title: "Status", ID: "status", Width: 72, Align: ui.End, Sortable: true},
+				}
+				ruled := ruledRequests(st.traj)
+				ui.Table(c, &a.reqState, cols, len(rows), func(row, col int) {
+					// A time the line above already said is held back,
+					// so the column reads by where the second turns.
+					same := row > 0 && clockOf(rows[row-1].StartedAt) == clockOf(rows[row].StartedAt)
+					a.requestCell(c, p, rows[row], col, ruled[string(rows[row].ID)], same)
+				}).FontSize(12).Grow(1).MinHeight(0).ContextMenu(func(m *ui.Menu) {
+					if id := a.chosenRequestID(rows); id != "" && m.Item("Replay "+id).Chosen() {
+						a.actReplay(id)
+					}
+				})
+			})
+		},
+		func() { a.requestDetail(c, p, st, rows) },
+	).Grow(1)
+	c.SetTheme(&base)
 
 	// The detail follows the row chosen, by id, so the choice survives the
 	// row moving up as newer exchanges arrive.
@@ -91,43 +132,14 @@ func (a *app) requestsPage(c *ui.Context, p *palette, st store) {
 	}
 }
 
-func (a *app) requestsTable(c *ui.Context, p *palette, rows []uiRequestRow, trajectory []api.Activity) {
-	base := *c.Theme()
-	p.quiet(c)
-	defer c.SetTheme(&base)
-	cols := []ui.TableColumn{
-		{Title: "Time", ID: "at", Width: 86},
-		{Title: "Method", ID: "method", Width: 82, Sortable: true},
-		{Title: "Host", ID: "host", Width: 166, Sortable: true},
-		{Title: "Path", ID: "path"},
-		{Title: "Latency", ID: "time", Width: 126, Align: ui.End, Sortable: true},
-		{Title: "Status", ID: "status", Width: 72, Align: ui.End, Sortable: true},
-	}
-	ruled := ruledRequests(trajectory)
-	ui.Table(c, &a.reqState, cols, len(rows), func(row, col int) {
-		same := row > 0 && clockOf(rows[row-1].StartedAt) == clockOf(rows[row].StartedAt)
-		a.requestCell(c, p, rows[row], col, ruled[string(rows[row].ID)], same)
-	}).FontSize(12).Fill().MinHeight(0).ContextMenu(func(m *ui.Menu) {
-		if id := a.chosenRequestID(rows); id != "" && m.Item("Replay "+id).Chosen() {
-			a.actReplay(id)
-		}
-	})
-}
-
 // requestsEmpty is what the table's place shows while nothing has been
 // captured yet, as Mayoi's empty folder is: how to send the first request
 // through the proxy.
 func (a *app) requestsEmpty(c *ui.Context, p *palette, st store) {
 	// A search that matched nothing is not a proxy with no traffic.
-	if a.search != "" || a.reqKindIdx != 0 {
-		emptyStateWith(c, p, iconFilter, "No matching requests", "Change the request filters to see more traffic.", "", func() {
-			a.quietButton(c, "request-clear-filters", "Clear filters", nil).Clicked(func() {
-				a.search, a.searchSeen, a.searchSent = "", "", ""
-				a.reqKindIdx = 0
-				a.mirrorView()
-				a.nudge("")
-			})
-		})
+	if a.search != "" {
+		emptyState(c, p, iconList, "No matches",
+			"Nothing captured matches this search. Clear it to see every exchange.", "")
 		return
 	}
 	// The command names the address this daemon listens on, so it can be
@@ -150,69 +162,65 @@ func (a *app) chosenRequestID(rows []uiRequestRow) string {
 }
 
 // requestsToolbar occupies its own row above the table header.
-func (a *app) requestsToolbar(c *ui.Context) {
-	ui.Row(c).FillWidth().Height(47).Shrink(0).Padding(0, 14).
-		Gap(12).AlignItems(ui.Center).Children(func() {
-		ui.SearchField(c, &a.search).Placeholder("Search requests").Label("Search requests").Grow(1).MinWidth(0).MaxWidth(320)
+func (a *app) requestsToolbar(c *ui.Context, p *palette) {
+	ui.Row(c).FillWidth().Height(54).Shrink(0).Padding(0, 12).
+		Gap(10).AlignItems(ui.Center).Children(func() {
+		ui.SearchField(c, &a.search).Grow(1).Shrink(1).MinWidth(40).MaxWidth(260)
 		prevKind := a.reqKindIdx
-		a.segments(c, "req-kind", &a.reqKindIdx, "All", "Proxy", "Gateway")
+		a.words(c, "req-kind", &a.reqKindIdx, "All", "Proxy", "Gateway")
 		if a.reqKindIdx != prevKind {
 			a.mirrorView()
 			a.nudge(a.search)
 		}
-		ui.Spacer(c)
 		wasHidden := a.showHidden
-		ui.Checkbox(c, &a.showHidden, "Show hidden").FontSize(12).Shrink(0)
+		ui.Checkbox(c, &a.showHidden, "Show hidden").FontSize(13)
 		if a.showHidden != wasHidden {
 			// Refetch now: waiting for the next tick leaves the table
 			// unchanged for seconds after the click.
 			a.mirrorView()
 			a.nudge(a.search)
 		}
+		ui.Spacer(c)
+		st := a.snapshotState()
+		failed := 0
+		for _, rq := range st.requests {
+			if rq.Status >= 400 {
+				failed++
+			}
+		}
+		// The counts read as a line of text, not as badges: only the
+		// failures take a color.
+		count := fmt.Sprintf("%d requests", len(st.requests))
+		if len(st.requests) >= requestListLimit {
+			count = fmt.Sprintf("Latest %d", requestListLimit)
+		}
+		ui.Text(c, count).FontSize(12).TextColor(p.muted).SingleLine().
+			ContentTransition(ui.ContentTransition{Numeric: true})
+		if failed > 0 {
+			ui.Text(c, "·").FontSize(12).TextColor(p.faint).SingleLine()
+			ui.Text(c, fmt.Sprintf("%d failed", failed)).FontSize(12).FontFeatures("tnum").TextColor(p.removed).SingleLine().
+				ContentTransition(ui.ContentTransition{Numeric: true})
+		}
 		if a.bounceSearch(c) {
-			a.mirrorView()
 			a.nudge(a.search)
 		}
 	})
 }
 
-func (a *app) requestCounts(c *ui.Context, p *palette, rows []uiRequestRow) {
-	failed := 0
-	for _, row := range rows {
-		if row.Status >= 400 {
-			failed++
-		}
-	}
-	count := fmt.Sprintf("%d requests", len(rows))
-	if len(rows) == 1 {
-		count = "1 request"
-	} else if len(rows) >= requestListLimit {
-		count = fmt.Sprintf("Latest %d requests", requestListLimit)
-	}
-	ui.Text(c, count).FontSize(12).TextColor(p.muted).SingleLine().ContentTransition(ui.ContentTransition{Numeric: true})
-	if failed > 0 {
-		stateDot(c, p, p.removed, fmt.Sprintf("%d failed", failed))
-	}
-}
-
 // bounceSearch sends the query once it has settled for a moment, so
 // typing does not search per keystroke. It reports whether it did.
 func (a *app) bounceSearch(c *ui.Context) bool {
-	const debounce = 300 * time.Millisecond
 	now := c.Now()
 	if a.search != a.searchSeen {
 		a.searchSeen = a.search
 		a.searchAt = now
-	}
-	if a.search == a.searchSent {
 		return false
 	}
-	if remaining := debounce - now.Sub(a.searchAt); remaining > 0 {
-		c.After(remaining)
-		return false
+	if a.search != a.searchSent && now.Sub(a.searchAt) >= 300*time.Millisecond {
+		a.searchSent = a.search
+		return true
 	}
-	a.searchSent = a.search
-	return true
+	return false
 }
 
 // uiRequestRow is one sorted row of the requests table.
@@ -261,14 +269,12 @@ func (a *app) requestCell(c *ui.Context, p *palette, r uiRequestRow, col int, ru
 	case 0:
 		ui.Text(c, clockOf(r.StartedAt)).FontSize(11).Font(mono()).TextColor(timeTone(p, sameTime)).SingleLine()
 	case 1:
-		ui.Text(c, methodLabel(r.Method)).FontSize(11).FontWeight(500).Font(mono()).TextColor(p.muted).SingleLine()
+		methodText(c, p, r.Method)
 	case 2:
-		host := hostOf(r.URL)
-		hostText(c, host, p.muted, p.faint).SingleLine().Tooltip(host)
+		hostText(c, hostOf(r.URL), p.muted, p.faint).SingleLine()
 	case 3:
 		ui.Row(c).Grow(1).Gap(8).AlignItems(ui.Center).Children(func() {
-			path := pathOf(r.URL)
-			pathText(c, p, path, 12).SingleLine().Shrink(1).MinWidth(20).Tooltip(path)
+			pathText(c, p, pathOf(r.URL), 12).SingleLine().Shrink(1).MinWidth(20)
 			if r.Kind == "gateway" {
 				lbl := "gateway"
 				if r.GatewayPlan != "" && r.GatewayModel != "" {
@@ -301,15 +307,7 @@ func (a *app) requestCell(c *ui.Context, p *palette, r uiRequestRow, col int, ru
 			ui.Spinner(c).Size(10, 10)
 			return
 		}
-		if r.Status >= 400 {
-			statusText(c, p, r.Status)
-			return
-		}
-		tone := p.muted
-		if r.Status >= 300 {
-			tone = statusTone(p, r.Status)
-		}
-		ui.Text(c, fmt.Sprint(r.Status)).FontSize(11).Font(mono()).TextColor(tone).Padding(0, 7).SingleLine()
+		statusText(c, p, r.Status)
 	}
 }
 
@@ -342,7 +340,10 @@ var detailTabs = []string{"Headers", "Body", "Rules"}
 // for both sides.
 var bodyRaw bool
 
-// requestDetail compares the request and response in the lower pane.
+// requestDetail is the exchange the table chose. Its heading is the
+// request line itself, set large, with what came back at its right; under
+// it, what was sent and what came back stand side by side, as the two
+// halves of one exchange.
 func (a *app) requestDetail(c *ui.Context, p *palette, st store, rows []uiRequestRow) {
 	id := a.chosenRequestID(rows)
 	if id == "" {
@@ -360,28 +361,29 @@ func (a *app) requestDetail(c *ui.Context, p *palette, st store, rows []uiReques
 		}
 	}
 	d, errText := st.detail, st.detailErr
-	if string(st.detailID) != id {
-		d, errText = nil, ""
-	}
 	// The split draws the line between the table and the detail; a border
 	// here would double it.
-	ui.Column(c).Fill().MinHeight(0).Background(p.surface.Mix(p.editor, 0.36)).Children(func() {
+	ui.Column(c).Grow(1).MinHeight(0).Children(func() {
 		ui.Row(c).FillWidth().Shrink(0).Padding(14, 16, 4, 24).Gap(16).AlignItems(ui.Center).Children(func() {
 			ui.Column(c).Gap(3).Shrink(1).MinWidth(0).Children(func() {
 				ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-					methodText(c, p, row.Method)
-					path := pathOf(row.URL)
-					pathText(c, p, path, 15).SingleLine().Shrink(1).MinWidth(40).Selectable().Tooltip(path)
+					ui.Text(c, methodLabel(row.Method)).FontSize(15).FontWeight(600).Font(mono()).TextColor(p.text).SingleLine().Shrink(0)
+					pathText(c, p, pathOf(row.URL), 15).SingleLine().Shrink(1).MinWidth(40).Selectable()
 				})
 				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 					hostText(c, hostOf(row.URL), p.muted, p.faint).FontSize(11.5).SingleLine().Shrink(1).MinWidth(0)
-					ui.Text(c, id).FontSize(10.5).Font(mono()).TextColor(p.faint).SingleLine().Shrink(0).Selectable()
+					ui.Text(c, id).FontSize(10.5).Font(mono()).TextColor(p.faint).Padding(1, 6).Radius(5).
+						Background(p.text.Alpha(0.045)).SingleLine().Shrink(0).Selectable()
 				})
 			})
 			ui.Spacer(c)
 			if row.Status != 0 {
 				figureText(c, latencyLabel(row), 13, p.muted, p.faint).SingleLine().Shrink(0)
-				statusText(c, p, row.Status).ContentTransition(ui.ContentTransition{Numeric: true})
+				// The status animates as it changes, as when the
+				// exchange completes or a replay lands.
+				ui.Text(c, fmt.Sprint(row.Status)).FontSize(20).FontWeight(600).Font(mono()).
+					TextColor(statusTone(p, row.Status)).SingleLine().Shrink(0).
+					ContentTransition(ui.ContentTransition{Numeric: true})
 			}
 			a.replayButton(c, p, id)
 		})
@@ -422,17 +424,19 @@ func (a *app) requestDetail(c *ui.Context, p *palette, st store, rows []uiReques
 	})
 }
 
-func exchangeSections(c *ui.Context, p *palette, request, response func()) {
-	section := func(title string, body func()) {
-		ui.Column(c.Key(title)).Grow(1).Basis(0).MinWidth(0).Gap(8).Children(func() {
-			ui.Text(c, title).FontSize(12).FontWeight(600).TextColor(p.text).SingleLine()
+// sides lays the two halves of an exchange side by side under their
+// names, a hairline between them.
+func sides(c *ui.Context, p *palette, request, response func()) {
+	side := func(title string, body func()) {
+		ui.Column(c).Grow(1).Basis(0).MinWidth(0).Gap(8).Children(func() {
+			caption(c, p, title)
 			body()
 		})
 	}
 	ui.Row(c).FillWidth().AlignItems(ui.Stretch).Children(func() {
-		section("Request", request)
+		side("Request", request)
 		ui.Box(c).Width(1).Shrink(0).Margin(0, 24).Background(p.border)
-		section("Response", response)
+		side("Response", response)
 	})
 }
 
@@ -448,9 +452,9 @@ func tabFade(e ui.Element) ui.Element {
 // until the timeout below gives the wait up.
 func (a *app) replayButton(c *ui.Context, p *palette, id string) {
 	busy := a.replayBusy(c, id)
-	b := ui.ButtonBase(c.Key("replay")).Height(buttonH).Padding(0, 10).Gap(7).Radius(8).AlignItems(ui.Center).
+	b := ui.ButtonBase(c.Key("replay")).Size(buttonH, buttonH).Radius(9).Justify(ui.Center).AlignItems(ui.Center).
 		Label("Replay this request through the proxy").Tooltip("Replay this request through the proxy").
-		Background(p.surface).Border(1, p.border).Disabled(busy)
+		Disabled(busy)
 	if !busy {
 		switch {
 		case b.Pressed():
@@ -470,7 +474,6 @@ func (a *app) replayButton(c *ui.Context, p *palette, id string) {
 		} else {
 			ui.Icon(c, iconReplay).FontSize(14).TextColor(col)
 		}
-		ui.Text(c, "Replay").FontSize(12).FontWeight(500).TextColor(col).SingleLine()
 	})
 	if !busy && b.Clicked() {
 		replayingID, startReplayAt = id, c.Now()
@@ -501,17 +504,17 @@ func (a *app) replayBusy(c *ui.Context, id string) bool {
 func (a *app) detailSkeleton(c *ui.Context, p *palette) {
 	bars := func() {
 		for _, w := range []float32{220, 160, 250, 120} {
-			ui.Box(c).Width(w).MaxWidthPercent(100).Height(9).Radius(4.5).Margin(4, 0).Background(p.text.Alpha(0.05))
+			ui.Box(c).Width(w).Height(9).Radius(4.5).Margin(4, 0).Background(p.text.Alpha(0.05))
 		}
 	}
-	exchangeSections(c, p, bars, bars)
+	sides(c, p, bars, bars)
 }
 
 // detailBody is what the detail's tabs show of one exchange.
 func (a *app) detailBody(c *ui.Context, p *palette, d *api.RequestDetailResponse) {
 	switch a.detailTab {
 	case 1:
-		exchangeSections(c, p,
+		sides(c, p,
 			func() {
 				a.bodyPane(c, p, "request", "Request body", d.Body, d.Request.RequestHeaders, d.Request.RequestHeaderList, d.Request.RequestBodyTruncated)
 			},
@@ -523,7 +526,7 @@ func (a *app) detailBody(c *ui.Context, p *palette, d *api.RequestDetailResponse
 	case 3:
 		a.gatewayTraceSection(c, p, d.Request.Gateway)
 	default:
-		exchangeSections(c, p,
+		sides(c, p,
 			func() { a.headerRows(c, p, d.Request.RequestHeaderList, d.Request.RequestHeaders) },
 			func() { a.headerRows(c, p, d.Request.ResponseHeaderList, d.Request.ResponseHeaders) })
 	}
@@ -633,7 +636,7 @@ func (a *app) bodyPane(c *ui.Context, p *palette, key, title string, body *strin
 	// its lines up to a limit; past that it scrolls.
 	h := min(max(float32(v.lines)*20+16, 56), 320)
 	ui.Box(c.Key("bodysheet:"+key)).FillWidth().Height(h).MinWidth(0).Radius(10).Border(1, p.border).
-		Background(p.surface).Clip().Children(func() {
+		Background(p.surface).Shadow(0, 1, 2, 0, p.shade()).Clip().Children(func() {
 		editor.View(c.Key("body:"+key), v.state).Fill().MinWidth(0)
 	})
 	if truncated {

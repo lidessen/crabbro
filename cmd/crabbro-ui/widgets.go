@@ -47,31 +47,17 @@ func hairline(c *ui.Context, p *palette) ui.Element {
 	return ui.Box(c).FillWidth().Height(1).Shrink(0).Background(p.border)
 }
 
-func workspaceTitle(c *ui.Context, p *palette, title string) ui.Element {
-	return ui.Text(c, title).FontSize(23).FontWeight(600).LetterSpacing(-0.4).TextColor(p.text).SingleLine()
-}
-
-func statusIcon(c *ui.Context, p *palette, icon *ui.SVG, tone ui.Color) {
-	ui.Row(c).Size(32, 32).Shrink(0).Center().Radius(8).Background(tone.Alpha(p.wash())).Children(func() {
-		ui.Icon(c, icon).FontSize(16).TextColor(tone)
-	})
-}
-
 // words is a row of choices set as words, the chosen one in the text's color over a
 // short accent stroke that slides in under it. It stands where tabs and
 // segmented controls would: the window has one way to choose among views.
 func (a *app) words(c *ui.Context, key string, sel *int, labels ...string) ui.Element {
 	p := a.pal
-	return ui.Row(c.Key(key)).Gap(8).Height(36).AlignItems(ui.Stretch).Shrink(0).
-		Role(ui.RoleTabList).FocusGroup(ui.Horizontal).Children(func() {
+	return ui.Row(c.Key(key)).Gap(22).Height(34).AlignItems(ui.Stretch).Shrink(0).Children(func() {
 		for i, label := range labels {
 			on := *sel == i
-			b := ui.ButtonBase(c.Key(i)).Padding(0, 9).AlignItems(ui.Center).Role(ui.RoleTab).Label(label).
-				Selected(on).Background(ui.Transparent)
+			b := ui.ButtonBase(c.Key(fmt.Sprint(key, ":", i))).AlignItems(ui.Center).Label(label)
 			col := p.muted
-			if on {
-				col = p.accent
-			} else if b.Hovered() {
+			if on || b.Hovered() {
 				col = p.text
 			}
 			under := float32(0)
@@ -81,35 +67,13 @@ func (a *app) words(c *ui.Context, key string, sel *int, labels ...string) ui.El
 			under = b.Animate("under", under, 160*time.Millisecond)
 			b.Children(func() {
 				ui.Text(c, label).FontSize(13).FontWeight(500).TextColor(col).SingleLine()
-				ui.Box(c).Absolute().Left(5).Right(5).Bottom(0).Height(2).Radius(1).
+				// The stroke rests on the hairline under the row of words,
+				// as the title bar's does on its own.
+				ui.Box(c).Absolute().Left(0).Right(0).Bottom(-1).Height(2).Radius(1).
 					Background(p.accent.Alpha(under))
 			})
 			if b.Clicked() {
 				*sel = i
-			}
-		}
-	})
-}
-
-func (a *app) segments(c *ui.Context, key string, selected *int, labels ...string) {
-	p := a.pal
-	ui.Row(c.Key(key)).Shrink(0).Height(32).Padding(2).Gap(2).Radius(8).
-		Background(p.editor).Border(1, p.border).AlignItems(ui.Stretch).Children(func() {
-		for i, label := range labels {
-			on := *selected == i
-			b := ui.ButtonBase(c.Key(i)).Padding(0, 9).Radius(5).AlignItems(ui.Center).Label(label).Selected(on)
-			ink := p.muted
-			if on {
-				b.Background(p.surface).InsetShadow(0, 0, 0, 1, p.border)
-				ink = p.text
-			} else if b.Hovered() {
-				b.Background(p.hover)
-			}
-			b.Children(func() {
-				ui.Text(c, label).FontSize(12).FontWeight(500).TextColor(ink).SingleLine()
-			})
-			if b.Clicked() {
-				*selected = i
 			}
 		}
 	})
@@ -132,8 +96,12 @@ func stateDot(c *ui.Context, p *palette, col ui.Color, label string) {
 	})
 }
 
+// panel is a raised sheet on a page's ground: the page's own color, a
+// hairline round it and a soft shadow under it. It is what gives a page a
+// surface to read on rather than a bare ground.
 func panel(c *ui.Context, p *palette) ui.Element {
-	return ui.Column(c).Background(p.surface).Border(1, p.border).Radius(9).Clip()
+	return ui.Column(c).Background(p.editor).Border(1, p.border).Radius(12).
+		Shadow(0, 1, 2, 0, p.shade()).Clip()
 }
 
 // statusText is a response status as a number in mono, in the color of
@@ -188,6 +156,14 @@ func emptyStateWith(c *ui.Context, p *palette, icon *ui.SVG, title, help, cmd st
 			ui.Row(c).Margin(4, 0, 0).Children(act)
 		}
 	})
+}
+
+// riseIn brings an element in as it is built: it fades and rises a little,
+// Mayoi's welcome-page entrance, delayed by delay.
+func riseIn(e ui.Element, delay time.Duration) ui.Element {
+	k := e.Keyframes("rise", []ui.Keyframe{{Value: 0}, {At: 240 * time.Millisecond, Value: 1, Ease: ui.EaseOut}},
+		ui.KeyframeOptions{Delay: delay})
+	return e.Opacity(k).Translate(0, 8*(1-k))
 }
 
 // popIn is how a floating thing takes the screen, as Mayoi's are.

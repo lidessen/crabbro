@@ -10,7 +10,9 @@ type gatewaySection int
 
 const (
 	gwCardGap      = 12
+	gwSidebarWidth = 190
 	gwContentWidth = 1200
+	gwContentInset = 28
 )
 
 const (
@@ -21,18 +23,27 @@ const (
 	gwCredentials
 )
 
-func (a *app) gatewayPage(c *ui.Context, p *palette, st store) {
-	ui.Column(c.Key("gateway-workspace")).Grow(1).FillWidth().MinHeight(0).Children(func() {
-		ui.Column(c).FillWidth().MaxWidth(gwContentWidth).AlignSelf(ui.Center).Shrink(0).Padding(18, workspaceInset, 0).Gap(6).Children(func() {
-			workspaceTitle(c, p, "Gateway")
-			section := int(a.gwSection)
-			a.words(c, "gw-nav", &section, "Overview", "Plans & Quotas", "Routes", "Usage", "Credentials")
-			a.gwSection = gatewaySection(section)
-		})
-		hairline(c, p)
+var gatewaySections = [...]struct {
+	title string
+	icon  *ui.SVG
+}{
+	{"Overview", iconServer},
+	{"Plans & Quotas", iconSliders},
+	{"Routes", iconRoute},
+	{"Usage", iconChart},
+	{"Credentials", iconLock},
+}
+
+func (a *app) gatewayPage(c *ui.Context, p *palette) {
+	st := a.snapshotState()
+	ui.Row(c.Key("gateway-workspace")).Grow(1).FillWidth().MinHeight(0).AlignItems(ui.Stretch).Background(p.chrome).Clip().Children(func() {
+		a.gatewaySidebar(c, p)
 		section := a.gwSection
-		ui.Scroll(c.Key(fmt.Sprintf("gw-scroll:%d", section))).Grow(1).MinHeight(0).Children(func() {
-			ui.Column(c).FillWidth().MaxWidth(gwContentWidth).AlignSelf(ui.Center).Padding(16, workspaceInset, 24).Gap(12).Children(func() {
+		ui.Scroll(c.Key(fmt.Sprintf("gw-scroll:%d", section))).Grow(1).MinWidth(0).MinHeight(0).Children(func() {
+			ui.Column(c).FillWidth().MaxWidth(gwContentWidth).AlignSelf(ui.Center).Padding(28, gwContentInset, 36).Gap(16).Children(func() {
+				if section != gwUsage {
+					ui.Text(c, gatewaySections[section].title).FontSize(26).FontWeight(600).TextColor(p.text).SingleLine()
+				}
 				switch section {
 				case gwOverview:
 					a.gwStatusCard(c, p, st)
@@ -52,13 +63,44 @@ func (a *app) gatewayPage(c *ui.Context, p *palette, st store) {
 	})
 }
 
+func (a *app) gatewaySidebar(c *ui.Context, p *palette) {
+	ui.Column(c).Width(gwSidebarWidth).Shrink(0).Padding(20, 12, 16).Gap(5).
+		Background(p.editor).BorderWidth(0, 1, 0, 0).BorderColor(p.border).Children(func() {
+		ui.Row(c).Padding(0, 8, 15).Gap(9).AlignItems(ui.Center).Children(func() {
+			gwGlyph(c, p, iconRoute, p.accent)
+			ui.Text(c, "Gateway").FontSize(15).FontWeight(600).TextColor(p.text).SingleLine()
+		})
+		for i, section := range gatewaySections {
+			b := ui.ButtonBase(c.Key(fmt.Sprintf("gw-nav:%d", i))).Label(section.title).
+				FillWidth().Height(36).Radius(7).Padding(0, 9).Gap(9).AlignItems(ui.Center).Justify(ui.Start)
+			active := a.gwSection == gatewaySection(i)
+			tone := p.muted
+			switch {
+			case active:
+				b.Background(p.accent.Alpha(p.wash()))
+				tone = p.accent
+			case b.Hovered():
+				b.Background(p.text.Alpha(0.05))
+				tone = p.text
+			}
+			b.Children(func() {
+				ui.Icon(c, section.icon).FontSize(15).TextColor(tone)
+				ui.Text(c, section.title).FontSize(13).FontWeight(500).TextColor(tone).SingleLine()
+			})
+			if b.Clicked() {
+				a.gwSection = gatewaySection(i)
+			}
+		}
+	})
+}
+
 func gwGridColumns(c *ui.Context, minWidth float32, maxColumns int) int {
 	return max(1, min(maxColumns, int((gwContentAreaWidth(c)+gwCardGap)/(minWidth+gwCardGap))))
 }
 
 func gwContentAreaWidth(c *ui.Context) float32 {
 	width, _ := c.Size()
-	return min(width-sidebarWidth(c), gwContentWidth) - 2*workspaceInset
+	return min(width-gwSidebarWidth, gwContentWidth) - 2*gwContentInset
 }
 
 // Cards stack at their own height in each column. Assign slots by data
@@ -75,10 +117,17 @@ func gwCardColumns(c *ui.Context, columns, count int, draw func(int)) {
 	})
 }
 
+func gwGlyph(c *ui.Context, p *palette, icon *ui.SVG, tone ui.Color) {
+	ui.Row(c).Size(30, 30).Shrink(0).Center().Radius(8).Background(tone.Alpha(p.wash())).Children(func() {
+		ui.Icon(c, icon).FontSize(15).TextColor(tone)
+	})
+}
+
 func gwMetric(c *ui.Context, p *palette, label, value, detail string, detailTone ui.Color) ui.Element {
-	return ui.Column(c).Grow(1).Basis(0).MinWidth(0).Padding(10, 12).Gap(4).Children(func() {
+	return ui.Column(c).Grow(1).Basis(0).MinWidth(0).Padding(10, 12).Gap(4).
+		Radius(8).Background(p.text.Alpha(0.035)).Children(func() {
 		ui.Text(c, label).FontSize(11.5).FontWeight(500).TextColor(p.muted).FillWidth()
-		ui.Text(c, value).FontSize(18).FontWeight(600).Font(mono()).TextColor(p.text).FillWidth()
+		ui.Text(c, value).FontSize(17).FontWeight(600).Font(mono()).TextColor(p.text).FillWidth()
 		if detail != "" {
 			ui.Text(c, detail).FontSize(11).TextColor(detailTone).FillWidth()
 		}

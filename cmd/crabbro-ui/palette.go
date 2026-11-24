@@ -7,6 +7,17 @@ import (
 	"github.com/egoist/mygo/ui/editor"
 )
 
+// lift stands a faced control on the shadow the panels have, so a button
+// reads as a thing above the page rather than an outline on it; on the
+// dark appearance it is lit along its top edge as well.
+func (p *palette) lift(e ui.Element) ui.Element {
+	e.Shadow(0, 1, 1.5, 0, p.shade())
+	if p.dark {
+		e.InsetShadow(0, 1, 0, 0, ui.RGBA(255, 255, 255, 0.045))
+	}
+	return e
+}
+
 // codeThemes keeps the code theme of each ground, by the appearance and
 // the face it was made for, so an editor is handed the same theme frame
 // after frame.
@@ -59,8 +70,10 @@ func (p *palette) teal() ui.Color {
 	return ui.Hex("#17766a")
 }
 
-// The shell, workspace ground, and raised surfaces use warm neutrals.
-// Coral marks navigation and primary actions; status colors carry meaning.
+// palette is the look of the window, in the roles Mayoi's workbench uses:
+// the chrome of the shell (title bar, sidebar, status bar), the editor the
+// pages sit on, the faces of controls, and the accent and its tints. Crabbro's own
+// voice is the coral of its crab, over quiet warm-neutral greys.
 type palette struct {
 	dark bool
 
@@ -144,25 +157,25 @@ func (p *palette) finish() *palette {
 func darkPalette() *palette {
 	p := &palette{
 		dark:           true,
-		editor:         ui.Hex("#1b1a1c"),
-		chrome:         ui.Hex("#151416"),
-		border:         ui.Hex("#363336"),
-		hover:          ui.RGBA(255, 255, 255, 0.06),
-		active:         ui.RGBA(255, 129, 107, 0.13),
-		text:           ui.Hex("#f1edeb"),
-		muted:          ui.Hex("#c4bcb9"),
-		faint:          ui.Hex("#a09998"),
-		accent:         ui.Hex("#ff816b"),
-		fill:           ui.Hex("#bb3e30"),
+		editor:         ui.Hex("#1a1517"),
+		chrome:         ui.Hex("#130f11"),
+		border:         ui.Hex("#2e2529"),
+		hover:          ui.RGBA(255, 255, 255, 0.045),
+		active:         ui.RGBA(255, 106, 87, 0.13),
+		text:           ui.Hex("#f0e7e3"),
+		muted:          ui.Hex("#b0a4a1"),
+		faint:          ui.Hex("#8c8081"),
+		accent:         ui.Hex("#ff6a57"),
+		fill:           ui.Hex("#c93329"),
 		fillText:       ui.Hex("#fff6e8"),
 		dangerFill:     ui.Hex("#a51f3b"),
-		surface:        ui.Hex("#222123"),
-		surfaceHover:   ui.Hex("#2b292c"),
-		surfacePressed: ui.Hex("#353236"),
+		surface:        ui.Hex("#211a1d"),
+		surfaceHover:   ui.Hex("#2a2125"),
+		surfacePressed: ui.Hex("#32282c"),
 		scrollbar:      ui.RGBA(255, 255, 255, 0.16),
 		inverse:        ui.Hex("#2f2a2b"),
 		inverseText:    ui.Hex("#f0e7e3"),
-		focus:          ui.RGBA(255, 129, 107, 0.7),
+		focus:          ui.RGBA(255, 106, 87, 0.5),
 		added:          ui.Hex("#9ccb84"),
 		changed:        ui.Hex("#8fb4ff"),
 		removed:        ui.Hex("#ff6b8f"),
@@ -170,27 +183,29 @@ func darkPalette() *palette {
 	return p.finish()
 }
 
+// The light appearance is the cream of the crab's artwork, a shade calmer
+// than the icon's own, so the coral reads as the one accent on it.
 func lightPalette() *palette {
 	p := &palette{
-		editor:         ui.Hex("#f6f5f3"),
-		chrome:         ui.Hex("#f0eeeb"),
-		border:         ui.Hex("#e2ded9"),
-		hover:          ui.RGBA(41, 29, 26, 0.055),
-		active:         ui.RGBA(179, 57, 38, 0.09),
-		text:           ui.Hex("#261f20"),
-		muted:          ui.Hex("#5f5552"),
-		faint:          ui.Hex("#726761"),
-		accent:         ui.Hex("#ac3829"),
-		fill:           ui.Hex("#b13629"),
+		editor:         ui.Hex("#fffbf4"),
+		chrome:         ui.Hex("#faf4e8"),
+		border:         ui.Hex("#efe7d8"),
+		hover:          ui.RGBA(0, 0, 0, 0.04),
+		active:         ui.RGBA(192, 52, 31, 0.08),
+		text:           ui.Hex("#2a1c1e"),
+		muted:          ui.Hex("#67564f"),
+		faint:          ui.Hex("#7f6e68"),
+		accent:         ui.Hex("#c0341f"),
+		fill:           ui.Hex("#c43427"),
 		fillText:       ui.Hex("#fffaf5"),
 		dangerFill:     ui.Hex("#c8264f"),
-		surface:        ui.Hex("#fffefd"),
-		surfaceHover:   ui.Hex("#f5f1ed"),
-		surfacePressed: ui.Hex("#ebe5e0"),
+		surface:        ui.Hex("#fffefa"),
+		surfaceHover:   ui.Hex("#f7efdf"),
+		surfacePressed: ui.Hex("#f0e6d2"),
 		scrollbar:      ui.RGBA(0, 0, 0, 0.18),
 		inverse:        ui.Hex("#2a1c1e"),
 		inverseText:    ui.Hex("#faf4e8"),
-		focus:          ui.RGBA(172, 56, 41, 0.65),
+		focus:          ui.RGBA(192, 52, 31, 0.45),
 		added:          ui.Hex("#2f7a1c"),
 		changed:        ui.Hex("#2a5bd7"),
 		removed:        ui.Hex("#c8164a"),
@@ -235,9 +250,22 @@ func applyPal(c *ui.Context) *palette {
 func (p *palette) quiet(c *ui.Context) {
 	t := *c.Theme()
 	t.Accent, t.AccentText, t.SurfaceHover = p.active, p.text, p.hover
-	t.Background, t.Surface, t.TextMuted = p.surface, p.editor, p.muted
-	t.Spacing = 3.9
+	// The header reads in the captions' color, so the column names label
+	// the data without outweighing it.
+	t.TextMuted = p.faint
+	// Rows get room to be read and pointed at: a line of traffic is a
+	// thing to choose, not a cell of a spreadsheet.
+	t.Spacing = 4.25
 	c.SetTheme(&t)
+}
+
+// shade is the shadow under a raised panel: barely there on the light
+// appearance, deeper on the dark, where a shadow has less to show against.
+func (p *palette) shade() ui.Color {
+	if p.dark {
+		return ui.RGBA(0, 0, 0, 0.35)
+	}
+	return ui.RGBA(70, 40, 20, 0.07)
 }
 
 // wash is how strongly a color tints the ground behind text of the same

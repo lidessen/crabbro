@@ -39,33 +39,34 @@ var (
 
 // ruleListW is the width of the column of rules, as the page's splitter
 // keeps it.
-var ruleListW float32 = 276
+var ruleListW float32 = 340
 
 // rulesPage is the column of rules and, beside it, the one chosen.
-func (a *app) rulesPage(c *ui.Context, p *palette, st store) {
-	ui.Column(c).Grow(1).MinHeight(0).Padding(18, workspaceInset, 16).Gap(12).Children(func() {
-		workspaceTitle(c, p, "Rules").Shrink(0)
-		a.rulesWorkspace(c, p, st)
-	})
-}
-
-func (a *app) rulesWorkspace(c *ui.Context, p *palette, st store) {
+func (a *app) rulesPage(c *ui.Context, p *palette) {
+	st := a.snapshotState()
 	if len(st.rules) == 0 {
 		a.ruleShownID = ""
-		panel(c, p).Grow(1).Children(func() { a.rulesEmpty(c, p) })
+		a.rulesEmpty(c, p)
 		return
 	}
-	if ruleOf(st.rules, a.ruleShownID) == nil {
-		a.chooseRule(st.rules[0])
+	a.ruleSel = min(max(a.ruleSel, 0), len(st.rules)-1)
+
+	// The editor shows the rule the list chose, its script loaded when
+	// the choice changes.
+	if id := a.chosenRuleID(st.rules); id != a.ruleShownID {
+		a.ruleShownID = id
+		a.scriptDraft = ""
+		ruleVMSeen = ""
+		ruleVM = nil
+		ruleCodeState = nil
+		a.loadRuleScript(id)
 	}
 	dirty := a.ruleShownID != "" && a.scriptDraft != "" && a.scriptDraft != a.scriptLoadedText(st.rules)
 
-	panel(c.Key("rules:workspace"), p).Grow(1).MinHeight(0).Children(func() {
-		ui.Split(c, &ruleListW,
-			func() { a.ruleList(c, p, st) },
-			func() { a.ruleEditor(c, p, st, dirty) },
-		).Grow(1).MinHeight(0)
-	})
+	ui.Split(c, &ruleListW,
+		func() { a.ruleList(c, p, st) },
+		func() { a.ruleEditor(c, p, st, dirty) },
+	).Grow(1)
 }
 
 // ruleList is the rules as a column: each under its mark, filled
@@ -78,9 +79,11 @@ func (a *app) ruleList(c *ui.Context, p *palette, st store) {
 			inForce++
 		}
 	}
-	ui.Column(c).Fill().MinHeight(0).Background(p.surface.Mix(p.editor, 0.36)).Children(func() {
-		ui.Column(c).FillWidth().Shrink(0).Padding(14, 16, 10).Gap(5).Children(func() {
-			ui.Text(c, "Rule library").FontSize(14).FontWeight(600).TextColor(p.text).SingleLine()
+	// The column stands on the chrome's tone, so the rule chosen, on the
+	// page's own, reads as the thing being worked on.
+	ui.Column(c).Fill().MinHeight(0).Background(p.chrome).Children(func() {
+		ui.Column(c).FillWidth().Shrink(0).Padding(22, 20, 14, 28).Gap(5).Children(func() {
+			ui.Text(c, "Rules").FontSize(20).FontWeight(600).LetterSpacing(-0.2).TextColor(p.text).SingleLine()
 			sub := fmt.Sprintf("%d enabled", inForce)
 			if off := len(st.rules) - inForce; off > 0 {
 				sub += fmt.Sprintf("  ·  %d disabled", off)
@@ -90,8 +93,8 @@ func (a *app) ruleList(c *ui.Context, p *palette, st store) {
 		hairline(c, p)
 		ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
 			ui.Column(c).FillWidth().Padding(8, 8, 16).Gap(1).Children(func() {
-				for _, r := range st.rules {
-					a.ruleRow(c, p, r)
+				for i, r := range st.rules {
+					a.ruleRow(c, p, r, i)
 				}
 			})
 		})
@@ -99,13 +102,15 @@ func (a *app) ruleList(c *ui.Context, p *palette, st store) {
 }
 
 // ruleRow is one rule of the column.
-func (a *app) ruleRow(c *ui.Context, p *palette, r api.Rule) {
-	on := string(r.ID) == a.ruleShownID
-	b := ui.ButtonBase(c.Key("rule:"+string(r.ID))).FillWidth().Height(58).Padding(0, 10, 0, 12).Gap(9).
-		Radius(8).AlignItems(ui.Center).Label(ruleLabel(r)).Selected(on)
+func (a *app) ruleRow(c *ui.Context, p *palette, r api.Rule, i int) {
+	on := i == a.ruleSel
+	b := ui.ButtonBase(c.Key("rule:"+string(r.ID))).FillWidth().Height(62).Padding(0, 14, 0, 20).Gap(13).
+		Radius(10).AlignItems(ui.Center).Label(ruleLabel(r))
 	switch {
 	case on:
-		b.Background(p.active)
+		// The chosen rule keeps a fine line of the accent round its tint,
+		// which holds the row's edge on a ground nearly its own color.
+		b.Background(p.active).InsetShadow(0, 0, 0, 1, p.accent.Alpha(0.14))
 	case b.Pressed():
 		b.Background(p.text.Alpha(0.06))
 	case b.Hovered():
@@ -135,8 +140,8 @@ func (a *app) ruleRow(c *ui.Context, p *palette, r api.Rule) {
 				Font(mono()).FontSize(11).SingleLine().Tooltip(summary)
 		})
 	})
-	if b.Clicked() && !on {
-		a.chooseRule(r)
+	if b.Clicked() {
+		a.ruleSel = i
 	}
 }
 
@@ -166,12 +171,12 @@ func (a *app) rulesEmpty(c *ui.Context, p *palette) {
 		"crabbro rules from req_1 --action mock")
 }
 
-// The rule list already includes the script. Keep the draft tied to its ID
-// as snapshots arrive so changes to list order cannot replace the draft.
-func (a *app) chooseRule(r api.Rule) {
-	a.ruleShownID, a.scriptDraft = string(r.ID), r.Script
-	ruleVMSeen, ruleVM, ruleCodeState = "", nil, nil
-	a.invalidate()
+// chosenRuleID is the rule the table's choice names, "" for none.
+func (a *app) chosenRuleID(rules []api.Rule) string {
+	if a.ruleSel < 0 || a.ruleSel >= len(rules) {
+		return ""
+	}
+	return string(rules[a.ruleSel].ID)
 }
 
 // scriptLoadedText is the rule's script as the store has it, which the
@@ -183,6 +188,22 @@ func (a *app) scriptLoadedText(rules []api.Rule) string {
 		}
 	}
 	return ""
+}
+
+// loadRuleScript fills the editor's draft with the rule's script.
+func (a *app) loadRuleScript(id string) {
+	if id == "" {
+		return
+	}
+	go func() {
+		r, err := a.c.GetRule(a.ctx, id)
+		a.post(func() {
+			if a.ruleShownID == id && err == nil {
+				a.scriptDraft = r.Script
+				a.invalidate()
+			}
+		})
+	}()
 }
 
 // ruleLabel is what the list names a rule: its name, else its id.
@@ -212,8 +233,8 @@ func (a *app) ruleEditor(c *ui.Context, p *palette, st store, dirty bool) {
 	}
 
 	ui.Column(c).Fill().MinHeight(0).Children(func() {
-		ui.Row(c).FillWidth().Shrink(0).Padding(14, 16, 8).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Column(c).Gap(4).Grow(1).MinWidth(0).Children(func() {
+		ui.Row(c).FillWidth().Shrink(0).Padding(20, 16, 6, 24).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Column(c).Gap(4).Shrink(1).MinWidth(0).Children(func() {
 				name := rule
 				if r != nil && r.Name != "" {
 					name = r.Name
@@ -241,26 +262,27 @@ func (a *app) ruleEditor(c *ui.Context, p *palette, st store, dirty bool) {
 					}
 				})
 			})
-		})
-		ui.Row(c).FillWidth().Shrink(0).Padding(0, 12).Gap(4).Wrap().AlignItems(ui.Center).Children(func() {
-			a.words(c, "rule-view", &a.ruleEditMode, "Overview", "YAML")
 			ui.Spacer(c)
-			ui.Row(c).Gap(4).Margin(0, 0, 4).AlignItems(ui.Center).Children(func() {
-				a.ghostButton(c, "rule-toggle", toggleLabel(st.rules, rule), iconSwitch).
-					Clicked(func() { a.actToggleRule(rule, !enabledOf(st.rules, rule)) })
-				a.ghostButton(c, "rule-delete", "Delete", iconTrash).Disabled(ruleConfirming == rule).
-					Clicked(func() { a.confirmDeleteRule(rule) })
-				if dirty {
-					a.ghostButton(c, "rule-revert", "Revert", iconUndo).
-						Clicked(func() { a.scriptDraft = a.scriptLoadedText(st.rules) })
-				}
-				a.fillButton(c, "rule-save", "Save", iconSave, !dirty).
-					Clicked(func() { a.actSaveRule(rule, a.scriptDraft) })
-			})
+			a.ghostButton(c, "rule-toggle", toggleLabel(st.rules, rule), iconSwitch).
+				Clicked(func() { a.actToggleRule(rule, !enabledOf(st.rules, rule)) })
+			a.ghostButton(c, "rule-delete", "Delete", iconTrash).Disabled(ruleConfirming == rule).
+				Clicked(func() { a.confirmDeleteRule(rule) })
+			// Revert is there only while there is an edit to take back: a
+			// button that waits greyed out for most of its life is a word
+			// the heading does not need, and the room is the name's.
+			if dirty {
+				a.ghostButton(c, "rule-revert", "Revert", iconUndo).
+					Clicked(func() { a.scriptDraft = a.scriptLoadedText(st.rules) })
+			}
+			a.fillButton(c, "rule-save", "Save", iconSave, !dirty).
+				Clicked(func() { a.actSaveRule(rule, a.scriptDraft) })
+		})
+		ui.Row(c).FillWidth().Shrink(0).Padding(0, 24).Children(func() {
+			a.words(c, "rule-view", &a.ruleEditMode, "Overview", "Code")
 		})
 		hairline(c, p)
 		if a.ruleEditMode == 0 {
-			a.ruleOverview(c, p, r)
+			a.ruleOverview(c, p, st, r)
 		} else {
 			a.ruleCode(c, p)
 		}
@@ -285,17 +307,16 @@ func (a *app) syncRuleVM() {
 // ruleOverview is the rule read in plain groups: when it applies, how it
 // is set, and what each phase does, stage by stage. It edits nothing; the
 // code view does.
-func (a *app) ruleOverview(c *ui.Context, p *palette, r *api.Rule) {
+func (a *app) ruleOverview(c *ui.Context, p *palette, st store, r *api.Rule) {
 	doc := ruleVM
 	if doc == nil {
 		if a.scriptDraft == "" {
-			ui.Text(c, "No rule source available.").FontSize(13).TextColor(p.muted).Padding(18, 24)
-			return
+			return // still loading
 		}
 		ui.Column(c).Grow(1).Padding(18, 24).Gap(6).Children(func() {
 			ui.Text(c, "This rule can't be read as an overview.").FontSize(13).FontWeight(600).TextColor(p.text)
 			ui.Text(c, ruleVMErr).FontSize(11).Font(mono()).TextColor(p.removed).FillWidth()
-			ui.Text(c, "Open the YAML tab to view the source.").FontSize(13).TextColor(p.muted)
+			ui.Text(c, "Its YAML is in the Code view.").FontSize(13).TextColor(p.muted)
 		})
 		return
 	}
