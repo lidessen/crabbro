@@ -60,18 +60,12 @@ func (a *app) rulesWorkspace(c *ui.Context, p *palette, st store) {
 	}
 	dirty := a.ruleShownID != "" && a.scriptDraft != "" && a.scriptDraft != a.scriptLoadedText(st.rules)
 
-	ui.Split(c, &ruleListW,
-		func() {
-			ui.Column(c).Fill().Padding(0, 6, 0, 0).Children(func() {
-				panel(c.Key("rules:list"), p).Grow(1).MinHeight(0).Children(func() { a.ruleList(c, p, st) })
-			})
-		},
-		func() {
-			ui.Column(c).Fill().Padding(0, 0, 0, 6).Children(func() {
-				panel(c.Key("rules:editor"), p).Grow(1).MinHeight(0).Children(func() { a.ruleEditor(c, p, st, dirty) })
-			})
-		},
-	).Grow(1).MinHeight(0)
+	panel(c.Key("rules:workspace"), p).Grow(1).MinHeight(0).Children(func() {
+		ui.Split(c, &ruleListW,
+			func() { a.ruleList(c, p, st) },
+			func() { a.ruleEditor(c, p, st, dirty) },
+		).Grow(1).MinHeight(0)
+	})
 }
 
 // ruleList is the rules as a column: each under its mark, filled
@@ -84,7 +78,7 @@ func (a *app) ruleList(c *ui.Context, p *palette, st store) {
 			inForce++
 		}
 	}
-	ui.Column(c).Fill().MinHeight(0).Children(func() {
+	ui.Column(c).Fill().MinHeight(0).Background(p.surface.Mix(p.editor, 0.36)).Children(func() {
 		ui.Column(c).FillWidth().Shrink(0).Padding(14, 16, 10).Gap(5).Children(func() {
 			ui.Text(c, "Rule library").FontSize(14).FontWeight(600).TextColor(p.text).SingleLine()
 			sub := fmt.Sprintf("%d enabled", inForce)
@@ -111,9 +105,7 @@ func (a *app) ruleRow(c *ui.Context, p *palette, r api.Rule) {
 		Radius(8).AlignItems(ui.Center).Label(ruleLabel(r)).Selected(on)
 	switch {
 	case on:
-		// The chosen rule keeps a fine line of the accent round its tint,
-		// which holds the row's edge on a ground nearly its own color.
-		b.Background(p.active).InsetShadow(0, 0, 0, 1, p.accent.Alpha(0.14))
+		b.Background(p.active)
 	case b.Pressed():
 		b.Background(p.text.Alpha(0.06))
 	case b.Hovered():

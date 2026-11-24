@@ -111,11 +111,11 @@ func (a *app) gwStatusCard(c *ui.Context, p *palette, st store) {
 				FontSize(13).TextColor(p.muted).FillWidth()
 			return
 		}
-		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Stretch).Children(func() {
+		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Stretch).Radius(7).Background(p.editor).Children(func() {
 			gwMetric(c, p, "Listen address", st.gwStatus.ListenAddr, "", p.faint).Grow(2)
 			gwMetric(c, p, "Generation", fmt.Sprintf("v%d", st.gwStatus.SnapshotGeneration), "", p.faint)
-			gwMetric(c, p, "Plans", fmt.Sprint(st.gwStatus.PlanCount), "Configured", p.faint)
-			gwMetric(c, p, "Routes", fmt.Sprint(st.gwStatus.RouteCount), "Configured", p.faint)
+			gwMetric(c, p, "Plans", fmt.Sprint(st.gwStatus.PlanCount), "", p.faint)
+			gwMetric(c, p, "Routes", fmt.Sprint(st.gwStatus.RouteCount), "", p.faint)
 		})
 		ui.Text(c, gwPlanCounts(st.gwStatus)).FillWidth().FontSize(12).TextColor(p.muted)
 		if len(st.gwStatus.Diagnostics) > 0 {
@@ -665,7 +665,7 @@ func gwUsageMetrics(c *ui.Context, p *palette, total api.GatewayUsageBucket) {
 	if total.Retries > 0 {
 		requestDetail += " · " + gwRetries(total.Retries)
 	}
-	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Stretch).Children(func() {
+	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Stretch).Radius(7).Background(p.editor).Children(func() {
 		gwMetric(c, p, "Requests", gwCount(total.Requests), requestDetail, errorTone)
 		gwMetric(c, p, "Tokens", gwCount(total.TotalTokens), "", p.faint)
 		gwMetric(c, p, "Cache hit", gwCacheHit(total), "", p.faint)

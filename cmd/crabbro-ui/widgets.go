@@ -48,7 +48,7 @@ func hairline(c *ui.Context, p *palette) ui.Element {
 }
 
 func workspaceTitle(c *ui.Context, p *palette, title string) ui.Element {
-	return ui.Text(c, title).FontSize(26).FontWeight(600).LetterSpacing(-0.5).TextColor(p.text).SingleLine()
+	return ui.Text(c, title).FontSize(23).FontWeight(600).LetterSpacing(-0.4).TextColor(p.text).SingleLine()
 }
 
 func statusIcon(c *ui.Context, p *palette, icon *ui.SVG, tone ui.Color) {
@@ -133,8 +133,7 @@ func stateDot(c *ui.Context, p *palette, col ui.Color, label string) {
 }
 
 func panel(c *ui.Context, p *palette) ui.Element {
-	return ui.Column(c).Background(p.surface).Border(1, p.border).Radius(11).
-		Shadow(0, 1, 2, 0, p.shade()).Clip()
+	return ui.Column(c).Background(p.surface).Border(1, p.border).Radius(9).Clip()
 }
 
 // statusText is a response status as a number in mono, in the color of

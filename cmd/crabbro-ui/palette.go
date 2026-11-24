@@ -7,17 +7,6 @@ import (
 	"github.com/egoist/mygo/ui/editor"
 )
 
-// lift stands a faced control on the shadow the panels have, so a button
-// reads as a thing above the page rather than an outline on it; on the
-// dark appearance it is lit along its top edge as well.
-func (p *palette) lift(e ui.Element) ui.Element {
-	e.Shadow(0, 1, 1.5, 0, p.shade())
-	if p.dark {
-		e.InsetShadow(0, 1, 0, 0, ui.RGBA(255, 255, 255, 0.045))
-	}
-	return e
-}
-
 // codeThemes keeps the code theme of each ground, by the appearance and
 // the face it was made for, so an editor is handed the same theme frame
 // after frame.
@@ -183,9 +172,9 @@ func darkPalette() *palette {
 
 func lightPalette() *palette {
 	p := &palette{
-		editor:         ui.Hex("#f6f4f2"),
-		chrome:         ui.Hex("#efebe8"),
-		border:         ui.Hex("#e0d9d4"),
+		editor:         ui.Hex("#f6f5f3"),
+		chrome:         ui.Hex("#f0eeeb"),
+		border:         ui.Hex("#e2ded9"),
 		hover:          ui.RGBA(41, 29, 26, 0.055),
 		active:         ui.RGBA(179, 57, 38, 0.09),
 		text:           ui.Hex("#261f20"),
@@ -247,17 +236,8 @@ func (p *palette) quiet(c *ui.Context) {
 	t := *c.Theme()
 	t.Accent, t.AccentText, t.SurfaceHover = p.active, p.text, p.hover
 	t.Background, t.Surface, t.TextMuted = p.surface, p.editor, p.muted
-	t.Spacing = 4.25
+	t.Spacing = 3.9
 	c.SetTheme(&t)
-}
-
-// shade is the shadow under a raised panel: barely there on the light
-// appearance, deeper on the dark, where a shadow has less to show against.
-func (p *palette) shade() ui.Color {
-	if p.dark {
-		return ui.RGBA(0, 0, 0, 0.35)
-	}
-	return ui.RGBA(70, 40, 20, 0.07)
 }
 
 // wash is how strongly a color tints the ground behind text of the same

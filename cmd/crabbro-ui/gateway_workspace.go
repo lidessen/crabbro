@@ -76,8 +76,7 @@ func gwCardColumns(c *ui.Context, columns, count int, draw func(int)) {
 }
 
 func gwMetric(c *ui.Context, p *palette, label, value, detail string, detailTone ui.Color) ui.Element {
-	return ui.Column(c).Grow(1).Basis(0).MinWidth(0).Padding(12).Gap(4).
-		Radius(8).Background(p.editor).Border(1, p.border).Children(func() {
+	return ui.Column(c).Grow(1).Basis(0).MinWidth(0).Padding(10, 12).Gap(4).Children(func() {
 		ui.Text(c, label).FontSize(11.5).FontWeight(500).TextColor(p.muted).FillWidth()
 		ui.Text(c, value).FontSize(18).FontWeight(600).Font(mono()).TextColor(p.text).FillWidth()
 		if detail != "" {

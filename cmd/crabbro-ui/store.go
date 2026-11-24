@@ -189,6 +189,8 @@ type app struct {
 	searchAt         time.Time
 	showHidden       bool
 	reqState         ui.ListState
+	reqListWidth     float32 // percentage of the wide split
+	reqListHeight    float32 // percentage of the stacked split
 	reqSel           int
 	reqShownID       string
 	pendingRequestID string
@@ -230,6 +232,8 @@ func newApp(c *client.Client, ctx context.Context) *app {
 		ctx:           ctx,
 		page:          pageTrajectory,
 		gwUsageWinIdx: 1,
+		reqListWidth:  58,
+		reqListHeight: 42,
 		mirrorUsage:   gwUsageRequest{window: "24h"},
 	}
 	a.refresh = make(chan refreshMsg, 1)

@@ -72,18 +72,18 @@ func sidebarWidth(c *ui.Context) float32 {
 	if width, _ := c.Size(); width < 1060 {
 		return 58
 	}
-	return 158
+	return 150
 }
 
 func (a *app) sidebar(c *ui.Context, p *palette) {
 	width := sidebarWidth(c)
 	compact := width < 100
-	ui.Column(c.Key("workspaces")).Width(width).Shrink(0).Padding(14, 9).Gap(5).
+	ui.Column(c.Key("workspaces")).Width(width).Shrink(0).Padding(12, 9).Gap(3).
 		Background(p.chrome).BorderWidth(0, 1, 0, 0).BorderColor(p.border).Label("Workspaces").Children(func() {
 		for _, workspace := range workspaces {
 			on := a.page == workspace.key
-			b := ui.ButtonBase(c.Key("nav:" + workspace.key)).FillWidth().Height(38).Shrink(0).
-				Gap(10).Radius(8).AlignItems(ui.Center).Label(workspace.title).Tooltip(workspace.title).Selected(on)
+			b := ui.ButtonBase(c.Key("nav:" + workspace.key)).FillWidth().Height(36).Shrink(0).
+				Gap(9).Radius(7).AlignItems(ui.Center).Label(workspace.title).Tooltip(workspace.title).Selected(on)
 			if compact {
 				b.Justify(ui.Center)
 			} else {
@@ -92,13 +92,16 @@ func (a *app) sidebar(c *ui.Context, p *palette) {
 			ink, iconInk := p.muted, p.faint
 			switch {
 			case on:
-				b.Background(p.active).InsetShadow(0, 0, 0, 1, p.accent.Alpha(0.18))
-				ink, iconInk = p.accent, p.accent
+				b.Background(p.surface).Border(1, p.border)
+				ink, iconInk = p.text, p.accent
 			case b.Pressed(), b.Hovered():
 				b.Background(p.hover)
 				ink, iconInk = p.text, p.text
 			}
 			b.Transition(hoverFade).Children(func() {
+				if on && !compact {
+					ui.Box(c).Absolute().Left(0).Top(10).Width(2).Height(16).Radius(1).Background(p.accent)
+				}
 				ui.Icon(c, workspace.icon).FontSize(16).TextColor(iconInk).Shrink(0)
 				if !compact {
 					ui.Text(c, workspace.title).FontSize(13).FontWeight(500).TextColor(ink).SingleLine()
@@ -117,20 +120,18 @@ func (a *app) recordControls(c *ui.Context, p *palette, st store) {
 	// Read the session from the one snapshot: asking the store twice lets it
 	// change in between, and a session gone by the second look is a nil.
 	if s := st.session; s != nil && s.Recording && s.Name != "scope" {
-		ui.Row(c.Key("rec-pill")).Gap(7).AlignItems(ui.Center).Height(26).Padding(0, 11).
-			Radius(13).Background(p.removed.Alpha(0.09)).InsetShadow(0, 0, 0, 1, p.removed.Alpha(0.14)).Children(func() {
+		ui.Row(c.Key("rec-pill")).Gap(7).AlignItems(ui.Center).Height(26).Padding(0, 6).Children(func() {
 			// The dot breathes while the daemon records: 0.7s down and
 			// back, a 1.4s round, as the daemon page's does.
 			dot := ui.Box(c.Key("rec-pill-dot")).Width(7).Height(7).Radius(4).Background(p.removed).
 				Shadow(0, 0, 0, 2.5, p.removed.Alpha(0.18))
 			dot.Opacity(dot.Keyframes("breathe", []ui.Keyframe{
 				{Value: 1},
-				{At: 700 * time.Millisecond, Value: 0.35, Ease: ui.EaseInOut},
+				{At: 700 * time.Millisecond, Value: 0.55, Ease: ui.EaseInOut},
 			}, ui.KeyframeOptions{Repeat: ui.RepeatForever, Alternate: true}))
-			ui.Text(c, "Recording").FontSize(12).FontWeight(600).TextColor(p.removed).SingleLine()
+			ui.Text(c, "Recording").FontSize(12).FontWeight(500).TextColor(p.text).SingleLine()
 			if run := c.Now().Sub(s.StartedAt); run >= 0 {
-				ui.Text(c, clockLabel(run)).FontSize(11).Font(mono()).TextColor(p.removed.Alpha(0.8)).SingleLine().
-					ContentTransition(ui.ContentTransition{Numeric: true})
+				ui.Text(c, clockLabel(run)).FontSize(11).Font(mono()).TextColor(p.muted).SingleLine()
 				// Draw again as the second flips, so the clock keeps time
 				// while nothing else moves.
 				c.After(time.Second - run%time.Second + 5*time.Millisecond)
@@ -232,7 +233,6 @@ func (a *app) plainButton(c *ui.Context, key, label string, icon *ui.SVG, faced 
 	col := p.muted
 	if faced {
 		b.Background(p.surface).Border(1, p.border)
-		p.lift(ui.Element(b))
 		col = p.text
 	}
 	switch {
