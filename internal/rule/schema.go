@@ -26,6 +26,8 @@ type ruleOutput struct {
 
 type ruleAction struct {
 	Type           string         `json:"type"`
+	Protocol       any            `json:"protocol,omitempty"`
+	Model          any            `json:"model,omitempty"`
 	Params         map[string]any `json:"params,omitempty"`
 	Status         any            `json:"status,omitempty"`
 	Headers        map[string]any `json:"headers,omitempty"`
@@ -56,6 +58,8 @@ func (a *ruleAction) liftFlatParams() {
 		}
 		a.Params[key] = v
 	}
+	lift("protocol", a.Protocol)
+	lift("model", a.Model)
 	lift("status", a.Status)
 	if len(a.Headers) > 0 {
 		lift("headers", a.Headers)
@@ -134,12 +138,12 @@ func ValidateOutput(out ruleOutput) ([]shared.RuleAction, []string) {
 	terminals := 0
 	for _, a := range validated {
 		switch a.Type {
-		case shared.ActionBlock, shared.ActionMockResponse, shared.ActionAbort:
+		case shared.ActionBlock, shared.ActionMockResponse, shared.ActionAbort, shared.ActionGatewayOffload:
 			terminals++
 		}
 	}
 	if terminals > 1 {
-		return nil, []string{"multiple terminal actions (block, mockResponse, abort); none applied"}
+		return nil, []string{"multiple terminal actions; none applied"}
 	}
 
 	return validated, nil
@@ -149,6 +153,16 @@ func validateAction(a ruleAction) (shared.RuleAction, error) {
 	actionType := shared.RuleActionType(a.Type)
 
 	switch actionType {
+	case shared.ActionGatewayOffload:
+		protocol, ok := a.Params["protocol"].(string)
+		if !ok || (protocol != "responses" && protocol != "anthropic-messages") {
+			return shared.RuleAction{}, fmt.Errorf("gateway-offload requires a supported protocol")
+		}
+		model, ok := a.Params["model"].(string)
+		if !ok || strings.TrimSpace(model) != model || model == "" {
+			return shared.RuleAction{}, fmt.Errorf("gateway-offload requires a target model")
+		}
+		return shared.RuleAction{Type: actionType, Params: map[string]any{"protocol": protocol, "model": model}}, nil
 	case shared.ActionTag:
 		return validateTag(a.Params)
 	case shared.ActionBlock:

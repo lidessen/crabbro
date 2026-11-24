@@ -249,6 +249,10 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	g.serveIngress(w, r)
+}
+
+func (g *Gateway) serveIngress(w http.ResponseWriter, r *http.Request) {
 	var body []byte
 	if r.Body != nil && r.Method == http.MethodPost {
 		lr := io.LimitReader(r.Body, g.maxBody+1)

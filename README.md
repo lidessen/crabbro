@@ -283,6 +283,7 @@ request:
 | `crabbro.set-request-header` | `name`, `value` | Set a request header |
 | `crabbro.remove-request-header` | `name` | Remove a request header |
 | `crabbro.rewrite-url` | `url` (http/https, no userinfo) | Change URL, dial host, TLS name, and Host together |
+| `crabbro.gateway-offload` | `protocol: responses` or `anthropic-messages`, `model: plan/model` or a gateway route model | Send a sanitized request to the local gateway and skip the subscription upstream |
 | `crabbro.mock-response` | `status`, optional `headers`, optional `body` | Skip upstream |
 | `crabbro.block` | `status`, optional `body` | Skip upstream with that status |
 | `crabbro.abort` | none | Reject with HTTP 403 |
@@ -296,9 +297,14 @@ request:
 | `crabbro.drop-frame` | none | Drop a WebSocket text/binary frame |
 
 A pipeline cannot produce more than one of `crabbro.mock-response`,
-`crabbro.block`, and `crabbro.abort`. `failureMode` on the stored rule is
+`crabbro.block`, `crabbro.abort`, and `crabbro.gateway-offload`. `failureMode` on the stored rule is
 `fail-open` (default) or `fail-closed`. fail-open skips a rule that errors.
-fail-closed answers 403.
+fail-closed answers 403. Gateway offload requires an enabled local gateway;
+invalid input or an unavailable gateway returns an error without forwarding to
+the original upstream. Only allowlisted protocol fields and the configured
+model enter the gateway request and proxy capture; subscription headers and
+query parameters are excluded. Streaming gateway responses pass through without
+response rule rewrites.
 
 A `run` stage returns `{match, actions}` against the same `ctx` the old
 script rules saw (`ctx.request`, `ctx.response` with `status`, `headers`,

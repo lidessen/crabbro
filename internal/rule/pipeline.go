@@ -19,6 +19,7 @@ var builtinPhase = map[string]string{
 	"crabbro.mock-response":          "request",
 	"crabbro.block":                  "request",
 	"crabbro.abort":                  "request",
+	"crabbro.gateway-offload":        "request",
 	"crabbro.set-response-header":    "response",
 	"crabbro.remove-response-header": "response",
 	"crabbro.set-response-status":    "response",
@@ -692,7 +693,7 @@ func clampToDeadline(scope map[string]any, limit time.Duration) (time.Duration, 
 func hasTerminal(actions []shared.RuleAction) bool {
 	for _, a := range actions {
 		switch a.Type {
-		case shared.ActionMockResponse, shared.ActionBlock, shared.ActionAbort:
+		case shared.ActionMockResponse, shared.ActionBlock, shared.ActionAbort, shared.ActionGatewayOffload:
 			return true
 		}
 	}
@@ -869,6 +870,8 @@ func builtinAction(uses string, with map[string]any) (shared.RuleAction, error) 
 		typ = shared.ActionBlock
 	case "crabbro.abort":
 		typ = shared.ActionAbort
+	case "crabbro.gateway-offload":
+		typ = shared.ActionGatewayOffload
 	case "crabbro.set-response-header":
 		typ = shared.ActionSetResponseHeader
 	case "crabbro.remove-response-header":

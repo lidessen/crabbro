@@ -112,6 +112,7 @@ const (
 	EventGatewayQuotaReset        = api.EventGatewayQuotaReset
 	EventGatewayQuotaExpiring     = api.EventGatewayQuotaExpiring
 
+	ActionGatewayOffload       = api.ActionGatewayOffload
 	ActionAbort                = api.ActionAbort
 	ActionBlock                = api.ActionBlock
 	ActionMockResponse         = api.ActionMockResponse

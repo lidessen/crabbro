@@ -41,9 +41,66 @@ type Exchange struct {
 	failureStage string
 	bypass       bool
 
-	matched       []*shared.Rule
-	upgradeConn   net.Conn
-	clientPreface []byte
+	matched        []*shared.Rule
+	upgradeConn    net.Conn
+	clientPreface  []byte
+	captureStarted bool
+	offloaded      bool
+	events         []exchangeEvent
+	activities     []exchangeActivity
+	sourceHeader   http.Header
+	sourceURL      *url.URL
+}
+
+type exchangeActivity struct {
+	rule  *shared.Rule
+	phase string
+}
+
+type exchangeEvent struct {
+	typ     shared.EventType
+	payload any
+}
+
+// GatewayOffloader executes a sanitized gateway ingress request in process.
+type GatewayOffloader interface {
+	Offload(*http.Request) (*http.Response, error)
+}
+
+func (p *Proxy) startCapture(ex *Exchange) {
+	if ex.captureStarted || ex.bypass {
+		return
+	}
+	ex.captureStarted = true
+	if p.Sink != nil {
+		ex.record = p.Sink.Start(ex.record)
+	}
+	p.emit(shared.EventRequestStarted, ex.record.ID, map[string]any{"method": ex.record.Method, "url": ex.record.URL, "host": ex.record.Host, "sessionId": ex.record.SessionID, "hidden": ex.record.Hidden})
+	p.emit(shared.EventRequestHeaders, ex.record.ID, nil)
+	if len(ex.preview) > 0 {
+		ex.record.RequestBodyBytes = int64(len(ex.preview))
+		ex.record.RequestBodyTruncated = ex.previewTruncated
+		if p.Sink != nil {
+			ex.record.RequestBodyRef = p.Sink.StoreBody(append([]byte(nil), ex.preview...))
+			p.emit(shared.EventRequestBodyAvailable, ex.record.ID, nil)
+		}
+	}
+	for _, event := range ex.events {
+		p.emit(event.typ, ex.record.ID, event.payload)
+	}
+	ex.events = nil
+	for _, activity := range ex.activities {
+		p.noteApply(ex, activity.rule, activity.phase)
+	}
+	ex.activities = nil
+}
+
+func (ex *Exchange) emit(p *Proxy, typ shared.EventType, payload any) {
+	if ex.captureStarted {
+		p.emit(typ, ex.record.ID, payload)
+	} else {
+		ex.events = append(ex.events, exchangeEvent{typ, payload})
+	}
 }
 
 // ExchangeHandler runs one stage of the onion and returns the response outer
@@ -99,6 +156,7 @@ func (p *Proxy) serveClientExchange(w http.ResponseWriter, r *http.Request, ingr
 
 	handler := compose(p.ruleMiddleware(ex), p.upstreamTerminal)
 	resp, runErr := handler(ex)
+	p.startCapture(ex)
 	if runErr != nil {
 		var rej *errReject
 		if errors.As(runErr, &rej) {
@@ -189,15 +247,6 @@ func (p *Proxy) newExchange(r *http.Request, ingress string, tunnelID shared.Req
 		ex.outbound = out
 		return ex, nil
 	}
-	if p.Sink != nil {
-		record = p.Sink.Start(record)
-	}
-
-	p.emit(shared.EventRequestStarted, record.ID, map[string]any{
-		"method": record.Method, "url": record.URL, "host": record.Host,
-		"sessionId": record.SessionID, "hidden": record.Hidden,
-	})
-	p.emit(shared.EventRequestHeaders, record.ID, nil)
 
 	ctx := r.Context()
 	out, err := http.NewRequestWithContext(ctx, r.Method, target.String(), nil)
@@ -217,11 +266,13 @@ func (p *Proxy) newExchange(r *http.Request, ingress string, tunnelID shared.Req
 	}
 
 	ex := &Exchange{
-		ctx:       ctx,
-		record:    record,
-		outbound:  out,
-		started:   start,
-		policyGen: policyGen,
+		ctx:          ctx,
+		record:       record,
+		outbound:     out,
+		started:      start,
+		policyGen:    policyGen,
+		sourceHeader: r.Header.Clone(),
+		sourceURL:    target,
 	}
 	p.prepareRequestBody(ex, r)
 	return ex, nil
@@ -282,15 +333,6 @@ func (p *Proxy) prepareRequestBody(ex *Exchange, r *http.Request) {
 	ex.reqCapture = &captureReader{r: stream, limit: limit}
 	ex.outbound.Body = io.NopCloser(ex.reqCapture)
 	ex.outbound.ContentLength = r.ContentLength
-	if len(preview) > 0 && p.Sink != nil {
-		ex.record.RequestBodyRef = p.Sink.StoreBody(append([]byte(nil), preview...))
-		ex.record.RequestBodyBytes = int64(len(preview))
-		ex.record.RequestBodyTruncated = ex.previewTruncated
-		p.emit(shared.EventRequestBodyAvailable, ex.record.ID, nil)
-	} else if len(preview) > 0 {
-		ex.record.RequestBodyBytes = int64(len(preview))
-		ex.record.RequestBodyTruncated = ex.previewTruncated
-	}
 }
 
 func (p *Proxy) enabledRuleCount() int {
@@ -357,7 +399,7 @@ func (m *ruleMiddleware) Wrap(next ExchangeHandler) ExchangeHandler {
 		if result.Error != "" || !result.SchemaValid {
 			trace.Matched = false
 			ex.traces = append(ex.traces, trace)
-			m.proxy.emit(shared.EventRuleEvaluated, ex.record.ID, map[string]any{
+			ex.emit(m.proxy, shared.EventRuleEvaluated, map[string]any{
 				"ruleId": m.rule.ID, "matched": false, "error": result.Error,
 			})
 			if m.rule.FailureMode == "fail-closed" {
@@ -368,7 +410,7 @@ func (m *ruleMiddleware) Wrap(next ExchangeHandler) ExchangeHandler {
 		}
 		if !result.Matched {
 			ex.traces = append(ex.traces, trace)
-			m.proxy.emit(shared.EventRuleEvaluated, ex.record.ID, map[string]any{
+			ex.emit(m.proxy, shared.EventRuleEvaluated, map[string]any{
 				"ruleId": m.rule.ID, "matched": false,
 			})
 			return next(ex)
@@ -378,15 +420,20 @@ func (m *ruleMiddleware) Wrap(next ExchangeHandler) ExchangeHandler {
 		trace.Actions = result.Actions
 		ex.traces = append(ex.traces, trace)
 		ex.matched = append(ex.matched, m.rule)
-		m.proxy.emit(shared.EventRuleEvaluated, ex.record.ID, map[string]any{
+		ex.emit(m.proxy, shared.EventRuleEvaluated, map[string]any{
 			"ruleId": m.rule.ID, "matched": true,
 		})
-		m.proxy.emit(shared.EventRuleApplied, ex.record.ID, map[string]any{
+		ex.emit(m.proxy, shared.EventRuleApplied, map[string]any{
 			"ruleId": m.rule.ID, "actions": result.Actions,
 		})
-		m.proxy.noteApply(ex, m.rule, "request")
 
 		reqActions, respActions := splitStage(result.Actions)
+		for _, action := range reqActions {
+			if action.Type == shared.ActionGatewayOffload {
+				return m.proxy.offload(ex, action)
+			}
+		}
+		m.proxy.noteApply(ex, m.rule, "request")
 		synthetic, err := applyRequestPatch(ex, reqActions)
 		if err != nil {
 			return nil, err
@@ -402,7 +449,7 @@ func (m *ruleMiddleware) Wrap(next ExchangeHandler) ExchangeHandler {
 			return synthetic, nil
 		}
 		resp, err := next(ex)
-		if err != nil || resp == nil {
+		if err != nil || resp == nil || ex.offloaded {
 			return resp, err
 		}
 		if len(respActions) > 0 {
@@ -475,7 +522,7 @@ func (m *ruleMiddleware) applyResponsePhase(ex *Exchange, resp *http.Response) (
 		}
 		return resp, nil
 	}
-	m.proxy.emit(shared.EventRuleApplied, ex.record.ID, map[string]any{
+	ex.emit(m.proxy, shared.EventRuleApplied, map[string]any{
 		"ruleId": m.rule.ID, "phase": "response", "actions": respActions,
 	})
 	m.proxy.noteApply(ex, m.rule, "response")
@@ -484,6 +531,10 @@ func (m *ruleMiddleware) applyResponsePhase(ex *Exchange, resp *http.Response) (
 
 func (p *Proxy) noteApply(ex *Exchange, rl *shared.Rule, phase string) {
 	if p == nil || p.Sink == nil || rl == nil || ex == nil || ex.record == nil {
+		return
+	}
+	if !ex.captureStarted {
+		ex.activities = append(ex.activities, exchangeActivity{rule: rl, phase: phase})
 		return
 	}
 	p.Sink.NoteActivity("rule_applied", ex.record.SessionID, string(ex.record.ID), string(rl.ID), strings.TrimSpace(phase+" "+rl.Name))
@@ -552,7 +603,65 @@ func (ex *Exchange) viewRequest() *shared.Request {
 	}
 }
 
+func (p *Proxy) offload(ex *Exchange, action shared.RuleAction) (*http.Response, error) {
+	ex.offloaded = true
+	ex.decision = "gateway-offload"
+	protocol, _ := action.Params["protocol"].(string)
+	model, _ := action.Params["model"].(string)
+	source := ex.outbound.Clone(ex.ctx)
+	source.Header = ex.sourceHeader.Clone()
+	source.URL = ex.sourceURL
+	source.Body = ex.outbound.Body
+	clean, err := buildOffloadRequest(source, protocol, model, shared.DefaultMaxGatewayRequestBody)
+	// No request-derived metadata or rule output is committed on this path.
+	ex.record = &shared.Request{StartedAt: ex.started, Kind: "proxy", Method: http.MethodPost, PolicyGeneration: ex.policyGen, RuleGeneration: ex.ruleGen}
+	ex.traces, ex.tags, ex.events, ex.activities = nil, nil, nil, nil
+	ex.reqCapture = nil
+	ex.preview = nil
+	ex.previewTruncated = false
+	if err == nil {
+		ex.outbound = clean
+		ex.record.Method, ex.record.Scheme, ex.record.Host, ex.record.Path = clean.Method, clean.URL.Scheme, clean.URL.Host, clean.URL.Path
+		ex.record.URL, ex.record.OriginalURL, ex.record.EffectiveURL = clean.URL.String(), clean.URL.String(), clean.URL.String()
+		ex.record.RequestHeaderList, ex.record.RequestHeaders = headerFields(clean.Header)
+		copyBody, copyErr := clean.GetBody()
+		if copyErr != nil {
+			err = copyErr
+		} else {
+			body, readErr := io.ReadAll(copyBody)
+			copyBody.Close()
+			if readErr != nil {
+				err = readErr
+			} else {
+				ex.preview = body
+				if len(ex.preview) > shared.MaxBodySize {
+					ex.preview = ex.preview[:shared.MaxBodySize]
+					ex.previewTruncated = true
+				}
+			}
+		}
+	} else {
+		ex.outbound = nil
+	}
+	p.startCapture(ex)
+	if err != nil {
+		ex.failureStage = "gateway_offload"
+		return nil, errors.New("invalid gateway offload request")
+	}
+	if p.GatewayOffloader == nil {
+		ex.failureStage = "gateway_offload"
+		return nil, errors.New("gateway unavailable")
+	}
+	resp, err := p.GatewayOffloader.Offload(clean)
+	if err != nil {
+		ex.failureStage = "gateway_offload"
+		return nil, errors.New("gateway offload failed")
+	}
+	return resp, nil
+}
+
 func (p *Proxy) upstreamTerminal(ex *Exchange) (*http.Response, error) {
+	p.startCapture(ex)
 	if ex.outbound.Body == nil {
 		ex.outbound.Body = http.NoBody
 		ex.outbound.ContentLength = 0

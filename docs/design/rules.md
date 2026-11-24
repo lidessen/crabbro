@@ -85,6 +85,7 @@ Built-ins:
 | `crabbro.set-request-header` | request | mutate |
 | `crabbro.remove-request-header` | request | mutate |
 | `crabbro.rewrite-url` | request | mutate |
+| `crabbro.gateway-offload` | request | mutate. Terminates forwarding and sends a sanitized request to the local gateway using `with.protocol` (`responses` or `anthropic-messages`) and `with.model` (a gateway route model or `plan/model`). Errors do not fall back to the original upstream. |
 | `crabbro.mock-response` | request | mutate. Later stages in that pipeline do not run. The response pipeline of this rule still runs on the synthetic response. |
 | `crabbro.block` | request | mutate. Same short-circuit. |
 | `crabbro.abort` | request | mutate. HTTP 403. |

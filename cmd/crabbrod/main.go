@@ -170,11 +170,6 @@ func run() error {
 		log.Printf("MITM: enabled with an empty allowlist; no host will be intercepted until a pattern is added")
 	}
 
-	if err := pxy.Start(); err != nil {
-		return fmt.Errorf("starting proxy: %w", err)
-	}
-	log.Printf("proxy listening on %s", pxy.Addr())
-
 	// Create stores.
 	fixtureStore, err := fixture.New(*fixtureDir)
 	if err != nil {
@@ -187,7 +182,7 @@ func run() error {
 	ruleCountFn := ruleStore.Count
 
 	// Start control API.
-	apiSrv := api.New(*udsPath, *tcpAddr, rb, bodyCache, eventHub, fixtureStore, ruleStore, ruleEngine, pxy.Addr(), mitmHandler)
+	apiSrv := api.New(*udsPath, *tcpAddr, rb, bodyCache, eventHub, fixtureStore, ruleStore, ruleEngine, *proxyAddr, mitmHandler)
 	apiSrv.Version = "0.1.0"
 	apiSrv.RequestCountFn = pxy.RequestCount
 	apiSrv.RuleCountFn = ruleCountFn
@@ -251,6 +246,7 @@ func run() error {
 			pxy.Stop()
 			return fmt.Errorf("starting gateway: %w", err)
 		}
+		pxy.GatewayOffloader = gw
 		apiSrv.Gateway = gw
 		decClient := decision.New(gw, "decision")
 		apiSrv.Decision = decClient
@@ -269,6 +265,15 @@ func run() error {
 	} else {
 		log.Printf("gateway:        disabled")
 	}
+
+	if err := pxy.Start(); err != nil {
+		if gw != nil {
+			_ = gw.Stop()
+		}
+		return fmt.Errorf("starting proxy: %w", err)
+	}
+	log.Printf("proxy listening on %s", pxy.Addr())
+	apiSrv.ProxyAddr = pxy.Addr()
 
 	if err := apiSrv.Start(); err != nil {
 		if gw != nil {

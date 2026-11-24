@@ -24,11 +24,12 @@ import (
 // Proxy is an HTTP forward proxy that captures request/response metadata and
 // emits lifecycle events.
 type Proxy struct {
-	ListenAddr  string
-	Sink        capture.ExchangeSink
-	RuleStore   *rule.RuleStore
-	RuleEngine  *rule.RuleEngine
-	ReadTimeout time.Duration
+	ListenAddr       string
+	Sink             capture.ExchangeSink
+	RuleStore        *rule.RuleStore
+	RuleEngine       *rule.RuleEngine
+	ReadTimeout      time.Duration
+	GatewayOffloader GatewayOffloader
 
 	// MITMHandler performs the client-facing TLS handshake. Interception
 	// decisions come from Policy, not from a second enabled flag.

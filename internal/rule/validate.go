@@ -314,8 +314,8 @@ func walkPipeline(path string, stages []Stage, phase string, known map[string]bo
 			}
 		default:
 			out = append(out, checkAction(p, st, phase, known, false, offline, rt)...)
-			if st.Uses == "crabbro.mock-response" || st.Uses == "crabbro.block" || st.Uses == "crabbro.abort" {
-				if terminals[st.Uses] || (st.Uses == "crabbro.mock-response" && terminals["crabbro.block"]) || (st.Uses == "crabbro.block" && terminals["crabbro.mock-response"]) || (terminals["crabbro.abort"] && st.Uses != "crabbro.abort") || (st.Uses == "crabbro.abort" && len(terminals) > 0) {
+			if st.Uses == "crabbro.mock-response" || st.Uses == "crabbro.block" || st.Uses == "crabbro.abort" || st.Uses == "crabbro.gateway-offload" {
+				if len(terminals) > 0 {
 					out = append(out, Diagnostic{Path: p, Message: "multiple terminal actions"})
 				}
 				terminals[st.Uses] = true

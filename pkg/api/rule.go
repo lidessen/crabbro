@@ -60,6 +60,8 @@ type StageTrace struct {
 type RuleActionType string
 
 const (
+	// ActionGatewayOffload sends a request to the local gateway.
+	ActionGatewayOffload RuleActionType = "gateway-offload"
 	// ActionAbort aborts the request without a response.
 	ActionAbort RuleActionType = "abort"
 	// ActionBlock aborts the request with a configured response.

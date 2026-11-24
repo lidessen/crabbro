@@ -113,6 +113,12 @@
         "continueOnError": { "type": "boolean" },
         "timeoutMs": { "type": "integer", "minimum": 1, "maximum": 2000 }
       },
+      "allOf": [
+        {
+          "if": { "properties": { "uses": { "const": "crabbro.gateway-offload" } }, "required": ["uses"] },
+          "then": { "required": ["with"], "properties": { "with": { "type": "object", "required": ["protocol", "model"], "properties": { "protocol": { "enum": ["responses", "anthropic-messages"] }, "model": { "type": "string", "pattern": "^\\S(.*\\S)?$" } } } } }
+        }
+      ],
       "oneOf": [
         { "required": ["uses"], "not": { "required": ["run"] } },
         { "required": ["run"], "not": { "required": ["uses"] } }
