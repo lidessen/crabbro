@@ -172,10 +172,11 @@ func (p *Proxy) bridgeWebSocket(w http.ResponseWriter, ex *Exchange, resp *http.
 	ex.ctx = ctx
 	toClient := &wsWriter{dst: client}
 	toUpstream := &wsWriter{dst: ex.upgradeConn, mask: true}
+	var offloads sync.WaitGroup
 	errc := make(chan struct{}, 2)
 	go func() {
 		if ex.captureStarted || len(ex.matched) > 0 {
-			p.relayFramesWithWriters(ex, ex.clientReader(client), toUpstream, toClient, "client", observations)
+			p.relayFramesWithWriters(ex, ex.clientReader(client), toUpstream, toClient, "client", observations, &offloads)
 		} else {
 			_, _ = io.Copy(ex.upgradeConn, ex.clientReader(client))
 		}
@@ -183,7 +184,7 @@ func (p *Proxy) bridgeWebSocket(w http.ResponseWriter, ex *Exchange, resp *http.
 	}()
 	go func() {
 		if ex.captureStarted || len(ex.matched) > 0 {
-			p.relayFramesWithWriters(ex, ex.upgradeConn, toClient, toUpstream, "server", observations)
+			p.relayFramesWithWriters(ex, ex.upgradeConn, toClient, toUpstream, "server", observations, &offloads)
 		} else {
 			_, _ = io.Copy(client, ex.upgradeConn)
 		}
@@ -194,6 +195,7 @@ func (p *Proxy) bridgeWebSocket(w http.ResponseWriter, ex *Exchange, resp *http.
 	client.Close()
 	ex.upgradeConn.Close()
 	<-errc
+	offloads.Wait()
 	ex.record.WebSocketMessages = observations.messages
 	ex.record.WebSocketMessagesTruncated = observations.truncated
 
@@ -234,10 +236,12 @@ func (w *wsWriter) write(opcode byte, payload []byte) error {
 }
 
 func (p *Proxy) relayFrames(ex *Exchange, src io.Reader, dst io.Writer, direction string, mask bool, observations *wsObservations) {
-	p.relayFramesWithWriters(ex, src, &wsWriter{dst: dst, mask: mask}, nil, direction, observations)
+	var offloads sync.WaitGroup
+	p.relayFramesWithWriters(ex, src, &wsWriter{dst: dst, mask: mask}, nil, direction, observations, &offloads)
+	offloads.Wait()
 }
 
-func (p *Proxy) relayFramesWithWriters(ex *Exchange, src io.Reader, dst, reverse *wsWriter, direction string, observations *wsObservations) {
+func (p *Proxy) relayFramesWithWriters(ex *Exchange, src io.Reader, dst, reverse *wsWriter, direction string, observations *wsObservations, offloads *sync.WaitGroup) {
 	var message []byte
 	var messageOpcode byte
 	fragmented := false
@@ -291,10 +295,16 @@ func (p *Proxy) relayFramesWithWriters(ex *Exchange, src io.Reader, dst, reverse
 				if reverse.write(1, []byte(terminal.Params["payload"].(string))) != nil {
 					return
 				}
-			} else if err := p.offloadWebSocket(ex, out, *terminal, reverse); err != nil {
-				if reverse.write(1, []byte(`{"type":"error","error":{"message":"gateway offload failed"}}`)) != nil {
-					return
-				}
+			} else {
+				payload := append([]byte(nil), out...)
+				action := *terminal
+				offloads.Add(1)
+				go func() {
+					defer offloads.Done()
+					if err := p.offloadWebSocket(ex, payload, action, reverse); err != nil && ex.ctx.Err() == nil {
+						_ = reverse.write(1, []byte(`{"type":"error","error":{"message":"gateway offload failed"}}`))
+					}
+				}()
 			}
 		}
 		if drop {
@@ -330,7 +340,18 @@ func (p *Proxy) offloadWebSocket(ex *Exchange, payload []byte, action shared.Rul
 	if resp == nil || resp.Body == nil {
 		return fmt.Errorf("empty gateway response")
 	}
-	defer resp.Body.Close()
+	closed := make(chan struct{})
+	stopClose := context.AfterFunc(ex.ctx, func() {
+		_ = resp.Body.Close()
+		close(closed)
+	})
+	defer func() {
+		if stopClose() {
+			_ = resp.Body.Close()
+		} else {
+			<-closed
+		}
+	}()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("gateway rejected request")
 	}

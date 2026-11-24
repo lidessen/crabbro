@@ -78,14 +78,15 @@ func TestWebSocketRelayConcurrentInjection(t *testing.T) {
 	ex := &Exchange{record: &shared.Request{Path: "/ws"}, matched: []*shared.Rule{wsTerminalRule("    - uses: crabbro.respond-frame\n      with:\n        payload: reply\n")}}
 	p := &Proxy{RuleEngine: rule.NewRuleEngine()}
 	var wg sync.WaitGroup
+	var offloads sync.WaitGroup
 	wg.Add(3)
 	go func() {
 		defer wg.Done()
-		p.relayFramesWithWriters(ex, &clientInput, upstreamWriter, clientWriter, "client", &wsObservations{})
+		p.relayFramesWithWriters(ex, &clientInput, upstreamWriter, clientWriter, "client", &wsObservations{}, &offloads)
 	}()
 	go func() {
 		defer wg.Done()
-		p.relayFramesWithWriters(ex, &serverInput, clientWriter, upstreamWriter, "server", &wsObservations{})
+		p.relayFramesWithWriters(ex, &serverInput, clientWriter, upstreamWriter, "server", &wsObservations{}, &offloads)
 	}()
 	go func() {
 		defer wg.Done()
@@ -97,6 +98,7 @@ func TestWebSocketRelayConcurrentInjection(t *testing.T) {
 		}
 	}()
 	wg.Wait()
+	offloads.Wait()
 	for _, tc := range []struct {
 		name   string
 		frames *bytes.Buffer
@@ -139,7 +141,9 @@ func runWebSocketTerminal(t *testing.T, stage, message string, offloader Gateway
 	req.Header.Set("X-Subscription", "synthetic-header")
 	ex := &Exchange{ctx: context.Background(), outbound: req, sourceURL: req.URL, sourceHeader: req.Header.Clone(), record: &shared.Request{Path: "/ws"}, matched: []*shared.Rule{wsTerminalRule(stage)}}
 	p := &Proxy{RuleEngine: rule.NewRuleEngine(), GatewayOffloader: offloader}
-	p.relayFramesWithWriters(ex, &input, &wsWriter{dst: &upstream, mask: true}, &wsWriter{dst: &client}, "client", &wsObservations{})
+	var offloads sync.WaitGroup
+	p.relayFramesWithWriters(ex, &input, &wsWriter{dst: &upstream, mask: true}, &wsWriter{dst: &client}, "client", &wsObservations{}, &offloads)
+	offloads.Wait()
 	var messages []string
 	for client.Len() > 0 {
 		op, payload, fin, err := readWSFrame(&client)
@@ -305,6 +309,110 @@ func TestWebSocketGatewayOffloadBridge(t *testing.T) {
 	}
 	if err := <-upstreamResult; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestWebSocketGatewayOffloadStalledSSEAllowsPing(t *testing.T) {
+	upstreamResult := make(chan error, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, rw, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			upstreamResult <- err
+			return
+		}
+		defer conn.Close()
+		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+		_, err = fmt.Fprint(rw, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
+		if err == nil {
+			err = rw.Flush()
+		}
+		if err == nil {
+			var op byte
+			var payload []byte
+			op, payload, _, err = readWSFrame(rw.Reader)
+			if err == nil && (op != 9 || string(payload) != "marker") {
+				err = fmt.Errorf("unexpected upstream frame %d %q", op, payload)
+			}
+			if err == nil {
+				err = writeWSFrame(conn, 10, payload, false)
+			}
+		}
+		upstreamResult <- err
+		if err == nil {
+			_, _, _, _ = readWSFrame(rw.Reader)
+		}
+	}))
+	defer upstream.Close()
+	store := rule.NewRuleStore()
+	script := wsTerminalRule("    - uses: crabbro.gateway-offload\n      with:\n        protocol: responses\n        model: local/model\n").Script
+	if _, err := store.Create("terminal", 10, script); err != nil {
+		t.Fatal(err)
+	}
+	events, sendEvent := io.Pipe()
+	defer sendEvent.Close()
+	canceled := make(chan struct{})
+	p := New("127.0.0.1:0", ring.NewRequestBuffer(8), store, rule.NewRuleEngine())
+	p.GatewayOffloader = offloadFunc(func(r *http.Request) (*http.Response, error) {
+		go func() { <-r.Context().Done(); close(canceled) }()
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: events}, nil
+	})
+	if err := p.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer p.Stop()
+	conn, err := net.Dial("tcp", p.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	host := strings.TrimPrefix(upstream.URL, "http://")
+	fmt.Fprintf(conn, "GET http://%s/ws HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n", host, host)
+	reader := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(reader, &http.Request{Method: "GET"})
+	if err != nil || resp.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("handshake: %v %v", resp, err)
+	}
+	if err := writeWSFrame(conn, 1, []byte(`{"input":"hello","stream":true}`), true); err != nil {
+		t.Fatal(err)
+	}
+	go func() { _, _ = io.WriteString(sendEvent, "data: {\"type\":\"response.created\"}\n\n") }()
+	op, payload, _, err := readWSFrame(reader)
+	if err != nil || op != 1 || string(payload) != `{"type":"response.created"}` {
+		t.Fatalf("event: %d %q %v", op, payload, err)
+	}
+	if err := writeWSFrame(conn, 9, []byte("marker"), true); err != nil {
+		t.Fatal(err)
+	}
+	op, payload, _, err = readWSFrame(reader)
+	if err != nil || op != 10 || string(payload) != "marker" {
+		t.Fatalf("pong while SSE remains open: %d %q %v", op, payload, err)
+	}
+	if err := <-upstreamResult; err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.Close()
+	select {
+	case <-canceled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("offload context not canceled when client closed")
+	}
+	closed := make(chan error, 1)
+	go func() {
+		for {
+			if _, err := io.WriteString(sendEvent, "data: pending\n"); err != nil {
+				closed <- err
+				return
+			}
+		}
+	}()
+	select {
+	case err := <-closed:
+		if err == nil {
+			t.Fatal("SSE response body remained open")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("SSE response body was not closed")
 	}
 }
 
