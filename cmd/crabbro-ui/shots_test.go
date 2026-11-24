@@ -19,6 +19,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"github.com/lidessen/crabbro/pkg/api"
 	"github.com/lidessen/crabbro/pkg/client"
 )
 
@@ -40,7 +41,7 @@ func TestShots(t *testing.T) {
 	sock := filepath.Join(dir, "proxy.sock")
 	proxyAddr, tcpAddr := freeAddr(t), freeAddr(t)
 
-	cmd := exec.Command(daemon, "-uds-path", sock, "-tcp-addr", tcpAddr, "-proxy-addr", proxyAddr,
+	cmd := exec.Command(daemon, "-uds-path", sock, "-tcp-addr", tcpAddr, "-proxy-addr", proxyAddr, "-gateway-addr", "127.0.0.1:0",
 		"-history", filepath.Join(dir, "history.db"), "-fixture-dir", filepath.Join(dir, "fx"))
 	cmd.Env = append(os.Environ(), "HOME="+dir)
 	cmd.Stderr = os.Stderr
@@ -176,6 +177,40 @@ func TestShots(t *testing.T) {
 		a.setPage(pageDaemon)
 		shot("daemon-" + sfx)
 	}
+	// Exercise the gateway with deterministic usage data as well as the live
+	// proxy pages above; the daemon fixture has no gateway traffic of its own.
+	liveTester := tt
+	gw := newApp(nil, context.Background())
+	gw.st = store{
+		conn: connConnected, gwStatusFetch: gwFresh, gwPlansFetch: gwFresh, gwUsageFetch: gwFresh,
+		status:       api.DaemonStatus{GatewayEnabled: true},
+		gwStatus:     api.GatewayStatusResponse{Enabled: true},
+		gwPlans:      []api.GatewayPlanStatus{{ID: "coding-primary", Enabled: true, Healthy: true, HasSecret: true, Models: []string{"model-large", "model-fast"}}},
+		gwUsageAsked: "24h", gwUsage: api.GatewayUsageResponse{Window: "24h",
+			Totals: api.GatewayUsageBucket{Requests: 1234, Errors: 12, TotalTokens: 1234567},
+			Buckets: []api.GatewayUsageBucket{
+				{Plan: "coding-primary", Model: "model-large", Requests: 1000, Errors: 10, TotalTokens: 1000000},
+				{Plan: "coding-primary", Model: "model-fast", Requests: 234, Errors: 2, TotalTokens: 234567},
+			}},
+	}
+	gw.page = pageGateway
+	tt = ui.NewTester(gw.view, 1280, 820)
+	tt.SetScale(2)
+	for _, dark := range []bool{false, true} {
+		tt.SetDark(dark)
+		sfx := map[bool]string{false: "light", true: "dark"}[dark]
+		for section, name := range map[gatewaySection]string{gwOverview: "overview", gwPlans: "plans", gwRoutes: "routes", gwUsage: "usage", gwCredentials: "credentials"} {
+			gw.gwSection = section
+			shot("gateway-" + name + "-" + sfx)
+		}
+	}
+	tt.SetSize(860, 540)
+	tt.SetDark(false)
+	gw.gwSection = gwUsage
+	shot("gateway-usage-min")
+	gw.gwSection = gwPlans
+	shot("gateway-plans-min")
+	tt = liveTester
 	tt.SetSize(860, 540)
 	tt.SetDark(false)
 	a.setPage(pageRequests)

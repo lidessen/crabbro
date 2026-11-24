@@ -665,18 +665,28 @@ func gwUsageMetrics(c *ui.Context, p *palette, total api.GatewayUsageBucket) {
 	if total.Retries > 0 {
 		requestDetail += " · " + gwRetries(total.Retries)
 	}
-	ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Stretch).Children(func() {
-		gwMetric(c, p, "Requests", gwCount(total.Requests), requestDetail, errorTone)
-		gwMetric(c, p, "Tokens", gwCount(total.TotalTokens), "", p.faint)
-		gwMetric(c, p, "Cache hit", gwCacheHit(total), "", p.faint)
-		gwMetric(c, p, "Avg. TTFT", gwMilliseconds(total.AvgTTFTMs), "", p.faint)
-		gwMetric(c, p, "Avg. tok/s", gwTokensPerSec(total.AvgTokensPerSec), "", p.faint)
+	ui.Grid(c).FillWidth().Columns(gwGridColumns(c, 150, 5)).Gap(8).AlignItems(ui.Stretch).Children(func() {
+		gwUsageMetric(c, p, "Requests", gwCount(total.Requests), requestDetail, errorTone)
+		gwUsageMetric(c, p, "Tokens", gwCount(total.TotalTokens), "", p.faint)
+		gwUsageMetric(c, p, "Cache hit", gwCacheHit(total), "", p.faint)
+		gwUsageMetric(c, p, "Avg. TTFT", gwMilliseconds(total.AvgTTFTMs), "", p.faint)
+		gwUsageMetric(c, p, "Avg. tok/s", gwTokensPerSec(total.AvgTokensPerSec), "", p.faint)
 	})
 	ui.Row(c).FillWidth().Gap(8).Wrap().Children(func() {
 		ui.Text(c, fmt.Sprintf("%s input · %s output · %s cache read", gwCount(total.InputTokens),
 			gwCount(total.OutputTokens), gwCount(total.CacheReadTokens))).FontSize(11.5).TextColor(p.muted)
 		if total.AvgDurationMs > 0 {
 			ui.Text(c, "·  Avg. duration "+gwMilliseconds(total.AvgDurationMs)).FontSize(11.5).TextColor(p.muted)
+		}
+	})
+}
+
+func gwUsageMetric(c *ui.Context, p *palette, label, value, detail string, detailTone ui.Color) {
+	ui.Column(c).MinWidth(0).Padding(8, 4).Gap(4).Children(func() {
+		ui.Text(c, label).FontSize(11.5).FontWeight(500).TextColor(p.muted).FillWidth()
+		ui.Text(c, value).FontSize(17).FontWeight(600).Font(mono()).TextColor(p.text).FillWidth()
+		if detail != "" {
+			ui.Text(c, detail).FontSize(11).TextColor(detailTone).FillWidth()
 		}
 	})
 }

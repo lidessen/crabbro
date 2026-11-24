@@ -100,6 +100,12 @@ func (p gwUsagePlan) name() string {
 	return p.totals.Plan
 }
 
+// gwUsageAccessValue names each figure because the ranking button is an
+// accessibility leaf and its visible columns are not exposed separately.
+func gwUsageAccessValue(bucket api.GatewayUsageBucket) string {
+	return fmt.Sprintf("%s tokens, %s requests, %s", gwCount(bucket.TotalTokens), gwCount(bucket.Requests), gwErrors(bucket.Errors))
+}
+
 const (
 	gwUsageTokenWidth   = 111
 	gwUsageRequestWidth = 66
@@ -130,7 +136,7 @@ func gwUsageRankingRow(c *ui.Context, p *palette, plan gwUsagePlan, maxTokens in
 	if active && !split {
 		action, icon = "Hide models for ", iconChevronDown
 	}
-	b := ui.ButtonBase(c.Key(plan.key())).Label(action+plan.name()).Justify(ui.Start).
+	b := ui.ButtonBase(c.Key(plan.key())).Label(action+plan.name()).Value(gwUsageAccessValue(plan.totals)).Justify(ui.Start).
 		FillWidth().MinWidth(0).Padding(9, 14).Gap(10).AlignItems(ui.Center)
 	tone := p.teal()
 	switch {
@@ -189,7 +195,8 @@ func gwUsageInspector(c *ui.Context, p *palette, plan gwUsagePlan, split bool) {
 		})
 		for _, model := range plan.models {
 			hairline(c, p)
-			ui.Column(c.Key("gw-usage-model:" + model.Model)).FillWidth().Gap(4).Children(func() {
+			ui.Column(c.Key("gw-usage-model:" + model.Model)).Role(ui.RoleRow).
+				Label("Model " + model.Model).Value(gwUsageAccessValue(model)).FillWidth().Gap(4).Children(func() {
 				ui.Text(c, model.Model).FontSize(12).FontWeight(600).Font(mono()).TextColor(p.text).FillWidth()
 				detail := fmt.Sprintf("%s tokens · %s req · %s cache · %s TTFT · %s duration · %s tok/s",
 					gwCount(model.TotalTokens), gwCount(model.Requests), gwCacheHit(model), gwMilliseconds(model.AvgTTFTMs), gwMilliseconds(model.AvgDurationMs), gwTokensPerSec(model.AvgTokensPerSec))

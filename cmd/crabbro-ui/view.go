@@ -125,8 +125,8 @@ func (a *app) recordControls(c *ui.Context, p *palette) {
 			}, ui.KeyframeOptions{Repeat: ui.RepeatForever, Alternate: true}))
 			ui.Text(c, "Recording").FontSize(12).FontWeight(600).TextColor(p.removed).SingleLine()
 			if run := c.Now().Sub(s.StartedAt); run >= 0 {
-				ui.Text(c, clockLabel(run)).FontSize(11).Font(mono()).TextColor(p.removed.Alpha(0.8)).SingleLine().
-					ContentTransition(ui.ContentTransition{Numeric: true})
+				// A ticking clock must remain legible during every second change.
+				ui.Text(c, clockLabel(run)).FontSize(11).Font(mono()).TextColor(p.removed.Alpha(0.8)).SingleLine()
 				// Draw again as the second flips, so the clock keeps time
 				// while nothing else moves.
 				c.After(time.Second - run%time.Second + 5*time.Millisecond)
