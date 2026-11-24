@@ -245,7 +245,7 @@ Allowed roots: `request`, `response`, `frame`, `pipeline.<id>.outputs`, `vars`, 
 3. Request phase, outer middleware to inner. Each rule runs `request.pipeline`. A stage's `emits` runs subscriber rules before the next stage. Depth one. Cycles fail at validate time.
 4. Upstream, unless mock, block, or abort short-circuited.
 5. Response phase, inner to outer.
-6. WebSocket data frames use `frame.pipeline` of rules whose request phase matched the upgrade. Ping, pong, and close are not a phase.
+6. WebSocket text and binary data are reassembled into complete logical messages before running `frame.pipeline` of rules whose request phase matched the upgrade. The frame view's `fin` is always true because the rule sees the completed message, including when it arrived in fragments. Replacement and drop actions apply to the whole message. Ping, pong, and close are forwarded without running the pipeline.
 
 `crabbro rules preview --request <id> --json` runs the matcher and reports which rules would run. It does not create an exchange and does not call plugins. The same operation is the tool `rules.preview`. `rules.diagnose` lists files that failed to load without echoing values. `complete: false` means at least one file is unreadable, so a match result may be partial.
 

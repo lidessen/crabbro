@@ -88,13 +88,15 @@ const (
 	ActionDelay RuleActionType = "delay"
 	// ActionThrottle limits the response body rate.
 	ActionThrottle RuleActionType = "throttle"
-	// ActionReplaceFrame replaces a WebSocket frame payload.
+	// ActionReplaceFrame replaces a reassembled WebSocket message payload.
 	ActionReplaceFrame RuleActionType = "replaceFrame"
-	// ActionDropFrame drops a WebSocket frame.
+	// ActionDropFrame drops a reassembled WebSocket message.
 	ActionDropFrame RuleActionType = "dropFrame"
 )
 
-// FrameView is one WebSocket data frame shown to a rule.
+// FrameView is a complete reassembled WebSocket text or binary message shown
+// to a rule. Fin is always true because rules run only after the final fragment.
+// Ping, pong, and close control frames are not shown to rules.
 type FrameView struct {
 	Direction string `json:"direction"`
 	Opcode    string `json:"opcode"`

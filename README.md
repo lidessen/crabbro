@@ -110,9 +110,11 @@ not downgraded to a tunnel.
 Decrypted TLS advertises `h2` and `http/1.1`. When the client negotiates
 HTTP/2, that tunnel is served as HTTP/2 and each stream still goes through the
 same exchange pipeline. Clients that do not offer `h2` stay on HTTP/1.1.
-WebSocket upgrades (`ws://` and `wss://`) are relayed after the 101, with
-optional frame rules. WebSocket over HTTP/2 (extended CONNECT) is not
-implemented.
+WebSocket upgrades (`ws://` and `wss://`) are relayed after the 101. Optional
+frame rules receive complete reassembled text or binary messages, so `ctx.frame.fin`
+is always true even if the message arrived in fragments. Replace and drop actions
+apply to the whole message; ping, pong, and close bypass the rules. WebSocket over
+HTTP/2 (extended CONNECT) is not implemented.
 
 ## LLM & Decision Gateway
 
@@ -293,8 +295,8 @@ request:
 | `crabbro.rewrite-response-body` | `body`, or `find` + `replace` | Replace the body, or substitute within it. Bodies over 256 KiB are left unchanged |
 | `crabbro.delay` | `milliseconds` (max 30000) | Wait before the response is written |
 | `crabbro.throttle` | `bytesPerSecond` | Limit how fast the response body is copied |
-| `crabbro.replace-frame` | `payload` or `payloadBase64` | Replace a WebSocket text/binary frame |
-| `crabbro.drop-frame` | none | Drop a WebSocket text/binary frame |
+| `crabbro.replace-frame` | `payload` or `payloadBase64` | Replace a WebSocket text/binary message |
+| `crabbro.drop-frame` | none | Drop a WebSocket text/binary message |
 
 A pipeline cannot produce more than one of `crabbro.mock-response`,
 `crabbro.block`, `crabbro.abort`, and `crabbro.gateway-offload`. `failureMode` on the stored rule is
@@ -308,7 +310,7 @@ response rule rewrites.
 
 A `run` stage returns `{match, actions}` against the same `ctx` the old
 script rules saw (`ctx.request`, `ctx.response` with `status`, `headers`,
-`body`, `bodyTruncated`, and `ctx.frame` for WebSocket data frames). The
+`body`, `bodyTruncated`, and `ctx.frame` for WebSocket data messages). The
 frame phase of a document does what the JS upgrade-match dance did:
 
 ```yaml
@@ -429,7 +431,6 @@ go run ./examples/ui-client
 - Tab and initiator attribution from a browser extension or Chrome DevTools Protocol. Header-derived pages and `Sec-Fetch-*` resource types are implemented. See [docs/design/inspect.md](docs/design/inspect.md).
 - A separate per-exchange memory budget beyond the capture and 256 KiB transform caps.
 - Trust-store detection. `mitmCertInstalled` is still whatever the CLI reports after install.
-- WebSocket message reassembly. Frame rules see one data frame at a time and do not run on ping, pong, or close.
 - WebSocket over HTTP/2 (extended CONNECT).
 - Response rewrites of bodies larger than 256 KiB. Those responses are forwarded unchanged and the rule records an error.
 

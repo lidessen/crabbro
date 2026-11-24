@@ -116,6 +116,63 @@ func TestWebSocketControlFramesForwardedBeforeMessageCompletes(t *testing.T) {
 	}
 }
 
+func TestWebSocketDelayedCloseHandshake(t *testing.T) {
+	serverResult := make(chan error, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, rw, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			serverResult <- err
+			return
+		}
+		defer conn.Close()
+		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+		if _, err = fmt.Fprint(rw, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n"); err == nil {
+			err = rw.Flush()
+		}
+		if err != nil {
+			serverResult <- err
+			return
+		}
+		op, payload, fin, err := readWSFrame(rw.Reader)
+		if err != nil || op != 0x8 || !fin || string(payload) != "client close" {
+			serverResult <- fmt.Errorf("client close: opcode %d, payload %q, fin %v, error %v", op, payload, fin, err)
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+		serverResult <- writeWSFrame(conn, 0x8, []byte("server close"), false)
+	}))
+	defer upstream.Close()
+
+	p := New(":0", ring.NewRequestBuffer(8), nil, nil)
+	if err := p.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer p.Stop()
+	conn, err := net.Dial("tcp", p.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	host := strings.TrimPrefix(upstream.URL, "http://")
+	fmt.Fprintf(conn, "GET http://%s/ws HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n", host, host)
+	reader := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(reader, &http.Request{Method: "GET"})
+	if err != nil || resp.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("handshake: %v %v", resp, err)
+	}
+	if err := writeWSFrame(conn, 0x8, []byte("client close"), true); err != nil {
+		t.Fatal(err)
+	}
+	op, payload, fin, err := readWSFrame(reader)
+	if err != nil || op != 0x8 || !fin || string(payload) != "server close" {
+		t.Fatalf("server close: opcode %d, payload %q, fin %v, error %v", op, payload, fin, err)
+	}
+	if err := <-serverResult; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestWebSocketMessageSizeLimit(t *testing.T) {
 	for _, tc := range []struct {
 		name string

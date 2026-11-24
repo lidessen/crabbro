@@ -227,9 +227,6 @@ func (p *Proxy) relayFrames(ex *Exchange, src io.Reader, dst io.Writer, directio
 			if !fin || len(payload) > 125 || writeWSFrame(dst, opcode, payload, mask) != nil {
 				return
 			}
-			if opcode == 0x8 {
-				return
-			}
 			continue
 		case 0x1, 0x2:
 			if fragmented {
