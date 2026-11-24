@@ -41,20 +41,23 @@ func TestShots(t *testing.T) {
 	proxyAddr, tcpAddr := freeAddr(t), freeAddr(t)
 
 	cmd := exec.Command(daemon, "-uds-path", sock, "-tcp-addr", tcpAddr, "-proxy-addr", proxyAddr,
-		"-history", filepath.Join(dir, "history.db"), "-fixture-dir", filepath.Join(dir, "fx"))
+		"-gateway-addr", "127.0.0.1:0", "-history", filepath.Join(dir, "history.db"), "-fixture-dir", filepath.Join(dir, "fx"))
 	cmd.Env = append(os.Environ(), "HOME="+dir)
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	defer cmd.Process.Kill()
+	defer func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	}()
 
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case strings.HasPrefix(r.URL.Path, "/v1/login"):
+		case strings.HasPrefix(r.URL.Path, "/v1/profile"):
 			time.Sleep(120 * time.Millisecond)
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, `{"token":"eyJhbGciOi.demo","user":{"id":42,"name":"Mika","roles":["admin","dev"]},"expiresIn":3600}`)
+			fmt.Fprint(w, `{"user":{"id":42,"name":"Mika","locale":"en-US"},"updated":true}`)
 		case strings.HasPrefix(r.URL.Path, "/v1/orders"):
 			time.Sleep(310 * time.Millisecond)
 			w.Header().Set("Content-Type", "application/json")
@@ -73,7 +76,8 @@ func TestShots(t *testing.T) {
 	}))
 	defer up.Close()
 
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	c := client.New(client.Options{UDS: sock, TCP: tcpAddr})
 	for i := 0; ; i++ {
 		if _, err := c.Status(ctx); err == nil {
@@ -111,10 +115,10 @@ func TestShots(t *testing.T) {
 	if os.Getenv("SHOTS_EMPTY") == "" {
 		send("GET", "/", "")
 		send("GET", "/assets/app.css", "")
-		if _, err := c.StartRecording(ctx, "login-hunt"); err != nil {
+		if _, err := c.StartRecording(ctx, "shop-debug"); err != nil {
 			t.Fatal(err)
 		}
-		send("POST", "/v1/login", `{"user":"mika","password":"hunter2"}`)
+		send("POST", "/v1/profile", `{"name":"Mika","locale":"en-US"}`)
 		send("GET", "/v1/orders?limit=20&cursor=abc", "")
 		send("GET", "/v1/missing", "")
 		send("DELETE", "/v1/orders/2", "")
@@ -123,7 +127,7 @@ func TestShots(t *testing.T) {
 		send("GET", "/old", "")
 		run("rules", "from", "req_3", "--action", "mock")
 		run("rules", "from", "req_4", "--action", "delay")
-		send("POST", "/v1/login", `{"user":"mika","password":"hunter2"}`)
+		send("POST", "/v1/profile", `{"name":"Mika","locale":"en-US"}`)
 		send("GET", "/v1/orders?limit=20", "")
 		run("verify", "replay", "req_3")
 	}
@@ -132,6 +136,7 @@ func TestShots(t *testing.T) {
 	go a.run(ctx)
 	tt := ui.NewTester(a.view, 1280, 820)
 	tt.SetScale(2)
+	tt.SetTitleBar(ui.TitleBar{Height: titleBarH, Left: 70})
 	for i := 0; i < 100; i++ {
 		tt.Frame()
 		if a.snapshotState().conn == connConnected {
@@ -173,6 +178,8 @@ func TestShots(t *testing.T) {
 		shot("rules-overview-" + sfx)
 		a.ruleEditMode = 1
 		shot("rules-code-" + sfx)
+		a.setPage(pageGateway)
+		shot("gateway-overview-" + sfx)
 		a.setPage(pageDaemon)
 		shot("daemon-" + sfx)
 	}
@@ -185,6 +192,26 @@ func TestShots(t *testing.T) {
 	shot("trace-min")
 	a.setPage(pageRules)
 	shot("rules-min")
+	a.setPage(pageDaemon)
+	shot("daemon-min")
+
+	gateway := newApp(nil, ctx)
+	gateway.st = gatewayViewFixture(time.Now().UTC())
+	gateway.setPage(pageGateway)
+	tt = ui.NewTester(gateway.view, 1280, 820)
+	tt.SetScale(2)
+	tt.SetTitleBar(ui.TitleBar{Height: titleBarH, Left: 70})
+	for _, dark := range []bool{false, true} {
+		tt.SetDark(dark)
+		sfx := map[bool]string{false: "light", true: "dark"}[dark]
+		for section, name := range []string{"configured", "plans", "routes", "usage", "credentials"} {
+			gateway.gwSection = gatewaySection(section)
+			shot("gateway-" + name + "-" + sfx)
+		}
+	}
+	tt.SetSize(860, 540)
+	gateway.gwSection = gwUsage
+	shot("gateway-usage-min")
 }
 
 func freeAddr(t *testing.T) string {

@@ -36,7 +36,7 @@ internal/secret | ExchangeSink (ring/history.db) | usage.db | internal/decision 
 | Forward Proxy & Rules | HTTP/HTTPS MITM, WebSocket frames, YAML `uses` pipelines + Goja fallback | Bodies >256 KiB forwarded unchanged; no WS over HTTP/2 | `internal/proxy`, `internal/rule` | Available |
 | LLM & Decision Gateway | `openai-chat`, `openai-responses`, `anthropic`, `gemini`, `typesafe-jev`, `openai-decisions`; `Quality x Cache x Quota` routing; `usage.db` | No audio/image/embedding modalities; no USD billing claims | `internal/gateway`, `docs/design/gateway.md` | Available |
 | Node Plugin Host | Lazy Node host with per-plugin `worker_threads` for npm rule plugins | Not an OS sandbox; `crabbro.*` builtins reserved | `internal/plugin`, `cmd/crabbro-plugin-host`, `sdk/plugin` | Available |
-| Clients (CLI & Desktop UI) | Typed `/v1` JSON consumer, MyGo native 4-page app (`Crabbro.app`) | Neither `pkg/api` nor `pkg/client` imports a UI toolkit | `cmd/crabbro`, `cmd/crabbro-ui`, `pkg/client` | Available |
+| Clients (CLI & Desktop UI) | Typed `/v1` JSON consumer, MyGo native desktop app (`Crabbro.app`) | Neither `pkg/api` nor `pkg/client` imports a UI toolkit | `cmd/crabbro`, `cmd/crabbro-ui`, `pkg/client` | Available |
 
 ## 3. Primary Work
 

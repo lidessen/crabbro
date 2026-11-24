@@ -43,15 +43,20 @@ type traceView struct {
 
 // trajectoryPage is the trace: under a heading that sums the session up,
 // its steps in order of time.
-func (a *app) trajectoryPage(c *ui.Context, p *palette) {
-	st := a.snapshotState()
+func (a *app) trajectoryPage(c *ui.Context, p *palette, st store) {
 	if len(st.traj) == 0 {
-		emptyStateWith(c, p, iconClock, "No activity yet",
-			"Start a recording and send traffic through the proxy. Requests, the rules that touched them and each verification are entered here in order.",
-			"crabbro record start", func() {
-				a.plainButton(c, "trace-record", "Start recording", iconRecord, true, &p.removed).
-					Clicked(func() { a.actStartRecording() })
+		ui.Column(c).Grow(1).MinHeight(0).Padding(18, workspaceInset, 16).Gap(12).Children(func() {
+			workspaceTitle(c, p, "Trace").Shrink(0)
+			panel(c, p).Grow(1).Children(func() {
+				if s := st.session; s != nil && s.Recording && s.Name != "scope" {
+					emptyState(c, p, iconClock, "Waiting for traffic", "Send a request through the proxy to see it in this recording.", "")
+					return
+				}
+				emptyStateWith(c, p, iconClock, "No activity yet", "Start a recording to group requests, rule hits and verifications in a trace.", "", func() {
+					a.fillButton(c, "trace-record", "Start recording", iconRecord, false).Clicked(func() { a.actStartRecording() })
+				})
 			})
+		})
 		return
 	}
 	fetched := len(st.traj)
@@ -88,12 +93,21 @@ func (a *app) trajectoryPage(c *ui.Context, p *palette) {
 		}
 	}
 
-	// The page is the chrome's ground; the timeline is a sheet on it.
-	ui.Column(c).Grow(1).MinHeight(0).Background(p.chrome).Children(func() {
+	ui.Column(c).Grow(1).MinHeight(0).Padding(18, workspaceInset, 16).Gap(12).Children(func() {
 		a.traceHeader(c, p, st, all, v)
-		ui.Scroll(c).Grow(1).Children(func() {
-			ui.Column(c).FillWidth().Padding(0, 16, 16).Children(func() {
-				panel(c, p).FillWidth().Padding(8, 14, 10, 0).Children(func() {
+		panel(c.Key("trace:timeline"), p).Grow(1).MinHeight(0).Children(func() {
+			ui.Row(c).Height(46).Shrink(0).Padding(0, 12, 0, 16).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "Timeline").FontSize(14).FontWeight(600).TextColor(p.text).SingleLine()
+				ui.Spacer(c)
+				label, icon := "Newest first", iconDown
+				if trajOldest == 1 {
+					label, icon = "Oldest first", iconUp
+				}
+				a.quietButton(c, "trace-order", label, icon).Clicked(func() { trajOldest = 1 - trajOldest })
+			})
+			hairline(c, p)
+			ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
+				ui.Column(c).FillWidth().Padding(6, 12, 10, 0).Children(func() {
 					for i, it := range steps {
 						if i > 0 {
 							gap := steps[i-1].At.Sub(it.At)
@@ -180,15 +194,15 @@ func (a *app) traceHeader(c *ui.Context, p *palette, st store, all []api.Activit
 			verifies++
 		}
 	}
-	ui.Row(c.Key("trace:head")).FillWidth().Shrink(0).Padding(22, 20, 16, 28).Gap(16).AlignItems(ui.End).Children(func() {
+	ui.Row(c.Key("trace:head")).FillWidth().Shrink(0).Gap(16).AlignItems(ui.Center).Children(func() {
 		ui.Column(c).Gap(5).Shrink(1).MinWidth(0).Children(func() {
-			title := "Trace"
-			if st.session != nil && st.session.Name != "" && st.session.Name != "scope" {
-				title = st.session.Name
-			}
-			ui.Text(c, title).FontSize(20).FontWeight(600).LetterSpacing(-0.2).TextColor(p.text).SingleLine()
+			workspaceTitle(c, p, "Trace")
 			ui.Row(c).Gap(7).AlignItems(ui.Center).Children(func() {
 				first := true
+				if st.session != nil && st.session.Name != "" && st.session.Name != "scope" {
+					ui.Text(c, st.session.Name).FontSize(12).FontWeight(600).TextColor(p.text).SingleLine().Shrink(1).MinWidth(0)
+					first = false
+				}
 				part := func(n int, one, many string, col ui.Color) {
 					if n == 0 {
 						return
@@ -212,11 +226,6 @@ func (a *app) traceHeader(c *ui.Context, p *palette, st store, all []api.Activit
 		})
 		ui.Spacer(c)
 		a.traceStrip(c, p, all, v)
-		label, icon := "Newest first", iconDown
-		if trajOldest == 1 {
-			label, icon = "Oldest first", iconUp
-		}
-		a.ghostButton(c, "trace-order", label, icon).Clicked(func() { trajOldest = 1 - trajOldest })
 	})
 }
 
@@ -230,7 +239,8 @@ func (a *app) traceStrip(c *ui.Context, p *palette, all []api.Activity, v traceV
 		return
 	}
 	// It sits in a shallow well, the one inset thing on the page.
-	ui.Row(c).Shrink(1).MinWidth(80).Padding(7, 12, 6).Radius(10).Background(p.text.Alpha(0.04)).Children(func() {
+	ui.Row(c).Shrink(1).MinWidth(80).Padding(7, 12, 6).Radius(8).Background(p.surface).
+		Border(1, p.border).Label("Activity over time").Tooltip("Activity over time").Children(func() {
 		ui.Box(c.Key("trace:strip")).Width(280).Height(30).Shrink(1).MinWidth(60).
 			Draw(func(pt *ui.Painter, r ui.Rect) {
 				base := r.Y + r.H - 1
@@ -298,7 +308,7 @@ func (a *app) traceLine(c *ui.Context, p *palette, it api.Activity, v traceView,
 				bottom = traceRowH / 2
 			}
 			mid := float32(traceRailW) / 2
-			ui.Box(c).Absolute().Left(mid - 0.5).Top(top).Bottom(bottom).Width(1).Background(p.text.Alpha(0.14))
+			ui.Box(c).Absolute().Left(mid - 0.5).Top(top).Bottom(bottom).Width(1).Background(p.border)
 			a.traceMark(c, p, it, req, capture, mid)
 		})
 		if it.RequestID == "" {
@@ -334,7 +344,7 @@ func (a *app) traceLine(c *ui.Context, p *palette, it api.Activity, v traceView,
 // Each sits on a patch of the ground, so the rail stops short of it.
 func (a *app) traceMark(c *ui.Context, p *palette, it api.Activity, req uiRequestRow, capture bool, mid float32) {
 	at := func(size float32) ui.Element {
-		ui.Box(c).Absolute().Left(mid-size/2-2).Top((traceRowH-size)/2-2).Size(size+4, size+4).Background(p.editor)
+		ui.Box(c).Absolute().Left(mid-size/2-2).Top((traceRowH-size)/2-2).Size(size+4, size+4).Background(p.surface)
 		return ui.Row(c).Absolute().Left(mid-size/2).Top((traceRowH-size)/2).Size(size, size).Center()
 	}
 	switch {

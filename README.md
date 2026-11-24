@@ -397,17 +397,16 @@ toolkit. The contract, the event types, and the snapshot-then-follow pattern are
 go run ./cmd/crabbro-ui
 ```
 
-The window has four pages:
+The sidebar switches between five workspaces. It collapses to icons in narrower windows.
+The title bar keeps the recording controls available across all five.
 
-- **Requests** — the live table (newest first, search, hidden rows) and, below it, the detail of
-  the request chosen: headers, bodies, and the rule trace. A replay button sends it back through
-  the proxy.
-- **Rules** — the list, with enable, disable, delete, and an editor that switches between a visual form
-  (match, description, priority, and the builtin stages with their parameters) and the raw YAML code; rules
-  the form cannot express — hooks, `vars`, `select`, `parallel`, plugin stages — open in code. Saving goes
-  through `PUT /v1/rules/{id}`.
-- **Trajectory** — the timeline tail, newest first; a step's request id opens it in Requests.
-- **Daemon** — status, the recording session, history, MITM, and the scope.
+- **Trace** shows the recording timeline and its associated requests, rule hits, and verifications.
+- **Requests** filters the live table by search text and traffic type. The resizable inspector shows
+  headers, bodies, rule traces, and gateway details, with a Replay action.
+- **Rules** lists rules in evaluation order. Select one to inspect its overview, edit its YAML, or
+  enable, disable, or delete it.
+- **Gateway** groups configuration, plans and quotas, routes, usage, and credentials into tabs.
+- **Daemon** shows proxy status, the recording session, history, MITM, and scope.
 
 A goroutine keeps the state fresh: ensure the daemon (`EnsureDaemon` starts `crabbrod` when
 `/v1/status` does not answer), take a snapshot, follow the event stream, and start over when the

@@ -13,15 +13,15 @@ import (
 // daemonPage is what the daemon is and holds: its status, history, MITM,
 // the recording session, and the scope. The cards rise in as the page
 // shows, each a little after the one above it.
-func (a *app) daemonPage(c *ui.Context, p *palette) {
-	st := a.snapshotState()
-	ui.Scroll(c).Grow(1).Background(p.chrome).Children(func() {
+func (a *app) daemonPage(c *ui.Context, p *palette, st store) {
+	ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
 		// The page is a column of a readable measure, centered in the
 		// window rather than left against its edge.
-		ui.Column(c).FillWidth().MaxWidth(900).AlignSelf(ui.Center).Padding(20, 24, 32).Gap(12).Children(func() {
+		ui.Column(c).FillWidth().MaxWidth(1040).AlignSelf(ui.Center).Padding(18, workspaceInset, 24).Gap(12).Children(func() {
+			workspaceTitle(c, p, "Daemon")
 			switch {
 			case st.conn == connDown:
-				a.daemonSection(c, p, "Daemon", iconServer, "Stopped", p.removed, func() {
+				a.daemonSection(c, p, "Connection", iconServer, "Offline", p.removed, func() {
 					ui.Column(c).FillWidth().Gap(8).Children(func() {
 						ui.Text(c, st.connErr).FontSize(13).TextColor(p.removed).FillWidth()
 						ui.Row(c).Gap(8).Margin(2, 0, 0, 0).Children(func() {
@@ -32,10 +32,10 @@ func (a *app) daemonPage(c *ui.Context, p *palette) {
 					})
 				})
 			case st.conn == connConnecting:
-				a.daemonSection(c, p, "Daemon", iconServer, "", p.muted, func() {
+				a.daemonSection(c, p, "Connection", iconServer, "", p.muted, func() {
 					ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 						ui.Spinner(c).Size(12, 12)
-						ui.Text(c, "looking for crabbrod…").FontSize(13).TextColor(p.muted)
+						ui.Text(c, "Looking for crabbrod…").FontSize(13).TextColor(p.muted)
 					})
 				})
 			default:
@@ -49,6 +49,8 @@ func (a *app) daemonPage(c *ui.Context, p *palette) {
 					recLabel, recCol := "Idle", p.muted
 					if recording {
 						recLabel, recCol = "Recording", p.removed
+					} else if st.session != nil && st.session.Recording {
+						recLabel = "Scope session"
 					}
 					a.daemonSection(c, p, "Recording", iconRecord, recLabel, recCol, func() {
 						if st.session != nil && st.session.Recording {
@@ -171,12 +173,10 @@ func (a *app) daemonPage(c *ui.Context, p *palette) {
 // runs and where its proxy listens, and beside that its three counts.
 func (a *app) daemonHero(c *ui.Context, p *palette, st store) {
 	panel(c.Key("daemon:hero"), p).FillWidth().Children(func() {
-		ui.Row(c).FillWidth().Padding(18, 22).Gap(20).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).FillWidth().Padding(18, 20).Gap(16).AlignItems(ui.Center).Children(func() {
+			statusIcon(c, p, iconServer, p.added)
 			ui.Column(c).Gap(6).Shrink(1).MinWidth(0).Children(func() {
-				ui.Row(c).Gap(7).AlignItems(ui.Center).Children(func() {
-					ui.Box(c).Size(7, 7).Radius(3.5).Background(p.added)
-					ui.Text(c, "Proxy listening on").FontSize(12).FontWeight(500).TextColor(p.muted).SingleLine()
-				})
+				ui.Text(c, "Proxy listening on").FontSize(12).FontWeight(500).TextColor(p.muted).SingleLine()
 				// The port is what a client is pointed at: it keeps the
 				// ink, and the host before it steps back.
 				ui.RichText(c, hostSpans(st.status.ProxyAddr, p.muted, p.text)...).FontSize(20).FontWeight(600).
@@ -205,10 +205,10 @@ func (a *app) daemonHero(c *ui.Context, p *palette, st store) {
 // facts.
 func (a *app) daemonSection(c *ui.Context, p *palette, title string, icon *ui.SVG, state string, tone ui.Color, rows func()) {
 	panel(c.Key("daemon:"+title), p).Grow(1).Basis(0).MinWidth(0).Children(func() {
-		ui.Row(c).FillWidth().Height(42).Padding(0, 14, 0, 16).Gap(9).AlignItems(ui.Center).
+		ui.Row(c).FillWidth().Height(48).Padding(0, 14, 0, 16).Gap(9).AlignItems(ui.Center).
 			BorderWidth(0, 0, 1, 0).BorderColor(p.border).Children(func() {
-			ui.Icon(c, icon).FontSize(14).TextColor(p.faint)
-			ui.Text(c, title).FontSize(13).FontWeight(600).TextColor(p.text).SingleLine()
+			ui.Icon(c, icon).FontSize(15).TextColor(p.muted)
+			ui.Text(c, title).FontSize(14).FontWeight(600).TextColor(p.text).SingleLine()
 			ui.Spacer(c)
 			if state != "" {
 				badge(c, p, tone, state)
@@ -286,19 +286,9 @@ func (a *app) factList(c *ui.Context, p *palette, label string, items []string) 
 	})
 }
 
-// factRow is one label and its value on the daemon page: the label in its
-// column, the value after it. The row washes under the pointer, as one
-// that could be pressed, though it reads only. The wash keeps the row's
-// content where it was: the padding that rooms it is pulled back out by
-// the margin.
+// factRow aligns read-only labels and values across a group.
 func (a *app) factRow(c *ui.Context, p *palette, label string, value func()) {
-	row := ui.Row(c.Key("fact:"+label)).FillWidth().Gap(10).AlignItems(ui.Center).
-		Padding(3, 6).Margin(-3, -6).Radius(7)
-	if row.Hovered() {
-		row.Background(p.hover)
-	}
-	row.Transition(hoverFade)
-	row.Children(func() {
+	ui.Row(c.Key("fact:" + label)).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, label).FontSize(13).TextColor(p.muted).SingleLine().Width(96).Shrink(0)
 		value()
 	})

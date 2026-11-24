@@ -252,7 +252,7 @@ func (a *app) gwPlansCard(c *ui.Context, p *palette, st store) {
 			}
 			return
 		}
-		gwCardColumns(c, gwGridColumns(c, 334, 2), len(plans), func(i int) {
+		gwCardColumns(c, gwGridColumns(c, 390, 2), len(plans), func(i int) {
 			a.gwPlanTile(c, p, plans[i])
 		})
 		ui.Text(c, "Plan state above is plan-level cooldown only; model-level cooldowns are not reported, so a plan not cooling may still hold cooling models.").
@@ -263,7 +263,7 @@ func (a *app) gwPlansCard(c *ui.Context, p *palette, st store) {
 func (a *app) gwPlanTile(c *ui.Context, p *palette, pl api.GatewayPlanStatus) {
 	panel(c.Key("gw-plan:"+pl.ID), p).MinWidth(0).Padding(16).Gap(10).Children(func() {
 		ui.Row(c).FillWidth().Gap(10).AlignItems(ui.Center).Children(func() {
-			gwGlyph(c, p, iconServer, p.accent)
+			statusIcon(c, p, iconServer, p.accent)
 			ui.Text(c, pl.ID).Grow(1).MinWidth(0).FontSize(15).FontWeight(600).Font(mono()).TextColor(p.text)
 		})
 		label, tone := gwPlanState(p, pl)
@@ -556,10 +556,10 @@ func (a *app) gwUsageCard(c *ui.Context, p *palette, st store) {
 	hasTotals := answered && !(len(usage.Buckets) == 0 && st.gwUsageFetch == gwFresh && gwOffNow(st))
 	pending := a.gwUsageRevision > st.gwUsageCompleted
 	ui.Row(c.Key("gw:usage-header")).FillWidth().Gap(12).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "Usage").FontSize(26).FontWeight(600).TextColor(p.text).SingleLine()
+		ui.Text(c, "Usage summary").FontSize(15).FontWeight(600).TextColor(p.text).SingleLine()
 		ui.Spacer(c)
 		prev := a.gwUsageWinIdx
-		a.words(c, "gw-usage-win", &a.gwUsageWinIdx, "1h", "24h", "7d")
+		a.segments(c, "gw-usage-win", &a.gwUsageWinIdx, "1h", "24h", "7d")
 		if a.gwUsageWinIdx != prev {
 			a.gwUsageRevision++
 			pending = true

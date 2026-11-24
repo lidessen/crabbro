@@ -11,15 +11,13 @@ import (
 	"github.com/lidessen/crabbro/pkg/api"
 )
 
-func TestGatewayUIViewsRenderLightAndDark(t *testing.T) {
-	a := newApp(nil, context.Background())
-	now := time.Now().UTC()
+func gatewayViewFixture(now time.Time) store {
 	until := now.Add(90 * time.Second)
 	cal := true
 	bodyReq := `{"model":"coding-main","messages":[{"role":"user","content":"hi"}]}`
 	bodyResp := `{"content":[{"type":"text","text":"hello"}]}`
 
-	a.st = store{
+	return store{
 		conn:           connConnected,
 		gwStatusFetch:  gwFresh,
 		gwPlansFetch:   gwFresh,
@@ -146,7 +144,11 @@ func TestGatewayUIViewsRenderLightAndDark(t *testing.T) {
 			ResponseBody: &bodyResp,
 		},
 	}
+}
 
+func TestGatewayUIViewsRenderLightAndDark(t *testing.T) {
+	a := newApp(nil, context.Background())
+	baseline := gatewayViewFixture(time.Now().UTC())
 	tt := ui.NewTester(a.view, 860, 540)
 	click := func(label string) {
 		t.Helper()
@@ -155,14 +157,14 @@ func TestGatewayUIViewsRenderLightAndDark(t *testing.T) {
 		}
 		tt.Frame()
 	}
-	baseline := a.st
 	for _, dark := range []bool{false, true} {
 		tt.SetDark(dark)
 		a.st = baseline
 		a.gwUsageRevision = 0
-		a.page = pageGateway
+		a.page = pageTrajectory
 		a.gwSection = gwOverview
 		tt.Frame()
+		click("Gateway")
 		tt.Advance(200 * time.Millisecond)
 		if !tt.HasText("Configuration") || !tt.HasText("Traffic") {
 			t.Fatal("overview should show configuration and traffic")
@@ -247,16 +249,15 @@ func TestGatewayUIViewsRenderLightAndDark(t *testing.T) {
 			t.Fatal("credentials should show stored names")
 		}
 
-		a.page = pageRequests
 		a.reqSel = 0
 		a.reqShownID = "req_gw_1"
 		a.detailTab = 3
-		tt.Frame()
+		click("Requests")
 		tt.Advance(200 * time.Millisecond)
 	}
 }
 
-// The scroll body may be much taller than the window, but the sidebar and
+// The scroll body may be much taller than the window, but the tabs and
 // the top of the selected section must stay within the workspace.
 func TestGatewayPlanColumnsKeepNaturalHeightsAndScroll(t *testing.T) {
 	st := gwPlanStore(time.Now().Add(time.Minute))
@@ -278,7 +279,7 @@ func TestGatewayPlanColumnsKeepNaturalHeightsAndScroll(t *testing.T) {
 		t.Helper()
 		nav, ok := tt.Find("Overview")
 		if !ok || nav.Y < titleBarH || nav.Y > 200 {
-			t.Fatalf("sidebar link should sit close to the top of the workspace, got %+v", nav)
+			t.Fatalf("tab should sit close to the top of the workspace, got %+v", nav)
 		}
 		first, ok := tt.Find("glm-coding")
 		if !ok {
@@ -300,7 +301,7 @@ func TestGatewayPlanColumnsKeepNaturalHeightsAndScroll(t *testing.T) {
 	tt.Advance(time.Second)
 	scrolledNav, ok := tt.Find("Overview")
 	if !ok || nav != scrolledNav {
-		t.Fatalf("sidebar should stay in place when cards scroll, got %+v then %+v", nav, scrolledNav)
+		t.Fatalf("tabs should stay in place when cards scroll, got %+v then %+v", nav, scrolledNav)
 	}
 	if moved, ok := tt.Find("glm-coding"); ok && moved.Y >= first.Y {
 		t.Fatalf("cards did not scroll, first card at %+v then %+v", first, moved)

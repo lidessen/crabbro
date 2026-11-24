@@ -23,7 +23,7 @@ import (
 // the request detail, as the page's splitter keeps it. A share rather than
 // a height: the table is the page's subject, and a taller window should
 // show more lines of it, not only more of the one chosen.
-var tableSplit float32 = 46
+var tableSplit float32 = 42
 
 // requestListLimit is how many exchanges the table asks the daemon for; at
 // that count the toolbar says the list is the latest of more.
@@ -49,9 +49,7 @@ const replayBusyFor = 25 * time.Second
 
 // requestsPage is the live table of captured exchanges and, below it, the
 // detail of the one chosen.
-func (a *app) requestsPage(c *ui.Context, p *palette) {
-	st := a.snapshotState()
-
+func (a *app) requestsPage(c *ui.Context, p *palette, st store) {
 	// The rows are the search's matches; the state keeps the table's own
 	// sort, which reorders them.
 	rows := a.sortRequests(st.requests)
@@ -75,54 +73,25 @@ func (a *app) requestsPage(c *ui.Context, p *palette) {
 		a.pendingRequestID = ""
 	}
 
-	// The table takes a quiet theme: its choice is a tint of the accent,
-	// not the accent itself, which would swallow the pills' colors.
-	base := *c.Theme()
-	p.quiet(c)
-	// With nothing captured there is no detail to split the page with: the
-	// empty state takes the whole of it, rather than half over a blank pane.
-	if len(rows) == 0 {
-		ui.Column(c).Grow(1).MinHeight(0).Children(func() {
-			a.requestsToolbar(c, p)
-			a.requestsEmpty(c, p, st)
+	ui.Column(c).Grow(1).MinHeight(0).Padding(18, workspaceInset, 16).Gap(12).Children(func() {
+		ui.Row(c).Shrink(0).Gap(10).AlignItems(ui.Center).Children(func() {
+			workspaceTitle(c, p, "Requests")
+			ui.Spacer(c)
+			a.requestCounts(c, p, rows)
 		})
-		c.SetTheme(&base)
-		if a.reqShownID != "" {
-			a.reqShownID = ""
-			a.selectRequest("")
-		}
-		return
-	}
-	ui.SplitVerticalPercent(c, &tableSplit,
-		func() {
-			ui.Column(c).Fill().MinHeight(0).Children(func() {
-				a.requestsToolbar(c, p)
-				// The columns read as a line of the trace does: when,
-				// what, where, then how long and what came back.
-				cols := []ui.TableColumn{
-					{Title: "Time", ID: "at", Width: 92},
-					{Title: "Method", ID: "method", Width: 84, Sortable: true},
-					{Title: "Host", ID: "host", Width: 190, Sortable: true},
-					{Title: "Path", ID: "path"},
-					{Title: "Latency", ID: "time", Width: 140, Align: ui.End, Sortable: true},
-					{Title: "Status", ID: "status", Width: 72, Align: ui.End, Sortable: true},
-				}
-				ruled := ruledRequests(st.traj)
-				ui.Table(c, &a.reqState, cols, len(rows), func(row, col int) {
-					// A time the line above already said is held back,
-					// so the column reads by where the second turns.
-					same := row > 0 && clockOf(rows[row-1].StartedAt) == clockOf(rows[row].StartedAt)
-					a.requestCell(c, p, rows[row], col, ruled[string(rows[row].ID)], same)
-				}).FontSize(12).Grow(1).MinHeight(0).ContextMenu(func(m *ui.Menu) {
-					if id := a.chosenRequestID(rows); id != "" && m.Item("Replay "+id).Chosen() {
-						a.actReplay(id)
-					}
-				})
-			})
-		},
-		func() { a.requestDetail(c, p, st, rows) },
-	).Grow(1)
-	c.SetTheme(&base)
+		panel(c.Key("requests:panel"), p).Grow(1).MinHeight(0).Children(func() {
+			a.requestsToolbar(c)
+			hairline(c, p)
+			if len(rows) == 0 {
+				a.requestsEmpty(c, p, st)
+				return
+			}
+			ui.SplitVerticalPercent(c, &tableSplit,
+				func() { a.requestsTable(c, p, rows, st.traj) },
+				func() { a.requestDetail(c, p, st, rows) },
+			).Grow(1).MinHeight(0)
+		})
+	})
 
 	// The detail follows the row chosen, by id, so the choice survives the
 	// row moving up as newer exchanges arrive.
@@ -132,14 +101,43 @@ func (a *app) requestsPage(c *ui.Context, p *palette) {
 	}
 }
 
+func (a *app) requestsTable(c *ui.Context, p *palette, rows []uiRequestRow, trajectory []api.Activity) {
+	base := *c.Theme()
+	p.quiet(c)
+	defer c.SetTheme(&base)
+	cols := []ui.TableColumn{
+		{Title: "Time", ID: "at", Width: 86},
+		{Title: "Method", ID: "method", Width: 82, Sortable: true},
+		{Title: "Host", ID: "host", Width: 166, Sortable: true},
+		{Title: "Path", ID: "path"},
+		{Title: "Latency", ID: "time", Width: 126, Align: ui.End, Sortable: true},
+		{Title: "Status", ID: "status", Width: 72, Align: ui.End, Sortable: true},
+	}
+	ruled := ruledRequests(trajectory)
+	ui.Table(c, &a.reqState, cols, len(rows), func(row, col int) {
+		same := row > 0 && clockOf(rows[row-1].StartedAt) == clockOf(rows[row].StartedAt)
+		a.requestCell(c, p, rows[row], col, ruled[string(rows[row].ID)], same)
+	}).FontSize(12).Fill().MinHeight(0).ContextMenu(func(m *ui.Menu) {
+		if id := a.chosenRequestID(rows); id != "" && m.Item("Replay "+id).Chosen() {
+			a.actReplay(id)
+		}
+	})
+}
+
 // requestsEmpty is what the table's place shows while nothing has been
 // captured yet, as Mayoi's empty folder is: how to send the first request
 // through the proxy.
 func (a *app) requestsEmpty(c *ui.Context, p *palette, st store) {
 	// A search that matched nothing is not a proxy with no traffic.
-	if a.search != "" {
-		emptyState(c, p, iconList, "No matches",
-			"Nothing captured matches this search. Clear it to see every exchange.", "")
+	if a.search != "" || a.reqKindIdx != 0 {
+		emptyStateWith(c, p, iconFilter, "No matching requests", "Change the request filters to see more traffic.", "", func() {
+			a.quietButton(c, "request-clear-filters", "Clear filters", nil).Clicked(func() {
+				a.search, a.searchSeen, a.searchSent = "", "", ""
+				a.reqKindIdx = 0
+				a.mirrorView()
+				a.nudge("")
+			})
+		})
 		return
 	}
 	// The command names the address this daemon listens on, so it can be
@@ -162,65 +160,69 @@ func (a *app) chosenRequestID(rows []uiRequestRow) string {
 }
 
 // requestsToolbar occupies its own row above the table header.
-func (a *app) requestsToolbar(c *ui.Context, p *palette) {
-	ui.Row(c).FillWidth().Height(54).Shrink(0).Padding(0, 12).
-		Gap(10).AlignItems(ui.Center).Children(func() {
-		ui.SearchField(c, &a.search).Grow(1).Shrink(1).MinWidth(40).MaxWidth(260)
+func (a *app) requestsToolbar(c *ui.Context) {
+	ui.Row(c).FillWidth().Height(49).Shrink(0).Padding(0, 14).
+		Gap(12).AlignItems(ui.Center).Children(func() {
+		ui.SearchField(c, &a.search).Placeholder("Search requests").Label("Search requests").Grow(1).MinWidth(0).MaxWidth(320)
 		prevKind := a.reqKindIdx
-		a.words(c, "req-kind", &a.reqKindIdx, "All", "Proxy", "Gateway")
+		a.segments(c, "req-kind", &a.reqKindIdx, "All", "Proxy", "Gateway")
 		if a.reqKindIdx != prevKind {
 			a.mirrorView()
 			a.nudge(a.search)
 		}
+		ui.Spacer(c)
 		wasHidden := a.showHidden
-		ui.Checkbox(c, &a.showHidden, "Show hidden").FontSize(13)
+		ui.Checkbox(c, &a.showHidden, "Show hidden").FontSize(12).Shrink(0)
 		if a.showHidden != wasHidden {
 			// Refetch now: waiting for the next tick leaves the table
 			// unchanged for seconds after the click.
 			a.mirrorView()
 			a.nudge(a.search)
 		}
-		ui.Spacer(c)
-		st := a.snapshotState()
-		failed := 0
-		for _, rq := range st.requests {
-			if rq.Status >= 400 {
-				failed++
-			}
-		}
-		// The counts read as a line of text, not as badges: only the
-		// failures take a color.
-		count := fmt.Sprintf("%d requests", len(st.requests))
-		if len(st.requests) >= requestListLimit {
-			count = fmt.Sprintf("Latest %d", requestListLimit)
-		}
-		ui.Text(c, count).FontSize(12).TextColor(p.muted).SingleLine().
-			ContentTransition(ui.ContentTransition{Numeric: true})
-		if failed > 0 {
-			ui.Text(c, "·").FontSize(12).TextColor(p.faint).SingleLine()
-			ui.Text(c, fmt.Sprintf("%d failed", failed)).FontSize(12).FontFeatures("tnum").TextColor(p.removed).SingleLine().
-				ContentTransition(ui.ContentTransition{Numeric: true})
-		}
 		if a.bounceSearch(c) {
+			a.mirrorView()
 			a.nudge(a.search)
 		}
 	})
 }
 
+func (a *app) requestCounts(c *ui.Context, p *palette, rows []uiRequestRow) {
+	failed := 0
+	for _, row := range rows {
+		if row.Status >= 400 {
+			failed++
+		}
+	}
+	count := fmt.Sprintf("%d requests", len(rows))
+	if len(rows) == 1 {
+		count = "1 request"
+	} else if len(rows) >= requestListLimit {
+		count = fmt.Sprintf("Latest %d requests", requestListLimit)
+	}
+	ui.Text(c, count).FontSize(12).TextColor(p.muted).SingleLine().ContentTransition(ui.ContentTransition{Numeric: true})
+	if failed > 0 {
+		badge(c, p, p.removed, fmt.Sprintf("%d failed", failed))
+	}
+}
+
 // bounceSearch sends the query once it has settled for a moment, so
 // typing does not search per keystroke. It reports whether it did.
 func (a *app) bounceSearch(c *ui.Context) bool {
+	const debounce = 300 * time.Millisecond
 	now := c.Now()
 	if a.search != a.searchSeen {
 		a.searchSeen = a.search
 		a.searchAt = now
+	}
+	if a.search == a.searchSent {
 		return false
 	}
-	if a.search != a.searchSent && now.Sub(a.searchAt) >= 300*time.Millisecond {
-		a.searchSent = a.search
-		return true
+	if remaining := debounce - now.Sub(a.searchAt); remaining > 0 {
+		c.After(remaining)
+		return false
 	}
-	return false
+	a.searchSent = a.search
+	return true
 }
 
 // uiRequestRow is one sorted row of the requests table.
@@ -361,13 +363,16 @@ func (a *app) requestDetail(c *ui.Context, p *palette, st store, rows []uiReques
 		}
 	}
 	d, errText := st.detail, st.detailErr
+	if string(st.detailID) != id {
+		d, errText = nil, ""
+	}
 	// The split draws the line between the table and the detail; a border
 	// here would double it.
-	ui.Column(c).Grow(1).MinHeight(0).Children(func() {
+	ui.Column(c).Fill().MinHeight(0).Children(func() {
 		ui.Row(c).FillWidth().Shrink(0).Padding(14, 16, 4, 24).Gap(16).AlignItems(ui.Center).Children(func() {
 			ui.Column(c).Gap(3).Shrink(1).MinWidth(0).Children(func() {
 				ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, methodLabel(row.Method)).FontSize(15).FontWeight(600).Font(mono()).TextColor(p.text).SingleLine().Shrink(0)
+					methodText(c, p, row.Method)
 					pathText(c, p, pathOf(row.URL), 15).SingleLine().Shrink(1).MinWidth(40).Selectable()
 				})
 				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
@@ -379,11 +384,7 @@ func (a *app) requestDetail(c *ui.Context, p *palette, st store, rows []uiReques
 			ui.Spacer(c)
 			if row.Status != 0 {
 				figureText(c, latencyLabel(row), 13, p.muted, p.faint).SingleLine().Shrink(0)
-				// The status animates as it changes, as when the
-				// exchange completes or a replay lands.
-				ui.Text(c, fmt.Sprint(row.Status)).FontSize(20).FontWeight(600).Font(mono()).
-					TextColor(statusTone(p, row.Status)).SingleLine().Shrink(0).
-					ContentTransition(ui.ContentTransition{Numeric: true})
+				statusText(c, p, row.Status).ContentTransition(ui.ContentTransition{Numeric: true})
 			}
 			a.replayButton(c, p, id)
 		})
@@ -452,9 +453,9 @@ func tabFade(e ui.Element) ui.Element {
 // until the timeout below gives the wait up.
 func (a *app) replayButton(c *ui.Context, p *palette, id string) {
 	busy := a.replayBusy(c, id)
-	b := ui.ButtonBase(c.Key("replay")).Size(buttonH, buttonH).Radius(9).Justify(ui.Center).AlignItems(ui.Center).
+	b := ui.ButtonBase(c.Key("replay")).Height(buttonH).Padding(0, 10).Gap(7).Radius(8).AlignItems(ui.Center).
 		Label("Replay this request through the proxy").Tooltip("Replay this request through the proxy").
-		Disabled(busy)
+		Background(p.surface).Border(1, p.border).Disabled(busy)
 	if !busy {
 		switch {
 		case b.Pressed():
@@ -474,6 +475,7 @@ func (a *app) replayButton(c *ui.Context, p *palette, id string) {
 		} else {
 			ui.Icon(c, iconReplay).FontSize(14).TextColor(col)
 		}
+		ui.Text(c, "Replay").FontSize(12).FontWeight(500).TextColor(col).SingleLine()
 	})
 	if !busy && b.Clicked() {
 		replayingID, startReplayAt = id, c.Now()
