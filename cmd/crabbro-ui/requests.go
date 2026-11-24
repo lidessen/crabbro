@@ -16,8 +16,6 @@ import (
 	"github.com/lidessen/crabbro/pkg/api"
 )
 
-const requestSplitMinWidth = 1000
-
 // requestListLimit is how many exchanges the table asks the daemon for; at
 // that count the toolbar says the list is the latest of more.
 const requestListLimit = 200
@@ -40,10 +38,8 @@ var (
 // the replay.
 const replayBusyFor = 25 * time.Second
 
-// requestsPage is the live table and the inspector for the selected exchange.
+// requestsPage shows the live table above the selected exchange.
 func (a *app) requestsPage(c *ui.Context, p *palette, st store) {
-	width, _ := c.Size()
-	wide := width-sidebarWidth(c)-2*workspaceInset >= requestSplitMinWidth
 	// The rows are the search's matches; the state keeps the table's own
 	// sort, which reorders them.
 	rows := a.sortRequests(st.requests)
@@ -80,13 +76,10 @@ func (a *app) requestsPage(c *ui.Context, p *palette, st store) {
 				a.requestsEmpty(c, p, st)
 				return
 			}
-			table := func() { a.requestsTable(c, p, rows, st.traj, wide) }
-			detail := func() { a.requestDetail(c, p, st, rows, wide) }
-			if wide {
-				ui.SplitPercent(c.Key("requests:side"), &a.reqListWidth, table, detail).Grow(1).MinHeight(0)
-			} else {
-				ui.SplitVerticalPercent(c.Key("requests:stack"), &a.reqListHeight, table, detail).Grow(1).MinHeight(0)
-			}
+			ui.SplitVerticalPercent(c.Key("requests:split"), &a.reqListHeight,
+				func() { a.requestsTable(c, p, rows, st.traj) },
+				func() { a.requestDetail(c, p, st, rows) },
+			).Grow(1).MinHeight(0)
 		})
 	})
 
@@ -98,7 +91,7 @@ func (a *app) requestsPage(c *ui.Context, p *palette, st store) {
 	}
 }
 
-func (a *app) requestsTable(c *ui.Context, p *palette, rows []uiRequestRow, trajectory []api.Activity, compact bool) {
+func (a *app) requestsTable(c *ui.Context, p *palette, rows []uiRequestRow, trajectory []api.Activity) {
 	base := *c.Theme()
 	p.quiet(c)
 	defer c.SetTheme(&base)
@@ -110,14 +103,10 @@ func (a *app) requestsTable(c *ui.Context, p *palette, rows []uiRequestRow, traj
 		{Title: "Latency", ID: "time", Width: 126, Align: ui.End, Sortable: true},
 		{Title: "Status", ID: "status", Width: 72, Align: ui.End, Sortable: true},
 	}
-	if compact {
-		cols[0].Width, cols[1].Width, cols[2].Width = 76, 74, 138
-		cols[4].Width, cols[5].Width = 84, 74
-	}
 	ruled := ruledRequests(trajectory)
 	ui.Table(c, &a.reqState, cols, len(rows), func(row, col int) {
 		same := row > 0 && clockOf(rows[row-1].StartedAt) == clockOf(rows[row].StartedAt)
-		a.requestCell(c, p, rows[row], col, ruled[string(rows[row].ID)], same, compact)
+		a.requestCell(c, p, rows[row], col, ruled[string(rows[row].ID)], same)
 	}).FontSize(12).Fill().MinHeight(0).ContextMenu(func(m *ui.Menu) {
 		if id := a.chosenRequestID(rows); id != "" && m.Item("Replay "+id).Chosen() {
 			a.actReplay(id)
@@ -164,14 +153,14 @@ func (a *app) chosenRequestID(rows []uiRequestRow) string {
 func (a *app) requestsToolbar(c *ui.Context) {
 	ui.Row(c).FillWidth().Height(47).Shrink(0).Padding(0, 14).
 		Gap(12).AlignItems(ui.Center).Children(func() {
-		ui.SearchField(c, &a.search).Placeholder("Search requests").Label("Search requests").Grow(1).MinWidth(0).MaxWidth(360)
-		ui.Spacer(c)
+		ui.SearchField(c, &a.search).Placeholder("Search requests").Label("Search requests").Grow(1).MinWidth(0).MaxWidth(320)
 		prevKind := a.reqKindIdx
 		a.segments(c, "req-kind", &a.reqKindIdx, "All", "Proxy", "Gateway")
 		if a.reqKindIdx != prevKind {
 			a.mirrorView()
 			a.nudge(a.search)
 		}
+		ui.Spacer(c)
 		wasHidden := a.showHidden
 		ui.Checkbox(c, &a.showHidden, "Show hidden").FontSize(12).Shrink(0)
 		if a.showHidden != wasHidden {
@@ -267,7 +256,7 @@ func ruledRequests(traj []api.Activity) map[string]bool {
 }
 
 // requestCell draws one cell of the requests table.
-func (a *app) requestCell(c *ui.Context, p *palette, r uiRequestRow, col int, ruled, sameTime, compact bool) {
+func (a *app) requestCell(c *ui.Context, p *palette, r uiRequestRow, col int, ruled, sameTime bool) {
 	switch col {
 	case 0:
 		ui.Text(c, clockOf(r.StartedAt)).FontSize(11).Font(mono()).TextColor(timeTone(p, sameTime)).SingleLine()
@@ -304,9 +293,7 @@ func (a *app) requestCell(c *ui.Context, p *palette, r uiRequestRow, col int, ru
 		})
 	case 4:
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Justify(ui.End).Children(func() {
-			if !compact {
-				latencyBar(c, p, r, reqMaxMs)
-			}
+			latencyBar(c, p, r, reqMaxMs)
 			figureText(c, latencyLabel(r), 12, p.text.Mix(p.muted, 0.6), p.faint).Width(48).TextAlign(ui.End).SingleLine()
 		})
 	case 5:
@@ -355,8 +342,8 @@ var detailTabs = []string{"Headers", "Body", "Rules"}
 // for both sides.
 var bodyRaw bool
 
-// requestDetail stacks the request and response when the inspector sits beside the table.
-func (a *app) requestDetail(c *ui.Context, p *palette, st store, rows []uiRequestRow, beside bool) {
+// requestDetail compares the request and response in the lower pane.
+func (a *app) requestDetail(c *ui.Context, p *palette, st store, rows []uiRequestRow) {
 	id := a.chosenRequestID(rows)
 	if id == "" {
 		if len(rows) == 0 {
@@ -379,7 +366,7 @@ func (a *app) requestDetail(c *ui.Context, p *palette, st store, rows []uiReques
 	// The split draws the line between the table and the detail; a border
 	// here would double it.
 	ui.Column(c).Fill().MinHeight(0).Background(p.surface.Mix(p.editor, 0.36)).Children(func() {
-		ui.Row(c).FillWidth().Shrink(0).Padding(14, 16, 5).Gap(10).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).FillWidth().Shrink(0).Padding(14, 16, 4, 24).Gap(16).AlignItems(ui.Center).Children(func() {
 			ui.Column(c).Gap(3).Shrink(1).MinWidth(0).Children(func() {
 				ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
 					methodText(c, p, row.Method)
@@ -398,7 +385,7 @@ func (a *app) requestDetail(c *ui.Context, p *palette, st store, rows []uiReques
 			}
 			a.replayButton(c, p, id)
 		})
-		ui.Row(c).FillWidth().Shrink(0).Padding(0, 16, 0, 10).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).FillWidth().Shrink(0).Padding(0, 16, 0, 24).AlignItems(ui.Center).Children(func() {
 			tabs := detailTabs
 			if d != nil && d.Request.Gateway != nil {
 				tabs = append([]string(nil), detailTabs...)
@@ -421,42 +408,30 @@ func (a *app) requestDetail(c *ui.Context, p *palette, st store, rows []uiReques
 			// Keyed by the request and the tab, so the content fades in
 			// again as either changes.
 			tabFade(ui.Column(c.Key(fmt.Sprintf("detail:content:%s:%d", id, a.detailTab))).
-				FillWidth().Padding(16, 16, 24)).Children(func() {
+				FillWidth().Padding(16, 24, 24)).Children(func() {
 				switch {
 				case errText != "":
 					ui.Text(c, errText).FontSize(13).TextColor(p.removed)
 				case d == nil:
-					a.detailSkeleton(c, p, beside)
+					a.detailSkeleton(c, p)
 				default:
-					a.detailBody(c, p, d, beside)
+					a.detailBody(c, p, d)
 				}
 			})
 		})
 	})
 }
 
-func exchangeSections(c *ui.Context, p *palette, stacked bool, request, response func()) {
+func exchangeSections(c *ui.Context, p *palette, request, response func()) {
 	section := func(title string, body func()) {
-		block := ui.Column(c.Key(title)).MinWidth(0).Gap(8)
-		if !stacked {
-			block.Grow(1).Basis(0)
-		}
-		block.Children(func() {
+		ui.Column(c.Key(title)).Grow(1).Basis(0).MinWidth(0).Gap(8).Children(func() {
 			ui.Text(c, title).FontSize(12).FontWeight(600).TextColor(p.text).SingleLine()
 			body()
 		})
 	}
-	if stacked {
-		ui.Column(c).FillWidth().Gap(14).Children(func() {
-			section("Request", request)
-			hairline(c, p)
-			section("Response", response)
-		})
-		return
-	}
 	ui.Row(c).FillWidth().AlignItems(ui.Stretch).Children(func() {
 		section("Request", request)
-		ui.Box(c).Width(1).Shrink(0).Margin(0, 16).Background(p.border)
+		ui.Box(c).Width(1).Shrink(0).Margin(0, 24).Background(p.border)
 		section("Response", response)
 	})
 }
@@ -523,20 +498,20 @@ func (a *app) replayBusy(c *ui.Context, id string) bool {
 
 // detailSkeleton is what the detail shows while its exchange loads: quiet
 // bars where the two sides will be.
-func (a *app) detailSkeleton(c *ui.Context, p *palette, beside bool) {
+func (a *app) detailSkeleton(c *ui.Context, p *palette) {
 	bars := func() {
 		for _, w := range []float32{220, 160, 250, 120} {
 			ui.Box(c).Width(w).MaxWidthPercent(100).Height(9).Radius(4.5).Margin(4, 0).Background(p.text.Alpha(0.05))
 		}
 	}
-	exchangeSections(c, p, beside, bars, bars)
+	exchangeSections(c, p, bars, bars)
 }
 
 // detailBody is what the detail's tabs show of one exchange.
-func (a *app) detailBody(c *ui.Context, p *palette, d *api.RequestDetailResponse, beside bool) {
+func (a *app) detailBody(c *ui.Context, p *palette, d *api.RequestDetailResponse) {
 	switch a.detailTab {
 	case 1:
-		exchangeSections(c, p, beside,
+		exchangeSections(c, p,
 			func() {
 				a.bodyPane(c, p, "request", "Request body", d.Body, d.Request.RequestHeaders, d.Request.RequestHeaderList, d.Request.RequestBodyTruncated)
 			},
@@ -548,7 +523,7 @@ func (a *app) detailBody(c *ui.Context, p *palette, d *api.RequestDetailResponse
 	case 3:
 		a.gatewayTraceSection(c, p, d.Request.Gateway)
 	default:
-		exchangeSections(c, p, beside,
+		exchangeSections(c, p,
 			func() { a.headerRows(c, p, d.Request.RequestHeaderList, d.Request.RequestHeaders) },
 			func() { a.headerRows(c, p, d.Request.ResponseHeaderList, d.Request.ResponseHeaders) })
 	}

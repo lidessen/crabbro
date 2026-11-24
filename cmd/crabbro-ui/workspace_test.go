@@ -36,13 +36,13 @@ func TestRequestSearchRefreshesAfterTypingStops(t *testing.T) {
 	}
 }
 
-func TestRequestInspectorAdaptsToWindowWidth(t *testing.T) {
+func TestRequestInspectorStaysBelowTableWhenResized(t *testing.T) {
 	a := newApp(nil, context.Background())
 	a.page, a.st = pageRequests, gatewayViewFixture(time.Now())
 	a.reqShownID = string(a.st.detailID)
 	tt := ui.NewTester(a.view, 1280, 820)
-	check := func(beside bool) {
-		t.Helper()
+	for _, size := range [][2]int{{1280, 820}, {860, 540}, {1280, 820}} {
+		tt.SetSize(size[0], size[1])
 		tt.Frame()
 		list, listOK := tt.Find("Time")
 		tabs, tabsOK := tt.Find("Headers")
@@ -51,21 +51,16 @@ func TestRequestInspectorAdaptsToWindowWidth(t *testing.T) {
 		if !listOK || !tabsOK || !requestOK || !responseOK {
 			t.Fatal("request list or inspector sections missing")
 		}
-		if beside && (tabs.X < list.X+250 || response.Y <= request.Y) {
-			t.Fatal("wide inspector should sit beside the table and stack the two sections")
+		if tabs.Y < list.Y+100 || tabs.X > list.X+48 {
+			t.Fatalf("inspector should sit below the table at %dx%d", size[0], size[1])
 		}
-		if !beside && (tabs.Y < list.Y+100 || response.X <= request.X) {
-			t.Fatal("narrow inspector should sit below the table and compare the two sections side by side")
+		if response.X <= request.X || response.Y != request.Y {
+			t.Fatalf("request and response should sit side by side at %dx%d", size[0], size[1])
 		}
 		if a.reqShownID != string(a.st.detailID) {
 			t.Fatal("resizing changed the selected request")
 		}
 	}
-	check(true)
-	tt.SetSize(860, 540)
-	check(false)
-	tt.SetSize(1280, 820)
-	check(true)
 }
 
 func TestRulesKeepDraftWhenListChanges(t *testing.T) {

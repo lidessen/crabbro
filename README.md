@@ -401,9 +401,8 @@ The sidebar switches between five workspaces. It collapses to icons in narrower 
 The title bar keeps the recording controls available across all five.
 
 - **Trace** shows the recording timeline and its associated requests, rule hits, and verifications.
-- **Requests** filters the live table by search text and traffic type. The resizable inspector sits
-  beside the table in wide windows and below it in narrow ones. It shows headers, bodies, rule
-  traces, and gateway details, with a Replay action.
+- **Requests** filters the live table by search text and traffic type. The resizable inspector below
+  the table shows headers, bodies, rule traces, and gateway details, with a Replay action.
 - **Rules** lists rules in evaluation order. Select one to inspect its overview, edit its YAML, or
   enable, disable, or delete it.
 - **Gateway** groups configuration, plans and quotas, routes, usage, and credentials into tabs.
