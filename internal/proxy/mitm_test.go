@@ -517,6 +517,9 @@ func TestHandleMITMExchange_BodyCached(t *testing.T) {
 	clientTLS := doMITMExchange(t, pxy.Addr(), upstreamHost)
 	defer clientTLS.Close()
 
+	sub := pxy.DefaultSink().EventHub.Subscribe()
+	defer pxy.DefaultSink().EventHub.Unsubscribe(sub)
+
 	clientTLS.Write([]byte("GET / HTTP/1.1\r\nHost: " + upstreamHost + "\r\n\r\n"))
 
 	clientTLS.SetReadDeadline(time.Now().Add(10 * time.Second))
@@ -526,10 +529,28 @@ func TestHandleMITMExchange_BodyCached(t *testing.T) {
 	}
 	resp.Body.Close()
 
+	// The response can reach the client before finishExchange stores its body.
+	// Wait for the exchange's completion event before reading its record.
+	var completedID shared.RequestID
+	timer := time.NewTimer(10 * time.Second)
+	defer timer.Stop()
+	for completedID == "" {
+		select {
+		case evt := <-sub:
+			if evt.Type == shared.EventResponseCompleted {
+				completedID = evt.RequestID
+			} else if evt.Type == shared.EventRequestFailed {
+				t.Fatalf("exchange failed: %v", evt.Payload)
+			}
+		case <-timer.C:
+			t.Fatal("timed out waiting for exchange completion")
+		}
+	}
+
 	// Find the request record in the ring buffer.
 	var foundReq *shared.Request
 	for _, r := range pxy.DefaultSink().List(100) {
-		if r.Intercepted && r.Scheme == "https" && r.Method == "GET" {
+		if r.ID == completedID && r.Intercepted && r.Scheme == "https" && r.Method == "GET" {
 			foundReq = r
 			break
 		}
