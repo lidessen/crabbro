@@ -85,3 +85,65 @@ func TestOffloadNestedIsolation(t *testing.T) {
 		t.Fatalf("protocol field missing: %s", body)
 	}
 }
+
+func TestOffloadRedactsCredentialComponents(t *testing.T) {
+	for _, tc := range []struct {
+		adapter, body, field string
+	}{
+		{"responses", `{"input":"czNjcjN0 s3cr3t other=value query-secret"}`, "input"},
+		{"anthropic-messages", `{"messages":[{"role":"user","content":"czNjcjN0 s3cr3t other=value query-secret"}]}`, "messages"},
+	} {
+		t.Run(tc.adapter, func(t *testing.T) {
+			src, err := http.NewRequest(http.MethodPost, "https://subscription.example/?key=query-secret", strings.NewReader(tc.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			src.Header.Set("Authorization", "Basic czNjcjN0")
+			src.Header.Add("Cookie", "session=s3cr3t; second=other=value; empty=")
+			req, err := buildOffloadRequest(src, tc.adapter, "route/model", 4096)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, err := io.ReadAll(req.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var obj map[string]json.RawMessage
+			if err := json.Unmarshal(body, &obj); err != nil {
+				t.Fatal(err)
+			}
+			field := string(obj[tc.field])
+			for _, secret := range []string{"czNjcjN0", "s3cr3t", "other=value", "query-secret"} {
+				if strings.Contains(field, secret) {
+					t.Errorf("credential component %q was retained in %s", secret, field)
+				}
+			}
+			if strings.Count(field, "[REDACTED]") != 4 {
+				t.Fatalf("unexpected sanitized field: %s", field)
+			}
+		})
+	}
+}
+
+func TestOffloadPreservesAnthropicThinkingBudget(t *testing.T) {
+	src, err := http.NewRequest(http.MethodPost, "https://subscription.example/", strings.NewReader(`{"messages":[],"thinking":{"type":"enabled","budget_tokens":4096}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := buildOffloadRequest(src, "anthropic-messages", "route/model", 4096)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var obj struct {
+		Thinking struct {
+			Type         string `json:"type"`
+			BudgetTokens int    `json:"budget_tokens"`
+		} `json:"thinking"`
+	}
+	if err := json.NewDecoder(req.Body).Decode(&obj); err != nil {
+		t.Fatal(err)
+	}
+	if obj.Thinking.Type != "enabled" || obj.Thinking.BudgetTokens != 4096 {
+		t.Fatalf("thinking was not preserved: %+v", obj.Thinking)
+	}
+}

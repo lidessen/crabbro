@@ -54,11 +54,22 @@ func buildOffloadRequest(src *http.Request, adapter, model string, maxBody int64
 	// Values in discarded fields can also be repeated in otherwise permitted
 	// fields. Remove those copies as well as the fields themselves.
 	secrets := make(map[string]struct{})
-	for _, values := range src.Header {
+	for name, values := range src.Header {
 		for _, value := range values {
 			addOffloadSecret(secrets, value)
-			if fields := strings.Fields(value); len(fields) == 2 && strings.EqualFold(fields[0], "bearer") {
-				addOffloadSecret(secrets, fields[1])
+			if strings.EqualFold(name, "Authorization") {
+				if i := strings.IndexAny(value, " \t"); i >= 0 {
+					addOffloadSecret(secrets, strings.TrimSpace(value[i:]))
+				}
+			}
+			if strings.EqualFold(name, "Cookie") {
+				for _, pair := range strings.Split(value, ";") {
+					if _, cookieValue, ok := strings.Cut(pair, "="); ok {
+						cookieValue = strings.TrimSpace(cookieValue)
+						addOffloadSecret(secrets, cookieValue)
+						addOffloadSecret(secrets, strings.Trim(cookieValue, `"`))
+					}
+				}
 			}
 		}
 	}
@@ -133,7 +144,7 @@ func collectOffloadSecrets(secrets map[string]struct{}, value any) {
 func sensitiveOffloadKey(key string) bool {
 	key = strings.ToLower(key)
 	key = strings.NewReplacer("_", "", "-", "", ".", "").Replace(key)
-	if key == "maxtokens" || key == "maxoutputtokens" {
+	if key == "maxtokens" || key == "maxoutputtokens" || key == "budgettokens" {
 		return false
 	}
 	for _, fragment := range []string{"metadata", "subscription", "account", "credential", "authorization", "apikey", "token", "cookie", "secret", "password"} {
