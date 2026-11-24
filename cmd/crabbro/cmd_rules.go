@@ -20,7 +20,7 @@ import (
 
 func cmdRules(cfg *clientConfig, args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: crabbro rules <command> [options]\n\nCommands: list, create, get, enable, disable, delete, test, fixture")
+		return fmt.Errorf("usage: crabbro rules <command> [options]\n\nCommands: list, diagnose, create, get, enable, disable, delete, test, fixture")
 	}
 
 	sub := args[0]
@@ -29,6 +29,8 @@ func cmdRules(cfg *clientConfig, args []string) error {
 	switch sub {
 	case "list":
 		return cmdRulesList(cfg, subArgs)
+	case "diagnose":
+		return cmdRulesDiagnose(cfg, subArgs)
 	case "create":
 		return cmdRulesCreate(cfg, subArgs)
 	case "get":
@@ -56,6 +58,69 @@ func cmdRules(cfg *clientConfig, args []string) error {
 	default:
 		return fmt.Errorf("unknown rules command: %s", sub)
 	}
+}
+
+func cmdRulesDiagnose(cfg *clientConfig, args []string) error {
+	fs := flag.NewFlagSet("rules diagnose", flag.ContinueOnError)
+	jsonOutput := fs.Bool("json", false, "JSON output")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("usage: crabbro rules diagnose [--json]")
+	}
+	raw, err := gatewayFetch(cfg, http.MethodGet, "/v1/rules/diagnose", nil)
+	if err != nil {
+		return err
+	}
+	if *jsonOutput {
+		fmt.Println(string(raw))
+		return nil
+	}
+	var result rulesDiagnoseResponse
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return fmt.Errorf("decode response: %w", err)
+	}
+	printRulesDiagnose(os.Stdout, result)
+	return nil
+}
+
+type rulesDiagnoseResponse struct {
+	Complete bool              `json:"complete"`
+	Files    []rule.FileStatus `json:"files"`
+}
+
+func printRulesDiagnose(w io.Writer, result rulesDiagnoseResponse) {
+	fmt.Fprintf(w, "complete=%t files=%d\n", result.Complete, len(result.Files))
+	const limit = 20
+	for i, f := range result.Files {
+		if i == limit {
+			fmt.Fprintf(w, "  ... %d more files (use --json)\n", len(result.Files)-limit)
+			break
+		}
+		fmt.Fprintf(w, "  %s live=%t draft=%t enabled=%t diagnostics=%d\n", boundedText(f.ID), f.Live, f.Draft, f.Enabled, len(f.Diagnostics))
+		for j, d := range f.Diagnostics {
+			if j == limit {
+				fmt.Fprintf(w, "    ... %d more diagnostics (use --json)\n", len(f.Diagnostics)-limit)
+				break
+			}
+			fmt.Fprintf(w, "    %s: %s\n", boundedText(d.Path), boundedText(d.Message))
+		}
+	}
+}
+
+// boundedText keeps diagnostic fields short and on one line.
+func boundedText(s string) string {
+	r := []rune(strings.Map(func(c rune) rune {
+		if c < ' ' || c == 127 {
+			return ' '
+		}
+		return c
+	}, s))
+	if len(r) > 200 {
+		return string(r[:200]) + "..."
+	}
+	return string(r)
 }
 
 // cmdRulesList handles `crabbro rules list [--json|--pretty]`

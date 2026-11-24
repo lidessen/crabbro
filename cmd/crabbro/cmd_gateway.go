@@ -18,11 +18,11 @@ import (
 
 func cmdGateway(cfg *clientConfig, args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: crabbro gateway <status|plans|routes|quotas|usage|cooldown-clear|preview|reload>")
+		return fmt.Errorf("usage: crabbro gateway <status|plans|routes|quotas|usage|why|cooldown-clear|preview|reload>")
 	}
 	switch args[0] {
 	case "help", "--help", "-h":
-		fmt.Println("usage: crabbro gateway <status|plans|routes|quotas|usage|cooldown-clear|preview|reload>")
+		fmt.Println("usage: crabbro gateway <status|plans|routes|quotas|usage|why|cooldown-clear|preview|reload>")
 		return nil
 	case "status":
 		return gatewayGetJSON(cfg, args[1:], "/v1/gateway/status", func(raw []byte) {
@@ -143,6 +143,8 @@ func cmdGateway(cfg *clientConfig, args []string) error {
 		})
 	case "quotas":
 		return gatewayQuotas(cfg, args[1:])
+	case "why":
+		return gatewayWhy(cfg, args[1:])
 	case "usage":
 		fs := flag.NewFlagSet("gateway usage", flag.ContinueOnError)
 		window := fs.String("window", "24h", "Rolling duration window (e.g. 1h, 24h, 7d)")
@@ -238,6 +240,79 @@ func cmdGateway(cfg *clientConfig, args []string) error {
 		return printAPI(cfg, http.MethodPost, "/v1/gateway/reload", nil)
 	default:
 		return fmt.Errorf("unknown gateway subcommand: %s", args[0])
+	}
+}
+
+func gatewayWhy(cfg *clientConfig, args []string) error {
+	if len(args) != 1 || args[0] == "" || strings.HasPrefix(args[0], "-") {
+		return fmt.Errorf("usage: crabbro gateway why <request-id>")
+	}
+	raw, err := gatewayFetch(cfg, http.MethodGet, "/v1/requests/"+url.PathEscape(args[0]), nil)
+	if err != nil {
+		return err
+	}
+	var detail shared.RequestDetailResponse
+	if err := json.Unmarshal(raw, &detail); err != nil {
+		return fmt.Errorf("decode request: %w", err)
+	}
+	trace := detail.Request.Gateway
+	if trace == nil {
+		return fmt.Errorf("request has no gateway trace")
+	}
+	var plans shared.GatewayPlanListResponse
+	planRaw, planErr := gatewayFetch(cfg, http.MethodGet, "/v1/gateway/plans", nil)
+	if planErr == nil {
+		planErr = json.Unmarshal(planRaw, &plans)
+	}
+	printGatewayWhy(os.Stdout, trace, plans.Plans, planErr)
+	return nil
+}
+
+func printGatewayWhy(w io.Writer, trace *shared.GatewayTrace, plans []shared.GatewayPlanStatus, planErr error) {
+	fmt.Fprintf(w, "profile=%s route=%s chosen=%s/%s protocol=%s\n", trace.Profile, trace.RouteID, trace.ChosenPlan, trace.ChosenModel, trace.UpstreamProtocol)
+	if trace.RouteDecision == nil || len(trace.RouteDecision.Candidates) == 0 {
+		fmt.Fprintln(w, "scores: not recorded")
+	} else {
+		fmt.Fprintf(w, "resolution=%s\n", trace.RouteDecision.Resolution)
+		for _, c := range trace.RouteDecision.Candidates {
+			fmt.Fprintf(w, "  candidate=%s/%s eligible=%t quality=%.3f cache=%.3f quota=%.3f total=%.3f reason=%s\n", c.Plan, c.Model, c.Eligible, c.Scores.Quality, c.Scores.Cache, c.Scores.Quota, c.Scores.Total, c.RejectReason)
+		}
+	}
+	if len(trace.Attempts) == 0 {
+		fmt.Fprintln(w, "attempts: not recorded")
+	} else {
+		for i, a := range trace.Attempts {
+			fmt.Fprintf(w, "  attempt=%d target=%s/%s status=%d error=%s reason=%s cooldown_applied=%s\n", i+1, a.Plan, a.Model, a.Status, a.ErrorKind, a.ErrorMessage, a.CooldownApplied)
+		}
+	}
+	fmt.Fprintln(w, "peek-failover: origin not recorded; see attempt errors above")
+	if planErr != nil {
+		fmt.Fprintf(w, "current cooldown/coupon state: unavailable (%s)\n", planErr)
+		return
+	}
+	fmt.Fprintln(w, "current cooldown/coupon state (not a historical snapshot):")
+	relevant := map[string]bool{trace.ChosenPlan: true}
+	for _, a := range trace.Attempts {
+		relevant[a.Plan] = true
+	}
+	found := 0
+	for _, p := range plans {
+		if !relevant[p.ID] {
+			continue
+		}
+		found++
+		until := "none reported"
+		if p.CooldownUntil != nil {
+			until = p.CooldownUntil.Format(time.RFC3339)
+		}
+		coupon := "unknown"
+		if p.RemoteQuota != nil {
+			coupon = fmt.Sprintf("%d (stale=%t)", p.RemoteQuota.ResetsRemaining, p.RemoteQuota.Stale)
+		}
+		fmt.Fprintf(w, "  plan=%s healthy=%t cooldown_until=%s scope=%s coupons=%s\n", p.ID, p.Healthy, until, p.CooldownScope, coupon)
+	}
+	if found == 0 {
+		fmt.Fprintln(w, "  no matching plans reported")
 	}
 }
 

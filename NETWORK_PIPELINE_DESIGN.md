@@ -1,3 +1,5 @@
+> **[Proposed — Not Implemented]** This document describes a proposed design, not current behavior.
+
 # Crabbro Network Data Plane and Middleware Design
 
 Status: Proposed design, not implemented

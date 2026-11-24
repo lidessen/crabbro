@@ -118,7 +118,6 @@ Resume with `?after=4` or the `Last-Event-ID: 4` header. Events with `id` less t
 
 - MyGo's own packaging (`mygo.json`, signing, notarization, auto-update). `scripts/install.sh` builds `cmd/crabbro-ui` and installs it as the app's executable; a `mygo.json` bundle can replace that later.
 - A TypeScript client. The UI calls Go directly.
-- A TypeScript client. The UI calls Go directly.
 - Plugin inspect and invoke results stay free-form JSON because the host returns that.
 - Browser-extension or DevTools attribution. Header-derived sources are what `ListSources` returns today.
 - An event ring longer than 512, or a durable event log. After a long disconnect, snapshot again.

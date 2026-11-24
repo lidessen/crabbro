@@ -120,9 +120,11 @@ Commands:
   secrets list|set|delete   Manage mode-0600 credentials under ~/.crabbro/secrets/
   gateway status|plans|routes    Inspect multi-protocol LLM & Decision gateway
   gateway usage|preview|reload  View quota usage, dry-run router, or reload config
+  gateway why <request-id>  Explain a recorded gateway route
   gateway cooldown-clear <plan> Clear an active plan cooldown
   config status             List rule, scope, or gateway config files and drafts
   rules list                List rules
+  rules diagnose [--json]   Diagnose rule files
   rules validate <file>     Check a YAML rule without loading it
   rules migrate <file.js>   Wrap a legacy script as a run stage
   rules preview             Match rules without applying them

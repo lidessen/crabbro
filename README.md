@@ -14,7 +14,7 @@ The loop the CLI is built for:
 
 ## Install
 
-Requires Go 1.26 or newer. From a checkout, one command builds the binaries and installs them:
+Requires Go 1.27.3 or newer. From a checkout, one command builds the binaries and installs them:
 
 ```sh
 ./scripts/install.sh
@@ -130,6 +130,8 @@ HTTP/2 (extended CONNECT) is not implemented.
   - `openai-decisions`: `POST /v1/decisions`
 - **Model listing**: `GET /v1/models`
 
+`gemini-decisions` is available as a route/upstream protocol; it has no ingress endpoint.
+
 Credentials live mode `0600` in `~/.crabbro/secrets/` and are referenced by name from YAML plans and routes under `~/.crabbro/gateway/plans/*.yaml` and `~/.crabbro/gateway/routes/*.yaml` (validated with Draft 2020-12 schemas and staged/committed via `crabbro config`):
 
 ```sh
@@ -230,8 +232,7 @@ reads the token file itself.
 `--limit`, `--method`, `--host`, `--path`, `--status`, `--query`, `--tag`, `--session`.
 
 `crabbrod` flags: `--proxy-addr`, `--uds-path`, `--tcp-addr`, `--ring-buffer-size`,
-`--fixture-dir`, `--mitm`, `--mitm-allow`, `--mitm-deny`, `--decision-provider`,
-`--decision-base-url`, `--decision-model`, `--history`, `--history-retention`,
+`--fixture-dir`, `--mitm`, `--mitm-allow`, `--mitm-deny`, `--history`, `--history-retention`,
 `--history-max-rows`. The API key stays in the environment.
 
 ## Rule format
@@ -397,7 +398,7 @@ toolkit. The contract, the event types, and the snapshot-then-follow pattern are
 go run ./cmd/crabbro-ui
 ```
 
-The window has four pages:
+The window has five pages:
 
 - **Requests** — the live table (newest first, search, hidden rows) and, below it, the detail of
   the request chosen: headers, bodies, and the rule trace. A replay button sends it back through
@@ -406,6 +407,7 @@ The window has four pages:
   (match, description, priority, and the builtin stages with their parameters) and the raw YAML code; rules
   the form cannot express — hooks, `vars`, `select`, `parallel`, plugin stages — open in code. Saving goes
   through `PUT /v1/rules/{id}`.
+- **Gateway** — inspect gateway status, plans, routes, and quota state.
 - **Trajectory** — the timeline tail, newest first; a step's request id opens it in Requests.
 - **Daemon** — status, the recording session, history, MITM, and the scope.
 
