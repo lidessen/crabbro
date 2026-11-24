@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -12,6 +13,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,6 +22,291 @@ import (
 	"github.com/lidessen/crabbro/internal/rule"
 	"github.com/lidessen/crabbro/internal/shared"
 )
+
+func TestWebSocketConcurrentBidirectionalWriters(t *testing.T) {
+	for _, masked := range []bool{false, true} {
+		t.Run(fmt.Sprintf("masked=%v", masked), func(t *testing.T) {
+			var output bytes.Buffer
+			writer := &wsWriter{dst: &slowWebSocketWriter{dst: &output}, mask: masked}
+			var wg sync.WaitGroup
+			for n := 0; n < 4; n++ {
+				wg.Add(1)
+				go func(n int) {
+					defer wg.Done()
+					for i := 0; i < 50; i++ {
+						if err := writer.write(1, []byte(fmt.Sprintf("%d:%d", n, i))); err != nil {
+							t.Error(err)
+							return
+						}
+					}
+				}(n)
+			}
+			wg.Wait()
+			seen := map[string]bool{}
+			for output.Len() > 0 {
+				op, data, fin, err := readWSFrame(&output)
+				if err != nil || op != 1 || !fin || seen[string(data)] {
+					t.Fatalf("corrupt frame: %d %q %v %v", op, data, fin, err)
+				}
+				seen[string(data)] = true
+			}
+			if len(seen) != 200 {
+				t.Fatalf("got %d frames", len(seen))
+			}
+		})
+	}
+}
+
+type slowWebSocketWriter struct{ dst *bytes.Buffer }
+
+func (w *slowWebSocketWriter) Write(p []byte) (int, error) {
+	for _, b := range p {
+		w.dst.WriteByte(b)
+		time.Sleep(time.Microsecond)
+	}
+	return len(p), nil
+}
+
+func TestWebSocketRelayConcurrentInjection(t *testing.T) {
+	var clientInput, serverInput, toClient, toUpstream bytes.Buffer
+	for i := 0; i < 20; i++ {
+		appendTestWSFrame(t, &clientInput, 1, "intercept", true)
+		appendTestWSFrame(t, &serverInput, 1, "server", true)
+	}
+	clientWriter := &wsWriter{dst: &slowWebSocketWriter{dst: &toClient}}
+	upstreamWriter := &wsWriter{dst: &slowWebSocketWriter{dst: &toUpstream}, mask: true}
+	ex := &Exchange{record: &shared.Request{Path: "/ws"}, matched: []*shared.Rule{wsTerminalRule("    - uses: crabbro.respond-frame\n      with:\n        payload: reply\n")}}
+	p := &Proxy{RuleEngine: rule.NewRuleEngine()}
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		p.relayFramesWithWriters(ex, &clientInput, upstreamWriter, clientWriter, "client", &wsObservations{})
+	}()
+	go func() {
+		defer wg.Done()
+		p.relayFramesWithWriters(ex, &serverInput, clientWriter, upstreamWriter, "server", &wsObservations{})
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 20; i++ {
+			if err := upstreamWriter.write(1, []byte("injected")); err != nil {
+				t.Error(err)
+				return
+			}
+		}
+	}()
+	wg.Wait()
+	for _, tc := range []struct {
+		name   string
+		frames *bytes.Buffer
+		want   map[string]int
+	}{
+		{"client", &toClient, map[string]int{"server": 20, "reply": 20}},
+		{"upstream", &toUpstream, map[string]int{"injected": 20}},
+	} {
+		for tc.frames.Len() > 0 {
+			op, payload, fin, err := readWSFrame(tc.frames)
+			if err != nil || op != 1 || !fin {
+				t.Fatalf("%s: corrupt frame: %d %q %v %v", tc.name, op, payload, fin, err)
+			}
+			tc.want[string(payload)]--
+		}
+		for payload, count := range tc.want {
+			if count != 0 {
+				t.Errorf("%s: %q count differs by %d", tc.name, payload, count)
+			}
+		}
+	}
+}
+
+func wsTerminalRule(stage string) *shared.Rule {
+	return &shared.Rule{ID: "terminal", Version: 1, Script: "version: 1\nid: terminal\non:\n  request:\n    path: /ws\nframe:\n  pipeline:\n" + stage}
+}
+
+func runWebSocketTerminal(t *testing.T, stage, message string, offloader GatewayOffloader) (string, []string) {
+	t.Helper()
+	var input, upstream, client bytes.Buffer
+	cut := len(message) / 2
+	appendTestWSFrame(t, &input, 1, message[:cut], false)
+	appendTestWSFrame(t, &input, 0, message[cut:], true)
+	req, err := http.NewRequestWithContext(context.Background(), "GET", "https://subscription.example/ws?key=synthetic-query", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer synthetic-auth")
+	req.Header.Set("Cookie", "session=synthetic-cookie")
+	req.Header.Set("X-Subscription", "synthetic-header")
+	ex := &Exchange{ctx: context.Background(), outbound: req, sourceURL: req.URL, sourceHeader: req.Header.Clone(), record: &shared.Request{Path: "/ws"}, matched: []*shared.Rule{wsTerminalRule(stage)}}
+	p := &Proxy{RuleEngine: rule.NewRuleEngine(), GatewayOffloader: offloader}
+	p.relayFramesWithWriters(ex, &input, &wsWriter{dst: &upstream, mask: true}, &wsWriter{dst: &client}, "client", &wsObservations{})
+	var messages []string
+	for client.Len() > 0 {
+		op, payload, fin, err := readWSFrame(&client)
+		if err != nil || op != 1 || !fin {
+			t.Fatalf("client frame: %d %q %v %v", op, payload, fin, err)
+		}
+		messages = append(messages, string(payload))
+	}
+	return upstream.String(), messages
+}
+
+func TestWebSocketSyntheticReplyNotForwarded(t *testing.T) {
+	upstream, messages := runWebSocketTerminal(t, "    - uses: crabbro.respond-frame\n      with:\n        payload: synthetic-reply\n", "intercepted", nil)
+	if upstream != "" || len(messages) != 1 || messages[0] != "synthetic-reply" {
+		t.Fatalf("upstream %q, client %q", upstream, messages)
+	}
+}
+
+func TestWebSocketGatewayOffload(t *testing.T) {
+	stage := "    - uses: crabbro.gateway-offload\n      with:\n        protocol: responses\n        model: local/model\n"
+	message := `{"type":"response.create","model":"subscription-model","stream":true,"input":[{"content":"synthetic-auth synthetic-cookie synthetic-query synthetic-header synthetic-token","token":"synthetic-token"}]}`
+	for _, tc := range []struct {
+		name, contentType, body string
+		failure                 bool
+		want                    []string
+	}{
+		{"json", "application/json", `{"id":"response-1"}`, false, []string{`{"id":"response-1"}`}},
+		{"sse", "text/event-stream; charset=utf-8", "event: response.created\ndata: {\"type\":\"response.created\"}\n\ndata: {\"type\":\"response.completed\"}\n\ndata: [DONE]\n\n", false, []string{`{"type":"response.created"}`, `{"type":"response.completed"}`}},
+		{"failure", "", "", true, []string{`{"type":"error","error":{"message":"gateway offload failed"}}`}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			called := false
+			upstream, got := runWebSocketTerminal(t, stage, message, offloadFunc(func(r *http.Request) (*http.Response, error) {
+				called = true
+				body, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				all := r.URL.String() + fmt.Sprint(r.Header) + string(body)
+				for _, secret := range []string{"synthetic-auth", "synthetic-cookie", "synthetic-query", "synthetic-header", "synthetic-token", "subscription-model"} {
+					if strings.Contains(all, secret) {
+						t.Errorf("credential reached gateway: %s", secret)
+					}
+				}
+				if r.URL.Path != "/v1/responses" || r.URL.RawQuery != "" || r.Header.Get("Authorization") != "" || !strings.Contains(string(body), `"model":"local/model"`) {
+					t.Errorf("unexpected isolated request: %s %s", r.URL, body)
+				}
+				if tc.failure {
+					return nil, errors.New("private gateway failure")
+				}
+				return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{tc.contentType}}, Body: io.NopCloser(strings.NewReader(tc.body))}, nil
+			}))
+			if !called || upstream != "" || fmt.Sprint(got) != fmt.Sprint(tc.want) {
+				t.Fatalf("called %v, upstream %q, client %q", called, upstream, got)
+			}
+		})
+	}
+}
+
+func TestWebSocketGatewayOffloadStreamsBeforeCompletion(t *testing.T) {
+	events, sendEvent := io.Pipe()
+	client, sendClient := io.Pipe()
+	t.Cleanup(func() { events.Close(); sendEvent.Close(); client.Close(); sendClient.Close() })
+	req, err := http.NewRequestWithContext(context.Background(), "GET", "https://subscription.example/ws", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ex := &Exchange{ctx: context.Background(), outbound: req, sourceURL: req.URL, sourceHeader: req.Header}
+	p := &Proxy{GatewayOffloader: offloadFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: events}, nil
+	})}
+	done := make(chan error, 1)
+	go func() {
+		done <- p.offloadWebSocket(ex, []byte(`{"input":"hello","stream":true}`), shared.RuleAction{Params: map[string]any{"protocol": "responses", "model": "local/model"}}, &wsWriter{dst: sendClient})
+	}()
+	go func() { _, _ = io.WriteString(sendEvent, "data: {\"type\":\"response.created\"}\n\n") }()
+	received := make(chan string, 1)
+	go func() {
+		_, data, _, err := readWSFrame(client)
+		if err == nil {
+			received <- string(data)
+		}
+	}()
+	select {
+	case data := <-received:
+		if data != `{"type":"response.created"}` {
+			t.Fatalf("event = %q", data)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("event was not delivered before stream completion")
+	}
+	_ = sendEvent.Close()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWebSocketGatewayOffloadBridge(t *testing.T) {
+	upstreamResult := make(chan error, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, rw, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			upstreamResult <- err
+			return
+		}
+		defer conn.Close()
+		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+		_, err = fmt.Fprint(rw, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
+		if err == nil {
+			err = rw.Flush()
+		}
+		if err != nil {
+			upstreamResult <- err
+			return
+		}
+		op, payload, _, err := readWSFrame(rw.Reader)
+		if err != nil || op != 9 || string(payload) != "marker" {
+			upstreamResult <- fmt.Errorf("unexpected upstream frame %d %q: %v", op, payload, err)
+			return
+		}
+		upstreamResult <- writeWSFrame(conn, 10, payload, false)
+	}))
+	defer upstream.Close()
+	store := rule.NewRuleStore()
+	script := wsTerminalRule("    - uses: crabbro.gateway-offload\n      with:\n        protocol: responses\n        model: local/model\n").Script
+	if _, err := store.Create("terminal", 10, script); err != nil {
+		t.Fatal(err)
+	}
+	p := New("127.0.0.1:0", ring.NewRequestBuffer(8), store, rule.NewRuleEngine())
+	p.GatewayOffloader = offloadFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"id":"local"}`))}, nil
+	})
+	if err := p.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer p.Stop()
+	conn, err := net.Dial("tcp", p.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	host := strings.TrimPrefix(upstream.URL, "http://")
+	fmt.Fprintf(conn, "GET http://%s/ws HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n", host, host)
+	reader := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(reader, &http.Request{Method: "GET"})
+	if err != nil || resp.StatusCode != 101 {
+		t.Fatalf("handshake: %v %v", resp, err)
+	}
+	if err := writeWSFrame(conn, 1, []byte(`{"type":"response.create","input":"hello"}`), true); err != nil {
+		t.Fatal(err)
+	}
+	op, payload, _, err := readWSFrame(reader)
+	if err != nil || op != 1 || string(payload) != `{"id":"local"}` {
+		t.Fatalf("client frame: %d %q %v", op, payload, err)
+	}
+	if err := writeWSFrame(conn, 9, []byte("marker"), true); err != nil {
+		t.Fatal(err)
+	}
+	op, payload, _, err = readWSFrame(reader)
+	if err != nil || op != 10 || string(payload) != "marker" {
+		t.Fatalf("pong: %d %q %v", op, payload, err)
+	}
+	if err := <-upstreamResult; err != nil {
+		t.Fatal(err)
+	}
+}
 
 func appendTestWSFrame(t *testing.T, out *bytes.Buffer, opcode byte, payload string, fin bool) {
 	t.Helper()

@@ -314,7 +314,7 @@ func walkPipeline(path string, stages []Stage, phase string, known map[string]bo
 			}
 		default:
 			out = append(out, checkAction(p, st, phase, known, false, offline, rt)...)
-			if st.Uses == "crabbro.mock-response" || st.Uses == "crabbro.block" || st.Uses == "crabbro.abort" || st.Uses == "crabbro.gateway-offload" {
+			if st.Uses == "crabbro.mock-response" || st.Uses == "crabbro.block" || st.Uses == "crabbro.abort" || st.Uses == "crabbro.gateway-offload" || st.Uses == "crabbro.respond-frame" {
 				if len(terminals) > 0 {
 					out = append(out, Diagnostic{Path: p, Message: "multiple terminal actions"})
 				}
@@ -350,7 +350,7 @@ func checkAction(path string, st Stage, phase string, known map[string]bool, inP
 			out = append(out, Diagnostic{Path: path + ".uses", Message: "invalid uses name"})
 		}
 		if ph, ok := builtinPhase[st.Uses]; ok {
-			if ph != "any" && ph != phase {
+			if ph != "any" && ph != phase && !(st.Uses == "crabbro.gateway-offload" && phase == "frame") {
 				out = append(out, Diagnostic{Path: path + ".uses", Message: "uses is not valid in this phase"})
 			}
 			if inParallel && builtinEffect(st.Uses) != "observe" {

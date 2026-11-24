@@ -85,7 +85,7 @@ Built-ins:
 | `crabbro.set-request-header` | request | mutate |
 | `crabbro.remove-request-header` | request | mutate |
 | `crabbro.rewrite-url` | request | mutate |
-| `crabbro.gateway-offload` | request | mutate. Terminates forwarding and sends a sanitized request to the local gateway using `with.protocol` (`responses` or `anthropic-messages`) and `with.model` (a gateway route model or `plan/model`). Errors do not fall back to the original upstream. |
+| `crabbro.gateway-offload` | request or frame | mutate. Terminates forwarding and sends a sanitized request to the local gateway using `with.protocol` (`responses` or `anthropic-messages`) and `with.model` (a gateway route model or `plan/model`). Errors do not fall back to the original upstream. |
 | `crabbro.mock-response` | request | mutate. Later stages in that pipeline do not run. The response pipeline of this rule still runs on the synthetic response. |
 | `crabbro.block` | request | mutate. Same short-circuit. |
 | `crabbro.abort` | request | mutate. HTTP 403. |
@@ -97,6 +97,7 @@ Built-ins:
 | `crabbro.throttle` | response | mutate. Same reason. |
 | `crabbro.replace-frame` | frame | mutate |
 | `crabbro.drop-frame` | frame | mutate |
+| `crabbro.respond-frame` | frame | mutate. Intercepts a client message and sends the text in `with.payload` to the client; later stages do not run. |
 | `crabbro.read-body` | request or response | observe. Outputs `bytes` and `truncated`. |
 | `crabbro.log` | any | observe |
 | `crabbro.metric` | any | observe |
@@ -104,6 +105,8 @@ Built-ins:
 | `crabbro.tee` | any | observe. Copies the snapshot, including at most the body preview. |
 
 `mock-response` and `block` in one pipeline are a validation error. A plugin action without `effect` is `mutate`.
+
+Frame offload applies to complete client messages, including fragmented messages. The message must be a JSON object with fields supported by the selected gateway protocol; subscription headers, query values and nested credentials are removed using the same isolation as HTTP offload. A JSON response becomes one text message; each SSE data event becomes one text message, excluding the `[DONE]` sentinel. Gateway failures produce a generic error text message and never forward the intercepted message upstream. Server messages are not intercepted by these terminal actions. Rules should use frame conditions to select the intended messages.
 
 ## 4. Examples
 

@@ -3,6 +3,7 @@ package proxy
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/base64"
@@ -166,10 +167,15 @@ func (p *Proxy) bridgeWebSocket(w http.ResponseWriter, ex *Exchange, resp *http.
 	p.emit(shared.EventResponseHeaders, ex.record.ID, nil)
 
 	observations := &wsObservations{}
+	ctx, cancel := context.WithCancel(ex.ctx)
+	defer cancel()
+	ex.ctx = ctx
+	toClient := &wsWriter{dst: client}
+	toUpstream := &wsWriter{dst: ex.upgradeConn, mask: true}
 	errc := make(chan struct{}, 2)
 	go func() {
 		if ex.captureStarted || len(ex.matched) > 0 {
-			p.relayFrames(ex, ex.clientReader(client), ex.upgradeConn, "client", true, observations)
+			p.relayFramesWithWriters(ex, ex.clientReader(client), toUpstream, toClient, "client", observations)
 		} else {
 			_, _ = io.Copy(ex.upgradeConn, ex.clientReader(client))
 		}
@@ -177,13 +183,14 @@ func (p *Proxy) bridgeWebSocket(w http.ResponseWriter, ex *Exchange, resp *http.
 	}()
 	go func() {
 		if ex.captureStarted || len(ex.matched) > 0 {
-			p.relayFrames(ex, ex.upgradeConn, client, "server", false, observations)
+			p.relayFramesWithWriters(ex, ex.upgradeConn, toClient, toUpstream, "server", observations)
 		} else {
 			_, _ = io.Copy(client, ex.upgradeConn)
 		}
 		errc <- struct{}{}
 	}()
 	<-errc
+	cancel()
 	client.Close()
 	ex.upgradeConn.Close()
 	<-errc
@@ -213,7 +220,24 @@ type wsObservations struct {
 	truncated bool
 }
 
+// wsWriter serializes complete frames, including their headers and payloads.
+type wsWriter struct {
+	mu   sync.Mutex
+	dst  io.Writer
+	mask bool
+}
+
+func (w *wsWriter) write(opcode byte, payload []byte) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return writeWSFrame(w.dst, opcode, payload, w.mask)
+}
+
 func (p *Proxy) relayFrames(ex *Exchange, src io.Reader, dst io.Writer, direction string, mask bool, observations *wsObservations) {
+	p.relayFramesWithWriters(ex, src, &wsWriter{dst: dst, mask: mask}, nil, direction, observations)
+}
+
+func (p *Proxy) relayFramesWithWriters(ex *Exchange, src io.Reader, dst, reverse *wsWriter, direction string, observations *wsObservations) {
 	var message []byte
 	var messageOpcode byte
 	fragmented := false
@@ -224,7 +248,7 @@ func (p *Proxy) relayFrames(ex *Exchange, src io.Reader, dst io.Writer, directio
 		}
 		switch opcode {
 		case 0x8, 0x9, 0xa:
-			if !fin || len(payload) > 125 || writeWSFrame(dst, opcode, payload, mask) != nil {
+			if !fin || len(payload) > 125 || dst.write(opcode, payload) != nil {
 				return
 			}
 			continue
@@ -250,7 +274,7 @@ func (p *Proxy) relayFrames(ex *Exchange, src io.Reader, dst io.Writer, directio
 			continue
 		}
 		original := message
-		out, drop, traces := p.rewriteFrame(ex, direction, opcodeName(messageOpcode), original, true)
+		out, drop, terminal, traces := p.rewriteFrame(ex, direction, opcodeName(messageOpcode), original, true)
 		if ex.captureStarted {
 			observation := makeWSObservation(ex, direction, messageOpcode, original, drop, traces)
 			observations.mu.Lock()
@@ -262,13 +286,106 @@ func (p *Proxy) relayFrames(ex *Exchange, src io.Reader, dst io.Writer, directio
 			p.emit(shared.EventWebSocketMessage, ex.record.ID, observation)
 			observations.mu.Unlock()
 		}
+		if terminal != nil && reverse != nil {
+			if terminal.Type == shared.ActionRespondFrame {
+				if reverse.write(1, []byte(terminal.Params["payload"].(string))) != nil {
+					return
+				}
+			} else if err := p.offloadWebSocket(ex, out, *terminal, reverse); err != nil {
+				if reverse.write(1, []byte(`{"type":"error","error":{"message":"gateway offload failed"}}`)) != nil {
+					return
+				}
+			}
+		}
 		if drop {
 			continue
 		}
-		if len(out) > maxWSMessageBytes || writeWSFrame(dst, messageOpcode, out, mask) != nil {
+		if len(out) > maxWSMessageBytes || dst.write(messageOpcode, out) != nil {
 			return
 		}
 	}
+}
+
+// offloadWebSocket constructs an isolated HTTP ingress request for each message.
+// No subscription request metadata is passed to the gateway.
+func (p *Proxy) offloadWebSocket(ex *Exchange, payload []byte, action shared.RuleAction, client *wsWriter) error {
+	if ex.outbound == nil || p.GatewayOffloader == nil {
+		return fmt.Errorf("gateway unavailable")
+	}
+	source := ex.outbound.Clone(ex.ctx)
+	source.Method = http.MethodPost
+	source.Header = ex.sourceHeader.Clone()
+	source.URL = ex.sourceURL
+	source.Body = io.NopCloser(bytes.NewReader(payload))
+	protocol, _ := action.Params["protocol"].(string)
+	model, _ := action.Params["model"].(string)
+	clean, err := buildOffloadRequest(source, protocol, model, shared.DefaultMaxGatewayRequestBody)
+	if err != nil {
+		return err
+	}
+	resp, err := p.GatewayOffloader.Offload(clean)
+	if err != nil {
+		return err
+	}
+	if resp == nil || resp.Body == nil {
+		return fmt.Errorf("empty gateway response")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("gateway rejected request")
+	}
+	if strings.HasPrefix(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
+		return writeWSSSE(resp.Body, client)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxWSMessageBytes+1))
+	if err != nil || len(body) > maxWSMessageBytes || !json.Valid(body) {
+		return fmt.Errorf("invalid gateway response")
+	}
+	return client.write(1, body)
+}
+
+// Each SSE data event becomes one logical text message. Comments and the
+// transport-level [DONE] sentinel do not represent WebSocket messages.
+func writeWSSSE(body io.Reader, client *wsWriter) error {
+	scanner := bufio.NewScanner(body)
+	scanner.Buffer(make([]byte, 4096), maxWSMessageBytes+1)
+	var data []string
+	size := 0
+	flush := func() error {
+		if len(data) == 0 {
+			return nil
+		}
+		payload := strings.Join(data, "\n")
+		data, size = nil, 0
+		if payload == "[DONE]" {
+			return nil
+		}
+		if !json.Valid([]byte(payload)) {
+			return fmt.Errorf("invalid gateway event")
+		}
+		return client.write(1, []byte(payload))
+	}
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			if err := flush(); err != nil {
+				return err
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "data:") {
+			value := strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " ")
+			size += len(value) + 1
+			if size > maxWSMessageBytes {
+				return fmt.Errorf("gateway event too large")
+			}
+			data = append(data, value)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	return flush()
 }
 
 type bufferedConn struct {
@@ -405,13 +522,14 @@ func writeWSFrame(w io.Writer, opcode byte, payload []byte, mask bool) error {
 	return err
 }
 
-// applyFrameRules is completed below once matched rules are available on the proxy call.
-func (p *Proxy) rewriteFrame(ex *Exchange, direction, opcode string, payload []byte, fin bool) ([]byte, bool, []shared.RuleTrace) {
+// rewriteFrame applies matched frame rules to one complete message.
+func (p *Proxy) rewriteFrame(ex *Exchange, direction, opcode string, payload []byte, fin bool) ([]byte, bool, *shared.RuleAction, []shared.RuleTrace) {
 	if len(ex.matched) == 0 || p.RuleEngine == nil {
-		return payload, false, nil
+		return payload, false, nil, nil
 	}
 	current := string(payload)
 	dropped := false
+	var terminal *shared.RuleAction
 	var traces []shared.RuleTrace
 	for _, rl := range ex.matched {
 		if dropped {
@@ -432,6 +550,12 @@ func (p *Proxy) rewriteFrame(ex *Exchange, direction, opcode string, payload []b
 			switch a.Type {
 			case shared.ActionDropFrame:
 				dropped = true
+			case shared.ActionRespondFrame, shared.ActionGatewayOffload:
+				if direction == "client" {
+					dropped = true
+					action := a
+					terminal = &action
+				}
 			case shared.ActionReplaceFrame:
 				if s, ok := a.Params["payload"].(string); ok {
 					current = s
@@ -457,10 +581,7 @@ func (p *Proxy) rewriteFrame(ex *Exchange, direction, opcode string, payload []b
 			})
 		}
 	}
-	if dropped {
-		return nil, true, traces
-	}
-	return []byte(current), false, traces
+	return []byte(current), dropped, terminal, traces
 }
 
 func makeWSObservation(ex *Exchange, direction string, opcode byte, payload []byte, drop bool, traces []shared.RuleTrace) shared.WebSocketMessage {

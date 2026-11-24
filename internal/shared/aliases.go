@@ -130,4 +130,5 @@ const (
 	ActionThrottle             = api.ActionThrottle
 	ActionReplaceFrame         = api.ActionReplaceFrame
 	ActionDropFrame            = api.ActionDropFrame
+	ActionRespondFrame         = api.ActionRespondFrame
 )

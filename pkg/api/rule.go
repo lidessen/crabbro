@@ -92,6 +92,8 @@ const (
 	ActionReplaceFrame RuleActionType = "replaceFrame"
 	// ActionDropFrame drops a reassembled WebSocket message.
 	ActionDropFrame RuleActionType = "dropFrame"
+	// ActionRespondFrame intercepts a client message and replies with a text message.
+	ActionRespondFrame RuleActionType = "respondFrame"
 )
 
 // FrameView is a complete reassembled WebSocket text or binary message shown

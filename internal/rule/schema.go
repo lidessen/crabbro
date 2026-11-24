@@ -138,7 +138,7 @@ func ValidateOutput(out ruleOutput) ([]shared.RuleAction, []string) {
 	terminals := 0
 	for _, a := range validated {
 		switch a.Type {
-		case shared.ActionBlock, shared.ActionMockResponse, shared.ActionAbort, shared.ActionGatewayOffload:
+		case shared.ActionBlock, shared.ActionMockResponse, shared.ActionAbort, shared.ActionGatewayOffload, shared.ActionRespondFrame:
 			terminals++
 		}
 	}
@@ -191,6 +191,12 @@ func validateAction(a ruleAction) (shared.RuleAction, error) {
 		return validateThrottle(a.Params)
 	case shared.ActionReplaceFrame:
 		return validateReplaceFrame(a.Params)
+	case shared.ActionRespondFrame:
+		payload, ok := a.Params["payload"].(string)
+		if !ok || len(payload) > MaxMockResponseBodyLen {
+			return shared.RuleAction{}, fmt.Errorf("respondFrame requires a text payload within the size limit")
+		}
+		return shared.RuleAction{Type: actionType, Params: map[string]any{"payload": payload}}, nil
 	case shared.ActionDropFrame:
 		return shared.RuleAction{Type: shared.ActionDropFrame}, nil
 	default:

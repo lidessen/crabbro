@@ -28,6 +28,7 @@ var builtinPhase = map[string]string{
 	"crabbro.throttle":               "response",
 	"crabbro.replace-frame":          "frame",
 	"crabbro.drop-frame":             "frame",
+	"crabbro.respond-frame":          "frame",
 	"crabbro.read-body":              "any",
 	"crabbro.log":                    "any",
 	"crabbro.metric":                 "any",
@@ -693,7 +694,7 @@ func clampToDeadline(scope map[string]any, limit time.Duration) (time.Duration, 
 func hasTerminal(actions []shared.RuleAction) bool {
 	for _, a := range actions {
 		switch a.Type {
-		case shared.ActionMockResponse, shared.ActionBlock, shared.ActionAbort, shared.ActionGatewayOffload:
+		case shared.ActionMockResponse, shared.ActionBlock, shared.ActionAbort, shared.ActionGatewayOffload, shared.ActionRespondFrame:
 			return true
 		}
 	}
@@ -805,7 +806,7 @@ func builtinCall(uses string, with map[string]any, scope map[string]any, phase s
 	if !ok {
 		return nil, nil, "", fmt.Errorf("unknown builtin")
 	}
-	if ph != "any" && ph != phase {
+	if ph != "any" && ph != phase && !(uses == "crabbro.gateway-offload" && phase == "frame") {
 		return nil, nil, "", fmt.Errorf("wrong phase")
 	}
 	effect := builtinEffect(uses)
@@ -888,6 +889,8 @@ func builtinAction(uses string, with map[string]any) (shared.RuleAction, error) 
 		typ = shared.ActionReplaceFrame
 	case "crabbro.drop-frame":
 		typ = shared.ActionDropFrame
+	case "crabbro.respond-frame":
+		typ = shared.ActionRespondFrame
 	default:
 		return shared.RuleAction{}, fmt.Errorf("unknown builtin")
 	}

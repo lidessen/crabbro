@@ -117,6 +117,10 @@
         {
           "if": { "properties": { "uses": { "const": "crabbro.gateway-offload" } }, "required": ["uses"] },
           "then": { "required": ["with"], "properties": { "with": { "type": "object", "required": ["protocol", "model"], "properties": { "protocol": { "enum": ["responses", "anthropic-messages"] }, "model": { "type": "string", "pattern": "^\\S(.*\\S)?$" } } } } }
+        },
+        {
+          "if": { "properties": { "uses": { "const": "crabbro.respond-frame" } }, "required": ["uses"] },
+          "then": { "required": ["with"], "properties": { "with": { "type": "object", "required": ["payload"], "properties": { "payload": { "type": "string", "maxLength": 65536 } } } } }
         }
       ],
       "oneOf": [

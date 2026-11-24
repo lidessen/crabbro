@@ -18,7 +18,7 @@ func splitStage(actions []shared.RuleAction) (request, response []shared.RuleAct
 			shared.ActionRewriteResponseBody, shared.ActionSetResponseStatus,
 			shared.ActionDelay, shared.ActionThrottle:
 			response = append(response, a)
-		case shared.ActionReplaceFrame, shared.ActionDropFrame:
+		case shared.ActionReplaceFrame, shared.ActionDropFrame, shared.ActionRespondFrame:
 			// Applied when a WebSocket frame is relayed.
 		default:
 			request = append(request, a)
