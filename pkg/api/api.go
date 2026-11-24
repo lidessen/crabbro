@@ -31,22 +31,24 @@ type ListRequestsResponse struct {
 
 // RequestSummary is a lightweight view of a request used in list responses.
 type RequestSummary struct {
-	ID           RequestID `json:"id"`
-	StartedAt    string    `json:"startedAt"`
-	Kind         string    `json:"kind"`
-	Method       string    `json:"method"`
-	URL          string    `json:"url"`
-	Status       int       `json:"status"`
-	DurationMs   int64     `json:"durationMs"`
-	Tags         []string  `json:"tags,omitempty"`
-	Hidden       bool      `json:"hidden,omitempty"`
-	HiddenReason []string  `json:"hiddenReason,omitempty"`
-	ResourceType string    `json:"resourceType,omitempty"`
-	InitiatorURL string    `json:"initiatorUrl,omitempty"`
-	SourceID     string    `json:"sourceId,omitempty"`
-	GatewayPlan  string    `json:"gatewayPlan,omitempty"`
-	GatewayModel string    `json:"gatewayModel,omitempty"`
-	GatewayRoute string    `json:"gatewayRoute,omitempty"`
+	ID                         RequestID          `json:"id"`
+	StartedAt                  string             `json:"startedAt"`
+	Kind                       string             `json:"kind"`
+	Method                     string             `json:"method"`
+	URL                        string             `json:"url"`
+	Status                     int                `json:"status"`
+	DurationMs                 int64              `json:"durationMs"`
+	Tags                       []string           `json:"tags,omitempty"`
+	Hidden                     bool               `json:"hidden,omitempty"`
+	HiddenReason               []string           `json:"hiddenReason,omitempty"`
+	ResourceType               string             `json:"resourceType,omitempty"`
+	InitiatorURL               string             `json:"initiatorUrl,omitempty"`
+	SourceID                   string             `json:"sourceId,omitempty"`
+	GatewayPlan                string             `json:"gatewayPlan,omitempty"`
+	GatewayModel               string             `json:"gatewayModel,omitempty"`
+	GatewayRoute               string             `json:"gatewayRoute,omitempty"`
+	WebSocketMessages          []WebSocketMessage `json:"webSocketMessages,omitempty"`
+	WebSocketMessagesTruncated bool               `json:"webSocketMessagesTruncated,omitempty"`
 }
 
 // RequestDetailResponse is returned by GET /v1/requests/:id.

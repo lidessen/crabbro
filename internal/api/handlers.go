@@ -219,16 +219,18 @@ func (s *Server) handleRequests(w http.ResponseWriter, r *http.Request) {
 			kind = "proxy"
 		}
 		sum := shared.RequestSummary{
-			ID:           req.ID,
-			StartedAt:    req.StartedAt.Format(time.RFC3339Nano),
-			Kind:         kind,
-			Method:       req.Method,
-			URL:          req.URL,
-			Status:       status,
-			DurationMs:   durationMs,
-			Tags:         req.Tags,
-			Hidden:       req.Hidden,
-			HiddenReason: req.HiddenReason,
+			ID:                         req.ID,
+			StartedAt:                  req.StartedAt.Format(time.RFC3339Nano),
+			Kind:                       kind,
+			Method:                     req.Method,
+			URL:                        req.URL,
+			Status:                     status,
+			DurationMs:                 durationMs,
+			Tags:                       req.Tags,
+			Hidden:                     req.Hidden,
+			HiddenReason:               req.HiddenReason,
+			WebSocketMessages:          req.WebSocketMessages,
+			WebSocketMessagesTruncated: req.WebSocketMessagesTruncated,
 		}
 		if req.Attribution != nil {
 			sum.ResourceType = req.Attribution.ResourceType

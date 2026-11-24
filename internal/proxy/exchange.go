@@ -242,6 +242,9 @@ func (p *Proxy) newExchange(r *http.Request, ingress string, tunnelID shared.Req
 		out.Header = r.Header.Clone()
 		stripHopByHop(out.Header)
 		inspect.StripStamps(out.Header)
+		if isWebSocketUpgrade(r) {
+			restoreWebSocketHeaders(out.Header, r.Header)
+		}
 		out.Host = target.Host
 		out.ContentLength = r.ContentLength
 		ex.outbound = out

@@ -6,6 +6,7 @@ import "github.com/lidessen/crabbro/pkg/api"
 type (
 	RequestID                 = api.RequestID
 	Request                   = api.Request
+	WebSocketMessage          = api.WebSocketMessage
 	Attribution               = api.Attribution
 	HeaderField               = api.HeaderField
 	Headers                   = api.Headers
@@ -102,6 +103,7 @@ const (
 	EventResponseHeaders          = api.EventResponseHeaders
 	EventResponseBodyAvailable    = api.EventResponseBodyAvailable
 	EventResponseCompleted        = api.EventResponseCompleted
+	EventWebSocketMessage         = api.EventWebSocketMessage
 	EventRequestFailed            = api.EventRequestFailed
 	EventMITMEnabled              = api.EventMITMEnabled
 	EventMITMDisabled             = api.EventMITMDisabled

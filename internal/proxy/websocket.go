@@ -6,15 +6,26 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"sort"
 	"strings"
+	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/lidessen/crabbro/internal/rule"
+	"github.com/lidessen/crabbro/internal/scrub"
 	"github.com/lidessen/crabbro/internal/shared"
+)
+
+const (
+	maxWSMessageBytes     = 1 << 20
+	maxWSCapturedMessages = 100
+	maxWSPreviewBytes     = 1024
 )
 
 func isWebSocketUpgrade(r *http.Request) bool {
@@ -49,6 +60,10 @@ func restoreWebSocketHeaders(dst, src http.Header) {
 }
 
 func (p *Proxy) websocketRoundTrip(ex *Exchange) (*http.Response, error) {
+	inspecting := ex.captureStarted || len(ex.matched) > 0
+	if inspecting {
+		ex.outbound.Header.Del("Sec-WebSocket-Extensions")
+	}
 	host := ex.outbound.URL.Host
 	if host == "" {
 		host = ex.outbound.Host
@@ -85,6 +100,11 @@ func (p *Proxy) websocketRoundTrip(ex *Exchange) (*http.Response, error) {
 	}
 	wrapped := &bufferedConn{r: br, c: conn}
 	if resp.StatusCode == http.StatusSwitchingProtocols {
+		if inspecting && resp.Header.Get("Sec-WebSocket-Extensions") != "" {
+			conn.Close()
+			ex.failureStage = "upstream_response"
+			return nil, fmt.Errorf("upstream negotiated an unsolicited websocket extension")
+		}
 		ex.upgradeConn = wrapped
 		resp.Body = io.NopCloser(strings.NewReader(""))
 		return resp, nil
@@ -145,19 +165,30 @@ func (p *Proxy) bridgeWebSocket(w http.ResponseWriter, ex *Exchange, resp *http.
 	}
 	p.emit(shared.EventResponseHeaders, ex.record.ID, nil)
 
+	observations := &wsObservations{}
 	errc := make(chan struct{}, 2)
 	go func() {
-		p.relayFrames(ex, ex.clientReader(client), ex.upgradeConn, "client", true)
+		if ex.captureStarted || len(ex.matched) > 0 {
+			p.relayFrames(ex, ex.clientReader(client), ex.upgradeConn, "client", true, observations)
+		} else {
+			_, _ = io.Copy(ex.upgradeConn, ex.clientReader(client))
+		}
 		errc <- struct{}{}
 	}()
 	go func() {
-		p.relayFrames(ex, ex.upgradeConn, client, "server", false)
+		if ex.captureStarted || len(ex.matched) > 0 {
+			p.relayFrames(ex, ex.upgradeConn, client, "server", false, observations)
+		} else {
+			_, _ = io.Copy(client, ex.upgradeConn)
+		}
 		errc <- struct{}{}
 	}()
 	<-errc
 	client.Close()
 	ex.upgradeConn.Close()
 	<-errc
+	ex.record.WebSocketMessages = observations.messages
+	ex.record.WebSocketMessagesTruncated = observations.truncated
 
 	now := time.Now()
 	ex.record.CompletedAt = &now
@@ -176,20 +207,68 @@ func (ex *Exchange) clientReader(c net.Conn) io.Reader {
 	return io.MultiReader(bytes.NewReader(ex.clientPreface), c)
 }
 
-func (p *Proxy) relayFrames(ex *Exchange, src io.Reader, dst io.Writer, direction string, mask bool) {
+type wsObservations struct {
+	mu        sync.Mutex
+	messages  []shared.WebSocketMessage
+	truncated bool
+}
+
+func (p *Proxy) relayFrames(ex *Exchange, src io.Reader, dst io.Writer, direction string, mask bool, observations *wsObservations) {
+	var message []byte
+	var messageOpcode byte
+	fragmented := false
 	for {
 		opcode, payload, fin, err := readWSFrame(src)
 		if err != nil {
 			return
 		}
-		if opcode == 0x1 || opcode == 0x2 {
-			var drop bool
-			payload, drop = p.rewriteFrame(ex, direction, opcodeName(opcode), payload, fin)
-			if drop {
-				continue
+		switch opcode {
+		case 0x8, 0x9, 0xa:
+			if !fin || len(payload) > 125 || writeWSFrame(dst, opcode, payload, mask) != nil {
+				return
 			}
+			if opcode == 0x8 {
+				return
+			}
+			continue
+		case 0x1, 0x2:
+			if fragmented {
+				return
+			}
+			messageOpcode = opcode
+			message = message[:0]
+		case 0x0:
+			if !fragmented {
+				return
+			}
+		default:
+			return
 		}
-		if err := writeWSFrame(dst, opcode, payload, mask); err != nil {
+		if len(payload) > maxWSMessageBytes-len(message) {
+			return
+		}
+		message = append(message, payload...)
+		fragmented = !fin
+		if !fin {
+			continue
+		}
+		original := message
+		out, drop, traces := p.rewriteFrame(ex, direction, opcodeName(messageOpcode), original, true)
+		if ex.captureStarted {
+			observation := makeWSObservation(ex, direction, messageOpcode, original, drop, traces)
+			observations.mu.Lock()
+			if len(observations.messages) < maxWSCapturedMessages {
+				observations.messages = append(observations.messages, observation)
+			} else {
+				observations.truncated = true
+			}
+			p.emit(shared.EventWebSocketMessage, ex.record.ID, observation)
+			observations.mu.Unlock()
+		}
+		if drop {
+			continue
+		}
+		if len(out) > maxWSMessageBytes || writeWSFrame(dst, messageOpcode, out, mask) != nil {
 			return
 		}
 	}
@@ -237,6 +316,9 @@ func readWSFrame(r io.Reader) (opcode byte, payload []byte, fin bool, err error)
 	if _, err = io.ReadFull(r, hdr); err != nil {
 		return 0, nil, false, err
 	}
+	if hdr[0]&0x70 != 0 {
+		return 0, nil, false, fmt.Errorf("unexpected websocket extension bits")
+	}
 	fin = hdr[0]&0x80 != 0
 	opcode = hdr[0] & 0x0f
 	masked := hdr[1]&0x80 != 0
@@ -257,7 +339,7 @@ func readWSFrame(r io.Reader) (opcode byte, payload []byte, fin bool, err error)
 		for _, b := range ext {
 			n = n<<8 | uint64(b)
 		}
-		if n > 1<<20 {
+		if n > maxWSMessageBytes {
 			return 0, nil, false, fmt.Errorf("websocket frame too large")
 		}
 		ln = int(n)
@@ -327,13 +409,13 @@ func writeWSFrame(w io.Writer, opcode byte, payload []byte, mask bool) error {
 }
 
 // applyFrameRules is completed below once matched rules are available on the proxy call.
-func (p *Proxy) rewriteFrame(ex *Exchange, direction, opcode string, payload []byte, fin bool) ([]byte, bool) {
+func (p *Proxy) rewriteFrame(ex *Exchange, direction, opcode string, payload []byte, fin bool) ([]byte, bool, []shared.RuleTrace) {
 	if len(ex.matched) == 0 || p.RuleEngine == nil {
-		return payload, false
+		return payload, false, nil
 	}
 	current := string(payload)
 	dropped := false
-	frameTraces := 0
+	var traces []shared.RuleTrace
 	for _, rl := range ex.matched {
 		if dropped {
 			break
@@ -363,16 +445,131 @@ func (p *Proxy) rewriteFrame(ex *Exchange, direction, opcode string, payload []b
 				}
 			}
 		}
-		if frameTraces < 32 {
-			ex.traces = append(ex.traces, shared.RuleTrace{
+		if len(traces) < 32 {
+			// Action parameters can contain message credentials; retain only types.
+			actions := make([]shared.RuleAction, 0, len(result.Actions))
+			for _, action := range result.Actions {
+				if len(actions) == 32 {
+					break
+				}
+				actions = append(actions, shared.RuleAction{Type: action.Type})
+			}
+			traces = append(traces, shared.RuleTrace{
 				RuleID: rl.ID, RuleVersion: rl.Version, Phase: "frame",
-				Matched: true, Actions: result.Actions, DurationMs: result.DurationMs,
+				Matched: true, Actions: actions, DurationMs: result.DurationMs,
 			})
-			frameTraces++
 		}
 	}
 	if dropped {
-		return nil, true
+		return nil, true, traces
 	}
-	return []byte(current), false
+	return []byte(current), false, traces
+}
+
+func makeWSObservation(ex *Exchange, direction string, opcode byte, payload []byte, drop bool, traces []shared.RuleTrace) shared.WebSocketMessage {
+	obs := shared.WebSocketMessage{Direction: direction, Opcode: opcodeName(opcode), PayloadBytes: len(payload), Dropped: drop, RuleTrace: traces}
+	if opcode != 1 || !utf8.Valid(payload) {
+		obs.PayloadPreview = "[binary payload omitted]"
+		return obs
+	}
+	secrets := make(map[string]struct{})
+	for name, values := range ex.sourceHeader {
+		if sensitiveOffloadKey(name) || strings.EqualFold(name, "proxy-authorization") || strings.EqualFold(name, "x-api-key") || strings.EqualFold(name, "sec-websocket-protocol") {
+			for _, value := range values {
+				addOffloadSecret(secrets, value)
+				if i := strings.IndexAny(value, " \t"); i >= 0 {
+					addOffloadSecret(secrets, strings.TrimSpace(value[i:]))
+				}
+				if strings.EqualFold(name, "cookie") {
+					for _, pair := range strings.Split(value, ";") {
+						if _, v, ok := strings.Cut(pair, "="); ok {
+							addOffloadSecret(secrets, strings.Trim(strings.TrimSpace(v), `"`))
+						}
+					}
+				}
+			}
+		}
+	}
+	if ex.sourceURL != nil {
+		for key, values := range ex.sourceURL.Query() {
+			if sensitiveOffloadKey(key) || strings.EqualFold(key, "key") {
+				for _, value := range values {
+					addOffloadSecret(secrets, value)
+				}
+			}
+		}
+	}
+	var value any
+	validJSON := json.Unmarshal(payload, &value) == nil
+	if validJSON {
+		collectWSSecrets(secrets, value)
+	}
+	values := make([]string, 0, len(secrets))
+	for value := range secrets {
+		values = append(values, value)
+	}
+	sort.Slice(values, func(i, j int) bool { return len(values[i]) > len(values[j]) })
+	preview := string(payload)
+	if validJSON {
+		clean := redactWSText(cleanOffloadValue(value, values))
+		if data, err := json.Marshal(clean); err == nil {
+			preview = string(data)
+		} else {
+			preview = scrub.RedactedPlaceholder
+		}
+	} else {
+		// Free-form credential-bearing text has no reliable field boundaries.
+		preview = redactWSText(preview).(string)
+		for _, secret := range values {
+			preview = strings.ReplaceAll(preview, secret, scrub.RedactedPlaceholder)
+		}
+	}
+	if len(preview) > maxWSPreviewBytes {
+		preview = preview[:maxWSPreviewBytes]
+		for !utf8.ValidString(preview) {
+			preview = preview[:len(preview)-1]
+		}
+		obs.Truncated = true
+	}
+	obs.PayloadPreview = preview
+	return obs
+}
+
+func collectWSSecrets(secrets map[string]struct{}, value any) {
+	switch v := value.(type) {
+	case []any:
+		for _, item := range v {
+			collectWSSecrets(secrets, item)
+		}
+	case map[string]any:
+		for key, item := range v {
+			if sensitiveOffloadKey(key) || strings.EqualFold(key, "key") || strings.EqualFold(key, "auth") {
+				collectOffloadSecrets(secrets, item)
+			} else {
+				collectWSSecrets(secrets, item)
+			}
+		}
+	}
+}
+
+func redactWSText(value any) any {
+	switch v := value.(type) {
+	case string:
+		lower := strings.ToLower(v)
+		for _, marker := range []string{"token", "authorization", "credential", "secret", "password", "api_key", "api-key", "apikey", "cookie", "bearer ", "subscription", "key=", "key:", `"key"`, "auth=", "auth:"} {
+			if strings.Contains(lower, marker) {
+				return scrub.RedactedPlaceholder
+			}
+		}
+		return v
+	case []any:
+		for i, item := range v {
+			v[i] = redactWSText(item)
+		}
+	case map[string]any:
+		for key, item := range v {
+			v[key] = redactWSText(item)
+		}
+	}
+	return value
 }

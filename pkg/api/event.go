@@ -23,6 +23,8 @@ const (
 	EventResponseBodyAvailable EventType = "response_body_available"
 	// EventResponseCompleted is emitted when the exchange is complete.
 	EventResponseCompleted EventType = "response_completed"
+	// EventWebSocketMessage carries a redacted logical message observation.
+	EventWebSocketMessage EventType = "websocket_message"
 	// EventRequestFailed is emitted when the exchange ends with an error.
 	EventRequestFailed EventType = "request_failed"
 

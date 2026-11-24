@@ -11,24 +11,26 @@ type RequestID string
 // CONNECT tunnels produce a minimal record: Method="CONNECT", Scheme="https",
 // Host="target:port", Path="", Status=200 on success.
 type Request struct {
-	ID              RequestID   `json:"id"`
-	StartedAt       time.Time   `json:"startedAt"`
-	CompletedAt     *time.Time  `json:"completedAt,omitempty"`
-	Method          string      `json:"method"`
-	Scheme          string      `json:"scheme"`
-	Host            string      `json:"host"`
-	Path            string      `json:"path"`
-	Query           string      `json:"query"`
-	URL             string      `json:"url"`
-	RequestHeaders  Headers     `json:"requestHeaders"`
-	RequestBodyRef  BodyRef     `json:"requestBodyRef,omitempty"`
-	Status          int         `json:"status,omitempty"`
-	ResponseHeaders Headers     `json:"responseHeaders,omitempty"`
-	ResponseBodyRef BodyRef     `json:"responseBodyRef,omitempty"`
-	DurationMs      int64       `json:"durationMs,omitempty"`
-	ClientAddr      string      `json:"clientAddr"`
-	RuleTrace       []RuleTrace `json:"ruleTrace,omitempty"`
-	Tags            []string    `json:"tags,omitempty"`
+	ID                         RequestID          `json:"id"`
+	StartedAt                  time.Time          `json:"startedAt"`
+	CompletedAt                *time.Time         `json:"completedAt,omitempty"`
+	Method                     string             `json:"method"`
+	Scheme                     string             `json:"scheme"`
+	Host                       string             `json:"host"`
+	Path                       string             `json:"path"`
+	Query                      string             `json:"query"`
+	URL                        string             `json:"url"`
+	RequestHeaders             Headers            `json:"requestHeaders"`
+	RequestBodyRef             BodyRef            `json:"requestBodyRef,omitempty"`
+	Status                     int                `json:"status,omitempty"`
+	ResponseHeaders            Headers            `json:"responseHeaders,omitempty"`
+	ResponseBodyRef            BodyRef            `json:"responseBodyRef,omitempty"`
+	DurationMs                 int64              `json:"durationMs,omitempty"`
+	ClientAddr                 string             `json:"clientAddr"`
+	RuleTrace                  []RuleTrace        `json:"ruleTrace,omitempty"`
+	WebSocketMessages          []WebSocketMessage `json:"webSocketMessages,omitempty"`
+	WebSocketMessagesTruncated bool               `json:"webSocketMessagesTruncated,omitempty"`
+	Tags                       []string           `json:"tags,omitempty"`
 
 	// Intercepted is true when the request was MITM-decrypted (as opposed to a
 	// raw TCP CONNECT tunnel passthrough).
@@ -73,6 +75,17 @@ type Request struct {
 
 	// Gateway is populated when Kind == "gateway".
 	Gateway *GatewayTrace `json:"gateway,omitempty"`
+}
+
+// WebSocketMessage is a bounded, redacted observation of one logical message.
+type WebSocketMessage struct {
+	Direction      string      `json:"direction"`
+	Opcode         string      `json:"opcode"`
+	PayloadPreview string      `json:"payloadPreview"`
+	PayloadBytes   int         `json:"payloadBytes"`
+	Truncated      bool        `json:"truncated,omitempty"`
+	Dropped        bool        `json:"dropped,omitempty"`
+	RuleTrace      []RuleTrace `json:"ruleTrace,omitempty"`
 }
 
 // Attribution identifies where a captured exchange came from.
