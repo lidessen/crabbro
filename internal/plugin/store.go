@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/lidessen/crabbro/internal/gateway/provider"
 )
 
 // packageIDPattern is what a package id may be: an npm name, optionally
@@ -33,8 +35,9 @@ type InstanceRecord struct {
 }
 
 type diskState struct {
-	Packages  []PackageRecord  `json:"packages"`
-	Instances []InstanceRecord `json:"instances"`
+	Packages  []PackageRecord                    `json:"packages"`
+	Instances []InstanceRecord                   `json:"instances"`
+	Providers map[string][]provider.ProviderSpec `json:"providers,omitempty"`
 }
 
 func (m *Manager) load() error {
@@ -117,6 +120,10 @@ func (m *Manager) Install(src string, enable bool) (PackageRecord, error) {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.state.Providers == nil {
+		m.state.Providers = make(map[string][]provider.ProviderSpec)
+	}
+	m.state.Providers[rec.ID] = meta.Providers
 	replaced := false
 	for i := range m.state.Packages {
 		if m.state.Packages[i].ID == rec.ID {
@@ -147,6 +154,7 @@ func (m *Manager) Uninstall(id string) error {
 		next = append(next, p)
 	}
 	m.state.Packages = next
+	delete(m.state.Providers, id)
 	inst := m.state.Instances[:0]
 	for _, in := range m.state.Instances {
 		if in.Plugin != id {
@@ -248,6 +256,7 @@ type packageMeta struct {
 	Permissions []string
 	Activation  []string
 	Match       Match
+	Providers   []provider.ProviderSpec
 }
 
 func readPackage(dir string) (packageMeta, error) {
@@ -259,13 +268,14 @@ func readPackage(dir string) (packageMeta, error) {
 		Name    string `json:"name"`
 		Version string `json:"version"`
 		Crabbro struct {
-			ID          string   `json:"id"`
-			API         string   `json:"api"`
-			Entry       string   `json:"entry"`
-			Isolation   string   `json:"isolation"`
-			Permissions []string `json:"permissions"`
-			Activation  []string `json:"activation"`
-			Match       Match    `json:"match"`
+			ID          string                  `json:"id"`
+			API         string                  `json:"api"`
+			Entry       string                  `json:"entry"`
+			Isolation   string                  `json:"isolation"`
+			Permissions []string                `json:"permissions"`
+			Activation  []string                `json:"activation"`
+			Match       Match                   `json:"match"`
+			Providers   []provider.ProviderSpec `json:"providers"`
 		} `json:"crabbro"`
 	}
 	if err := json.Unmarshal(b, &raw); err != nil {
@@ -281,6 +291,12 @@ func readPackage(dir string) (packageMeta, error) {
 	for _, perm := range raw.Crabbro.Permissions {
 		if !knownPermissions[perm] {
 			return packageMeta{}, fmt.Errorf("unknown permission %q", perm)
+		}
+	}
+	registry := provider.NewRegistry()
+	for _, p := range raw.Crabbro.Providers {
+		if err := registry.RegisterPluginProvider(id, p); err != nil {
+			return packageMeta{}, fmt.Errorf("invalid provider declaration: %w", err)
 		}
 	}
 	entry := raw.Crabbro.Entry
@@ -300,7 +316,7 @@ func readPackage(dir string) (packageMeta, error) {
 	}
 	return packageMeta{
 		ID: id, Name: raw.Name, Version: raw.Version, Entry: entry, API: raw.Crabbro.API,
-		Isolation: iso, Permissions: raw.Crabbro.Permissions, Activation: act, Match: raw.Crabbro.Match,
+		Isolation: iso, Permissions: raw.Crabbro.Permissions, Activation: act, Match: raw.Crabbro.Match, Providers: raw.Crabbro.Providers,
 	}, nil
 }
 

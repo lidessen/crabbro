@@ -499,7 +499,7 @@ func (m *Manager) readLoop(conn net.Conn, pending map[string]chan map[string]any
 		if err := binary.Read(r, binary.BigEndian, &n); err != nil {
 			return
 		}
-		if n == 0 || n > 8*1024*1024 {
+		if n == 0 || n > maxFrameBytes {
 			return
 		}
 		buf := make([]byte, n)
@@ -562,7 +562,18 @@ func (m *Manager) handleBroker(conn net.Conn, msg map[string]any) {
 		if instance == "" {
 			instance = "local"
 		}
-		v, secErr := m.Secret(pkg, instance, name)
+		m.mu.Lock()
+		in := m.instanceByName(pkg, instance)
+		ref := ""
+		if in != nil && in.Enabled {
+			ref = in.Credentials[name]
+		}
+		m.mu.Unlock()
+		if ref == "" {
+			err = fmt.Errorf("secret unavailable")
+			break
+		}
+		v, secErr := m.Secrets.Get(ref)
 		if secErr != nil {
 			err = fmt.Errorf("secret unavailable")
 		} else {
@@ -714,6 +725,8 @@ func (m *Manager) noteHeartbeat(frame map[string]any) {
 	}
 }
 
+const maxFrameBytes = 8 * 1024 * 1024
+
 // writeTo sends one length-prefixed frame. One writer at a time, so frames
 // from concurrent calls do not interleave.
 func (m *Manager) writeTo(conn net.Conn, msg map[string]any) error {
@@ -723,6 +736,9 @@ func (m *Manager) writeTo(conn net.Conn, msg map[string]any) error {
 	body, err := json.Marshal(msg)
 	if err != nil {
 		return err
+	}
+	if len(body) == 0 || len(body) > maxFrameBytes {
+		return fmt.Errorf("plugin frame exceeds size limit")
 	}
 	frame := make([]byte, 4+len(body))
 	binary.BigEndian.PutUint32(frame, uint32(len(body)))

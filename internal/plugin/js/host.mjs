@@ -32,7 +32,7 @@ function workerFor(msg) {
 
 function post(msg) {
   const slot = workerFor(msg);
-  if (!slot || !slot.worker) {
+  if (!slot || (!slot.worker && !slot.child)) {
     send({ type: "result", id: msg.id, error: "plugin is not active" });
     return;
   }
@@ -165,6 +165,8 @@ function onDaemon(msg) {
     case "hook":
     case "middleware":
     case "describe":
+    case "provider.auth.prepare":
+    case "provider.auth.refresh":
       post(msg);
       return;
     case "brokerResult": {

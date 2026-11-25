@@ -25,6 +25,14 @@ function normalize(result) {
 
 async function onMessage(msg) {
   try {
+    if (msg.type === "provider.auth.prepare" || msg.type === "provider.auth.refresh") {
+      const auth = plugin.providers?.[msg.providerId]?.auth?.[msg.kind];
+      const fn = msg.type === "provider.auth.prepare" ? auth?.prepare : auth?.refresh;
+      if (typeof fn !== "function") throw new Error("unknown provider auth method");
+      const result = await fn({ credentialRef: msg.credentialRef, instance: msg.instance });
+      send({ type: "result", id: msg.id, result });
+      return;
+    }
     if (msg.type === "describe") {
       const uses = plugin.uses || plugin.actions || {};
       send({
