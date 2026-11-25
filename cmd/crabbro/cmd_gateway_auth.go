@@ -17,13 +17,14 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/lidessen/crabbro/internal/gateway/provider"
 	"github.com/lidessen/crabbro/internal/secret"
 	"github.com/lidessen/crabbro/internal/siwc"
 )
 
 var gatewayAuthRequest = doRequest
 
-const gatewayAuthUsage = "usage: crabbro gateway auth <login|status|logout>"
+const gatewayAuthUsage = "usage: crabbro gateway auth <providers|login|status|logout>"
 
 func gatewayAuth(cfg *clientConfig, args []string) error {
 	if len(args) == 0 {
@@ -31,13 +32,19 @@ func gatewayAuth(cfg *clientConfig, args []string) error {
 	}
 	switch args[0] {
 	case "help", "-h", "--help":
-		fmt.Println(gatewayAuthUsage + "\n  login <plan-id> [--no-browser]\n  status [--pretty]\n  logout <plan-id>")
+		fmt.Println(gatewayAuthUsage + "\n  providers [--pretty]\n  login <provider-or-plan> [--method <kind>] [--plan <plan-id>] [--stdin] [--no-browser]\n  status [--pretty]\n  logout <plan-id>")
 		return nil
+	case "providers":
+		return gatewayAuthProviders(args[1:], os.Stdout)
 	case "status":
 		return gatewaySIWCStatus(cfg, args[1:])
 	case "login":
 		fs := flag.NewFlagSet("gateway auth login", flag.ContinueOnError)
 		noBrowser := fs.Bool("no-browser", false, "Print the URL without opening a browser")
+		method := fs.String("method", "", "Authentication method")
+		planID := fs.String("plan", "", "Plan ID for a provider")
+		stdin := fs.Bool("stdin", false, "Read API key from standard input")
+		fs.SetOutput(io.Discard)
 		// The public syntax permits flags on either side of the plan ID.
 		loginArgs := args[1:]
 		if len(loginArgs) > 0 && len(loginArgs[0]) > 0 && loginArgs[0][0] != '-' {
@@ -45,22 +52,21 @@ func gatewayAuth(cfg *clientConfig, args []string) error {
 		}
 		if err := fs.Parse(loginArgs); err != nil {
 			if errors.Is(err, flag.ErrHelp) {
+				fmt.Println("usage: crabbro gateway auth login <provider-or-plan> [--method <kind>] [--plan <plan-id>] [--stdin] [--no-browser]")
 				return nil
 			}
-			return err
+			return errors.New("invalid gateway auth login options")
 		}
 		if fs.NArg() != 1 || fs.Arg(0) == "" {
-			return errors.New("usage: crabbro gateway auth login <plan-id> [--no-browser]")
-		}
-		refs, err := gatewayAuthPlan(cfg, fs.Arg(0))
-		if err != nil {
-			return err
+			return errors.New("usage: crabbro gateway auth login <provider-or-plan> [--method <kind>] [--plan <plan-id>] [--stdin] [--no-browser]")
 		}
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer stop()
 		ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 		defer cancel()
-		return gatewayAuthLogin(ctx, siwc.Client{}, gatewayAuthStore(), refs, os.Stdout, !*noBrowser, openGatewayAuthBrowser, net.Listen)
+		return gatewayAuthProvision(ctx, cfg, fs.Arg(0), *planID, provider.AuthKind(*method), *stdin, os.Stdin, os.Stdout, func(refs gatewaySIWCStatusEntry) error {
+			return gatewayAuthLogin(ctx, siwc.Client{}, gatewayAuthStore(), refs, os.Stdout, !*noBrowser, openGatewayAuthBrowser, net.Listen)
+		})
 	case "logout":
 		if len(args) == 2 && (args[1] == "--help" || args[1] == "-h") {
 			fmt.Println("usage: crabbro gateway auth logout <plan-id>")
@@ -82,6 +88,40 @@ func gatewayAuth(cfg *clientConfig, args []string) error {
 		return errors.New(gatewayAuthUsage)
 	}
 }
+
+func gatewayAuthProviders(args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("gateway auth providers", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	pretty := fs.Bool("pretty", false, "Human-readable output")
+	if err := fs.Parse(args); errors.Is(err, flag.ErrHelp) {
+		_, err = fmt.Fprintln(out, "usage: crabbro gateway auth providers [--pretty]")
+		return err
+	} else if err != nil || fs.NArg() != 0 {
+		return errors.New("usage: crabbro gateway auth providers [--pretty]")
+	}
+	type entry struct {
+		ID               string              `json:"id"`
+		DisplayName      string              `json:"displayName"`
+		AuthMethods      []provider.AuthKind `json:"authMethods"`
+		DefaultBaseURL   string              `json:"defaultBaseUrl"`
+		DefaultEndpoints []string            `json:"defaultEndpoints"`
+	}
+	list := make([]entry, 0)
+	for _, p := range provider.List() {
+		e := entry{ID: p.ID, DisplayName: p.DisplayName, DefaultBaseURL: p.DefaultBaseURL, DefaultEndpoints: append([]string{}, p.DefaultEndpoints...)}
+		for _, m := range p.SupportedAuth {
+			e.AuthMethods = append(e.AuthMethods, m.Kind)
+		}
+		list = append(list, e)
+	}
+	enc := json.NewEncoder(out)
+	if *pretty {
+		enc.SetIndent("", "  ")
+	}
+	return enc.Encode(list)
+}
+
+var errGatewayPlanNotFound = errors.New("gateway plan not found")
 
 func gatewayAuthLogout(store siwc.Store, refs gatewaySIWCStatusEntry) error {
 	if refs.SessionRef == refs.HostIDRef || secret.ValidRef(refs.SessionRef) != nil || secret.ValidRef(refs.HostIDRef) != nil {
@@ -139,7 +179,7 @@ func gatewayAuthPlan(cfg *clientConfig, id string) (gatewaySIWCStatusEntry, erro
 		found = &gatewaySIWCStatusEntry{PlanID: p.ID, SessionRef: refs.SessionRef, HostIDRef: refs.HostIDRef}
 	}
 	if found == nil {
-		return gatewaySIWCStatusEntry{}, errors.New("gateway plan not found")
+		return gatewaySIWCStatusEntry{}, errGatewayPlanNotFound
 	}
 	return *found, nil
 }

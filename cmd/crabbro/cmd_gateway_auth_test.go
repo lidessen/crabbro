@@ -21,6 +21,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lidessen/crabbro/internal/gateway/config"
+	"github.com/lidessen/crabbro/internal/gateway/provider"
 	"github.com/lidessen/crabbro/internal/secret"
 	"github.com/lidessen/crabbro/internal/siwc"
 )
@@ -56,6 +58,135 @@ func (l *memoryAuthListener) dial(context.Context, string, string) (net.Conn, er
 		client.Close()
 		server.Close()
 		return nil, net.ErrClosed
+	}
+}
+
+func TestGatewayAuthProviders(t *testing.T) {
+	for _, args := range [][]string{nil, {"--pretty"}} {
+		var out bytes.Buffer
+		if err := gatewayAuthProviders(args, &out); err != nil {
+			t.Fatal(err)
+		}
+		var entries []struct {
+			ID               string              `json:"id"`
+			DisplayName      string              `json:"displayName"`
+			AuthMethods      []provider.AuthKind `json:"authMethods"`
+			DefaultBaseURL   string              `json:"defaultBaseUrl"`
+			DefaultEndpoints []string            `json:"defaultEndpoints"`
+		}
+		if err := json.Unmarshal(out.Bytes(), &entries); err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != len(provider.List()) {
+			t.Fatal("missing providers")
+		}
+		if entries[0].ID != "openai" || entries[0].DisplayName != "OpenAI" || len(entries[0].AuthMethods) != 3 || entries[0].DefaultBaseURL == "" || len(entries[0].DefaultEndpoints) != 2 {
+			t.Fatal("incorrect provider details")
+		}
+	}
+}
+
+func TestGatewayAuthAPIKeyProvision(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	const key = "private-api-key-value"
+	oldIn, oldOut, oldErr := os.Stdin, os.Stdout, os.Stderr
+	inR, inW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	errR, errW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		os.Stdin, os.Stdout, os.Stderr = oldIn, oldOut, oldErr
+		inR.Close()
+		outR.Close()
+		errR.Close()
+	})
+	if _, err := inW.WriteString(key + "\n"); err != nil {
+		t.Fatal(err)
+	}
+	inW.Close()
+	os.Stdin, os.Stdout, os.Stderr = inR, outW, errW
+	err = cmdGateway(&clientConfig{}, []string{"auth", "login", "openai", "--method", "api-key", "--plan", "my-plan", "--stdin"})
+	outW.Close()
+	errW.Close()
+	os.Stdin, os.Stdout, os.Stderr = oldIn, oldOut, oldErr
+	stdout, _ := io.ReadAll(outR)
+	stderr, _ := io.ReadAll(errR)
+	if err != nil {
+		t.Fatalf("login failed: %v", err)
+	}
+	if strings.Contains(string(stdout), key) || strings.Contains(string(stderr), key) {
+		t.Fatal("output leaked API key")
+	}
+	path := filepath.Join(expandPath("~/.crabbro"), "gateway", "plans", "my-plan.yaml")
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, diags := config.ValidatePlanBytes("my-plan.yaml", "my-plan", body)
+	if len(diags) != 0 || p.Provider != "openai" || p.Auth.Kind != provider.APIKey || p.Auth.Ref != "my-plan_api_key" {
+		t.Fatal("invalid provisioned plan")
+	}
+	secretPath := filepath.Join(gatewayAuthStore().Secrets.Dir, "my-plan_api_key")
+	fi, err := os.Stat(secretPath)
+	if err != nil || fi.Mode().Perm() != 0600 {
+		t.Fatal("secret permissions incorrect")
+	}
+	stored, err := gatewayAuthStore().Secrets.Get("my-plan_api_key")
+	if err != nil || stored != key {
+		t.Fatal("key not saved")
+	}
+	if strings.Contains(string(body), key) {
+		t.Fatal("plan leaked API key")
+	}
+}
+
+func TestGatewayAuthProvisionPreservesOtherPlans(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	var out bytes.Buffer
+	login := func(gatewaySIWCStatusEntry) error { t.Fatal("unexpected login"); return nil }
+	if err := gatewayAuthProvision(context.Background(), &clientConfig{}, "anthropic", "shared", provider.APIKey, true, strings.NewReader("first"), &out, login); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(expandPath("~/.crabbro"), "gateway", "plans", "shared.yaml")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gatewayAuthProvision(context.Background(), &clientConfig{}, "openai", "shared", provider.APIKey, true, strings.NewReader("second"), &out, login); err == nil {
+		t.Fatal("accepted unrelated plan")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("changed unrelated plan")
+	}
+	key, err := gatewayAuthStore().Secrets.Get("shared_api_key")
+	if err != nil || key != "first" {
+		t.Fatal("changed unrelated secret")
+	}
+}
+
+func TestGatewayAuthProvisionPreservesExistingSecret(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	store := gatewayAuthStore()
+	if err := store.Secrets.Set("openai_api_key", "existing-value"); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	err := gatewayAuthProvision(context.Background(), &clientConfig{}, "openai", "openai", provider.APIKey, true, strings.NewReader("replacement"), &out, func(gatewaySIWCStatusEntry) error { t.Fatal("unexpected OAuth login"); return nil })
+	if err == nil {
+		t.Fatal("accepted existing secret reference")
+	}
+	got, err := store.Secrets.Get("openai_api_key")
+	if err != nil || got != "existing-value" {
+		t.Fatal("overwrote existing secret")
 	}
 }
 
@@ -99,46 +230,48 @@ func TestGatewayAuthLoginRoundTrip(t *testing.T) {
 				return w.Result(), nil
 			})}}
 			listener := &memoryAuthListener{conns: make(chan net.Conn), closed: make(chan struct{})}
-			store := siwc.Store{Secrets: secret.New(t.TempDir())}
-			refs := gatewaySIWCStatusEntry{PlanID: "account", SessionRef: "session", HostIDRef: "host"}
+			t.Setenv("HOME", t.TempDir())
+			store := gatewayAuthStore()
 			var output bytes.Buffer
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			err = gatewayAuthLogin(ctx, client, store, refs, &output, true, func(ctx context.Context, raw string) error {
-				u, err := url.Parse(raw)
-				if err != nil {
-					return err
-				}
-				q := u.Query()
-				nonce, challenge, redirect = q.Get("nonce"), q.Get("code_challenge"), q.Get("redirect_uri")
-				if q.Get("client_id") != siwc.DynamicClientID || q.Get("code_challenge_method") != "S256" || q.Get("state") == "" || nonce == "" || q.Get("ext_agent_host_id") == "" {
-					t.Error("invalid authorization parameters")
-				}
-				callback, _ := url.Parse(redirect)
-				callback.RawQuery = url.Values{"state": {q.Get("state")}, "code": {code}, "client_id": {"issued-client"}}.Encode()
-				hc := &http.Client{Transport: &http.Transport{DialContext: listener.dial}}
-				bad := *callback
-				bad.RawQuery = url.Values{"state": {"incorrect"}, "code": {code}, "client_id": {"issued-client"}}.Encode()
-				badResp, err := hc.Get(bad.String())
-				if err != nil {
-					return err
-				}
-				io.Copy(io.Discard, badResp.Body)
-				badResp.Body.Close()
-				if badResp.StatusCode != http.StatusBadRequest {
-					t.Error("accepted invalid callback state")
-				}
-				resp, err := hc.Get(callback.String())
-				if err != nil {
-					return err
-				}
-				io.Copy(io.Discard, resp.Body)
-				resp.Body.Close()
-				if resp.StatusCode != http.StatusOK {
-					t.Errorf("callback status %d", resp.StatusCode)
-				}
-				return nil
-			}, func(string, string) (net.Listener, error) { return listener, nil })
+			err = gatewayAuthProvision(ctx, &clientConfig{}, "openai", "account", provider.OAuthSIWC, false, nil, &output, func(refs gatewaySIWCStatusEntry) error {
+				return gatewayAuthLogin(ctx, client, store, refs, &output, true, func(ctx context.Context, raw string) error {
+					u, err := url.Parse(raw)
+					if err != nil {
+						return err
+					}
+					q := u.Query()
+					nonce, challenge, redirect = q.Get("nonce"), q.Get("code_challenge"), q.Get("redirect_uri")
+					if q.Get("client_id") != siwc.DynamicClientID || q.Get("code_challenge_method") != "S256" || q.Get("state") == "" || nonce == "" || q.Get("ext_agent_host_id") == "" {
+						t.Error("invalid authorization parameters")
+					}
+					callback, _ := url.Parse(redirect)
+					callback.RawQuery = url.Values{"state": {q.Get("state")}, "code": {code}, "client_id": {"issued-client"}}.Encode()
+					hc := &http.Client{Transport: &http.Transport{DialContext: listener.dial}}
+					bad := *callback
+					bad.RawQuery = url.Values{"state": {"incorrect"}, "code": {code}, "client_id": {"issued-client"}}.Encode()
+					badResp, err := hc.Get(bad.String())
+					if err != nil {
+						return err
+					}
+					io.Copy(io.Discard, badResp.Body)
+					badResp.Body.Close()
+					if badResp.StatusCode != http.StatusBadRequest {
+						t.Error("accepted invalid callback state")
+					}
+					resp, err := hc.Get(callback.String())
+					if err != nil {
+						return err
+					}
+					io.Copy(io.Discard, resp.Body)
+					resp.Body.Close()
+					if resp.StatusCode != http.StatusOK {
+						t.Errorf("callback status %d", resp.StatusCode)
+					}
+					return nil
+				}, func(string, string) (net.Listener, error) { return listener, nil })
+			})
 			if validNonce && err != nil {
 				t.Fatalf("login failed: %v", err)
 			}
@@ -153,17 +286,23 @@ func TestGatewayAuthLoginRoundTrip(t *testing.T) {
 					t.Error("output leaked credential")
 				}
 			}
-			got, loadErr := store.Load("session")
+			got, loadErr := store.Load("account_siwc_session")
 			if validNonce {
 				if loadErr != nil || got.AccessToken != access || got.RefreshToken != refresh || got.IDToken != idToken {
 					t.Fatal("session not saved")
 				}
-				fi, err := os.Stat(filepath.Join(store.Secrets.Dir, "session"))
+				fi, err := os.Stat(filepath.Join(store.Secrets.Dir, "account_siwc_session"))
 				if err != nil || fi.Mode().Perm() != 0600 {
 					t.Fatal("session permissions incorrect")
 				}
+				p, exists, err := readGatewayAuthPlan("account")
+				if err != nil || !exists || p.Provider != "openai" || p.Auth.Kind != provider.OAuthSIWC || p.Auth.HostIDRef != "account_siwc_host" {
+					t.Fatal("valid SIWC plan not created")
+				}
 			} else if !os.IsNotExist(loadErr) {
 				t.Fatal("invalid token was stored")
+			} else if _, exists, _ := readGatewayAuthPlan("account"); exists {
+				t.Fatal("plan created for invalid token")
 			}
 		})
 	}
