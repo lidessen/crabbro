@@ -204,8 +204,15 @@ type GatewayQuotaResetResponse struct {
 	Status           *GatewayPlanStatus `json:"status,omitempty"`
 }
 
+// GatewaySIWCRefs contains non-secret SIWC configuration references.
+type GatewaySIWCRefs struct {
+	SessionRef string `json:"sessionRef"`
+	HostIDRef  string `json:"hostIdRef"`
+}
+
 // GatewayPlanStatus is a redacted view of one configured plan and its live state.
 type GatewayPlanStatus struct {
+	SIWC                *GatewaySIWCRefs     `json:"siwc"`
 	RemoteQuota         *RemoteQuotaJSON     `json:"remoteQuota,omitempty"`
 	AutoReset           *PlanAutoResetSpec   `json:"autoReset,omitempty"`
 	DirectEnabled       bool                 `json:"directEnabled"`

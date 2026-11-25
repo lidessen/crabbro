@@ -341,3 +341,49 @@ func TestGatewayQuotaRefreshProjectsFailure(t *testing.T) {
 		t.Fatalf("plans: %s", w.Body.String())
 	}
 }
+
+func TestGatewayPlansSIWCProjection(t *testing.T) {
+	s := testMITMServer(t)
+	sec := secret.New(t.TempDir())
+	gw, err := gateway.New(gateway.Options{RootDir: t.TempDir(), ListenAddr: "127.0.0.1:0"}, sec, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gw.Stop()
+	gw.Config.SetSnapshot(&config.Snapshot{AllPlans: map[string]*config.Plan{
+		"siwc": {ID: "siwc", SIWC: &config.SIWCSpec{SessionRef: "session-ref", HostIDRef: "host-ref"}},
+		"key":  {ID: "key", Credential: "key-ref"},
+	}})
+	s.Gateway = gw
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/gateway/plans", nil))
+	if w.Code != http.StatusOK {
+		t.Fatal(w.Code)
+	}
+	var out struct {
+		Plans []struct {
+			ID   string          `json:"id"`
+			SIWC json.RawMessage `json:"siwc"`
+		} `json:"plans"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range out.Plans {
+		switch p.ID {
+		case "key":
+			if string(p.SIWC) != "null" {
+				t.Fatal("missing explicit null")
+			}
+		case "siwc":
+			if string(p.SIWC) != `{"sessionRef":"session-ref","hostIdRef":"host-ref"}` {
+				t.Fatalf("incorrect projection: %s", p.SIWC)
+			}
+		default:
+			t.Fatal("unexpected plan")
+		}
+	}
+	if len(out.Plans) != 2 {
+		t.Fatal("missing plans")
+	}
+}

@@ -500,7 +500,13 @@ func (g *Gateway) Plans() shared.GatewayPlanListResponse {
 		hs := g.Health.SnapshotWithCredentials(id, usableRefs, now)
 		hasSec := g.Secrets != nil && planHasAnySecret(p, g.Secrets)
 		out = append(out, shared.GatewayPlanStatus{
-			ID:      p.ID,
+			ID: p.ID,
+			SIWC: func() *shared.GatewaySIWCRefs {
+				if p.SIWC == nil {
+					return nil
+				}
+				return &shared.GatewaySIWCRefs{SessionRef: p.SIWC.SessionRef, HostIDRef: p.SIWC.HostIDRef}
+			}(),
 			Enabled: p.IsEnabled(),
 			AutoReset: func() *shared.PlanAutoResetSpec {
 				if !p.AutoReset.Enabled {

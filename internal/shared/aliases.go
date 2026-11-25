@@ -75,6 +75,7 @@ type (
 	GatewayStatusResponse     = api.GatewayStatusResponse
 	GatewayWindowUsage        = api.GatewayWindowUsage
 	GatewayPlanStatus         = api.GatewayPlanStatus
+	GatewaySIWCRefs           = api.GatewaySIWCRefs
 	GatewayPlanListResponse   = api.GatewayPlanListResponse
 	GatewayRouteTargetStatus  = api.GatewayRouteTargetStatus
 	GatewayRouteStatus        = api.GatewayRouteStatus

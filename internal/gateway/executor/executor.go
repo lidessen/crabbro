@@ -26,6 +26,7 @@ import (
 	"github.com/lidessen/crabbro/internal/scrub"
 	"github.com/lidessen/crabbro/internal/secret"
 	"github.com/lidessen/crabbro/internal/shared"
+	"github.com/lidessen/crabbro/internal/siwc"
 	"github.com/lidessen/crabbro/internal/transform"
 )
 
@@ -57,6 +58,8 @@ type Executor struct {
 	Bridge         BridgeHandler
 	CaptureMode    string
 	MaxRequestBody int64
+	SIWCClient     siwc.Client
+	roundTrip      func(*http.Request) (*http.Response, error)
 
 	// Signatures tracks in-memory thinking-signature provenance so the
 	// same-protocol fast path can preserve signed history for the upstream
@@ -90,7 +93,7 @@ func (e *Executor) ServeHTTP(w http.ResponseWriter, r *http.Request, snap *confi
 	sig := router.ExtractSignals(ingress.Profile, ingress.Protocol, ingress.Family, ingress.RequestedModel, ingress.SessionHint, rawBody)
 
 	// Start capture record early (without secrets) if capture is enabled.
-	rec := e.startRecord(r, ingress, sig, rawBody, started)
+	rec := e.startRecord(r, snap, ingress, sig, rawBody, started)
 
 	sel, err := e.Router.Select(r.Context(), snap, sig)
 	if err != nil || sel == nil || len(sel.Candidates) == 0 {
@@ -109,18 +112,29 @@ func (e *Executor) ServeHTTP(w http.ResponseWriter, r *http.Request, snap *confi
 		}
 		if rec != nil {
 			rec.Gateway.RouteID = routeID
-			rec.Gateway.RouteDecision = dec
+			if dec != nil {
+				clean := *dec
+				clean.SessionKey = secret.ScrubText(clean.SessionKey, siwcValues(snap, e.Secrets)...)
+				rec.Gateway.RouteDecision = &clean
+			}
 			rec.Gateway.TurnPhase = sig.TurnPhase
-			rec.Gateway.SessionKey = sig.SessionKey
+			rec.Gateway.SessionKey = secret.ScrubText(sig.SessionKey, siwcValues(snap, e.Secrets)...)
 		}
 		e.writeFailure(w, rec, ingress.Protocol, status, "gateway_routing_error", errMsg, started)
 		return
 	}
 
+	values := siwcValues(snap, e.Secrets)
+	sel.Signals.SessionKey = secret.ScrubText(sel.Signals.SessionKey, values...)
+	if sel.Decision != nil {
+		clean := *sel.Decision
+		clean.SessionKey = secret.ScrubText(clean.SessionKey, values...)
+		sel.Decision = &clean
+	}
 	if rec != nil {
 		rec.Gateway.RouteID = sel.Route.ID
 		rec.Gateway.TurnPhase = sig.TurnPhase
-		rec.Gateway.SessionKey = sig.SessionKey
+		rec.Gateway.SessionKey = secret.ScrubText(sig.SessionKey, siwcValues(snap, e.Secrets)...)
 		rec.Gateway.CacheGravity = sel.CacheGravityMax
 		rec.Gateway.RouteDecision = sel.Decision
 	}
@@ -208,11 +222,24 @@ func (e *Executor) tryCandidate(
 	exStarted time.Time,
 ) attemptOutcome {
 	attStart := time.Now()
-	// Stored SIWC tokens are unverified and must never be treated as API keys.
+	var tokens siwc.Tokens
+	var secVal string
+	var scrubVals []string
+	var refreshed bool
+	var err error
 	if cand.Plan.SIWC != nil {
-		const msg = "SIWC session identity verification is unavailable"
-		*attempts = append(*attempts, shared.GatewayAttempt{Plan: cand.Plan.ID, CredentialRef: cand.CredentialRef, Model: cand.Target.Model, Protocol: cand.EndpointProto, Status: http.StatusUnauthorized, ErrorKind: ErrKindAuthError, ErrorMessage: msg})
-		return attemptOutcome{status: http.StatusUnauthorized, errMsg: msg}
+		if cand.Endpoint == nil || cand.Endpoint.BaseURL != "https://api.openai.com/v1" || cand.EndpointProto != config.ProtocolOpenAIResponses || cand.Plan.ProxyURL != "" {
+			*attempts = append(*attempts, shared.GatewayAttempt{Plan: cand.Plan.ID, CredentialRef: cand.CredentialRef, Status: http.StatusUnauthorized, ErrorKind: ErrKindAuthError, ErrorMessage: "invalid SIWC endpoint"})
+			return attemptOutcome{status: http.StatusUnauthorized, errMsg: "invalid SIWC endpoint"}
+		}
+		original, _ := (siwc.Store{Secrets: e.Secrets}).Load(cand.Plan.SIWC.SessionRef)
+		scrubVals = siwc.ScrubValues(&original)
+		tokens, secVal, refreshed, err = e.siwcSession(r.Context(), cand.Plan.SIWC.SessionRef, nil)
+		scrubVals = append(scrubVals, siwc.ScrubValues(&tokens)...)
+		if err != nil {
+			*attempts = append(*attempts, shared.GatewayAttempt{Plan: cand.Plan.ID, CredentialRef: cand.CredentialRef, Status: http.StatusUnauthorized, ErrorKind: ErrKindAuthError, ErrorMessage: secret.ScrubText(err.Error(), scrubVals...)})
+			return attemptOutcome{status: http.StatusUnauthorized, errMsg: secret.ScrubText(err.Error(), scrubVals...)}
+		}
 	}
 	needBridge := cand.EndpointProto != ingress.Protocol
 	if needBridge && e.Bridge == nil {
@@ -227,7 +254,10 @@ func (e *Executor) tryCandidate(
 		return attemptOutcome{retryable: true, errMsg: "cross-protocol bridge unavailable"}
 	}
 
-	secVal, err := e.Secrets.Get(cand.CredentialRef)
+	if cand.Plan.SIWC == nil {
+		secVal, err = e.Secrets.Get(cand.CredentialRef)
+		scrubVals = []string{secVal}
+	}
 	if err != nil {
 		*attempts = append(*attempts, shared.GatewayAttempt{
 			Plan: cand.Plan.ID, CredentialRef: cand.CredentialRef,
@@ -260,9 +290,9 @@ func (e *Executor) tryCandidate(
 			Protocol:     cand.EndpointProto,
 			Status:       http.StatusBadRequest,
 			ErrorKind:    ErrKindClientBadRequest,
-			ErrorMessage: err.Error(),
+			ErrorMessage: secret.ScrubText(err.Error(), scrubVals...),
 		})
-		return attemptOutcome{retryable: false, errMsg: err.Error()}
+		return attemptOutcome{retryable: false, errMsg: secret.ScrubText(err.Error(), scrubVals...)}
 	}
 
 	upURL, err := codec.BuildUpstreamURL(cand.Endpoint.BaseURL, cand.EndpointProto, ingress.Action, cand.Target.Model, ingress.CleanQuery, ingress.Stream)
@@ -272,9 +302,9 @@ func (e *Executor) tryCandidate(
 			Model:        cand.Target.Model,
 			Protocol:     cand.EndpointProto,
 			ErrorKind:    ErrKindUpstreamUnavailable,
-			ErrorMessage: err.Error(),
+			ErrorMessage: secret.ScrubText(err.Error(), scrubVals...),
 		})
-		return attemptOutcome{retryable: true, errMsg: err.Error()}
+		return attemptOutcome{retryable: true, errMsg: secret.ScrubText(err.Error(), scrubVals...)}
 	}
 
 	tr, err := e.Transports.ForProxy(cand.Plan.ProxyURL)
@@ -284,9 +314,9 @@ func (e *Executor) tryCandidate(
 			Model:        cand.Target.Model,
 			Protocol:     cand.EndpointProto,
 			ErrorKind:    ErrKindUpstreamUnavailable,
-			ErrorMessage: err.Error(),
+			ErrorMessage: secret.ScrubText(err.Error(), scrubVals...),
 		})
-		return attemptOutcome{retryable: true, errMsg: err.Error()}
+		return attemptOutcome{retryable: true, errMsg: secret.ScrubText(err.Error(), scrubVals...)}
 	}
 
 	reqCtx, cancelReq := context.WithCancel(r.Context())
@@ -296,7 +326,7 @@ func (e *Executor) tryCandidate(
 	upReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, upURL, bytes.NewReader(upBody))
 	if err != nil {
 		ttftTimer.Stop()
-		return attemptOutcome{retryable: true, errMsg: err.Error()}
+		return attemptOutcome{retryable: true, errMsg: secret.ScrubText(err.Error(), scrubVals...)}
 	}
 	upReq.Header = r.Header.Clone()
 	stripProxyHopHeaders(upReq.Header)
@@ -309,21 +339,56 @@ func (e *Executor) tryCandidate(
 	upBody, err = transform.Request(upReq, upBody, cand.Endpoint.AuthHeader, cand.Endpoint.RequestTransform, cand.ModelSpec.RequestTransform)
 	if err != nil {
 		ttftTimer.Stop()
-		*attempts = append(*attempts, shared.GatewayAttempt{Plan: cand.Plan.ID, CredentialRef: cand.CredentialRef, Model: cand.Target.Model, Protocol: cand.EndpointProto, Status: http.StatusBadRequest, ErrorKind: ErrKindClientBadRequest, ErrorMessage: err.Error()})
-		return attemptOutcome{retryable: false, errMsg: err.Error()}
+		*attempts = append(*attempts, shared.GatewayAttempt{Plan: cand.Plan.ID, CredentialRef: cand.CredentialRef, Model: cand.Target.Model, Protocol: cand.EndpointProto, Status: http.StatusBadRequest, ErrorKind: ErrKindClientBadRequest, ErrorMessage: secret.ScrubText(err.Error(), scrubVals...)})
+		return attemptOutcome{retryable: false, errMsg: secret.ScrubText(err.Error(), scrubVals...)}
 	}
-	codec.InjectCredential(upReq.Header, cand.Endpoint, cand.EndpointProto, secVal)
+	if cand.Plan.SIWC != nil {
+		if !siwcTarget(upReq) {
+			ttftTimer.Stop()
+			return attemptOutcome{status: http.StatusUnauthorized, errMsg: "invalid SIWC endpoint"}
+		}
+		upBody, err = siwcBody(upBody)
+		if err != nil {
+			ttftTimer.Stop()
+			return attemptOutcome{errMsg: secret.ScrubText(err.Error(), scrubVals...)}
+		}
+		upReq.Body = io.NopCloser(bytes.NewReader(upBody))
+		upReq.ContentLength = int64(len(upBody))
+		upReq.Header.Set("Authorization", "Bearer "+secVal)
+	} else {
+		codec.InjectCredential(upReq.Header, cand.Endpoint, cand.EndpointProto, secVal)
+	}
 
 	if e.Router != nil && e.Router.Health != nil {
 		e.Router.Health.AcquireInFlight(cand.Plan.ID)
 		defer e.Router.Health.ReleaseInFlight(cand.Plan.ID)
 	}
 
-	resp, err := tr.RoundTrip(upReq)
+	doRoundTrip := tr.RoundTrip
+	if e.roundTrip != nil {
+		doRoundTrip = e.roundTrip
+	}
+	resp, err := doRoundTrip(upReq)
+	if err == nil && resp.StatusCode == http.StatusUnauthorized && cand.Plan.SIWC != nil && !refreshed {
+		resp.Body.Close()
+		previous := tokens
+		var next siwc.Tokens
+		next, secVal, _, err = e.siwcSession(r.Context(), cand.Plan.SIWC.SessionRef, &previous)
+		scrubVals = append(scrubVals, siwc.ScrubValues(&next)...)
+		if err == nil {
+			upReq.Body = io.NopCloser(bytes.NewReader(upBody))
+			upReq.Header.Set("Authorization", "Bearer "+secVal)
+			resp, err = doRoundTrip(upReq)
+		} else {
+			ttftTimer.Stop()
+			*attempts = append(*attempts, shared.GatewayAttempt{Plan: cand.Plan.ID, CredentialRef: cand.CredentialRef, Status: http.StatusUnauthorized, ErrorKind: ErrKindAuthError, ErrorMessage: "SIWC refresh failed"})
+			return attemptOutcome{status: http.StatusUnauthorized, errMsg: "SIWC refresh failed"}
+		}
+	}
 	ttftTimer.Stop()
 	ttftMs := time.Since(attStart).Milliseconds()
 	if err != nil {
-		fc := ClassifyHTTPFailure(0, []byte(err.Error()), nil, cand.Plan.ID, e.health(), cand.CredentialRef)
+		fc := ClassifyHTTPFailure(0, []byte(secret.ScrubText(err.Error(), scrubVals...)), nil, cand.Plan.ID, e.health(), cand.CredentialRef)
 		e.applyFailure(cand, fc, ttftMs, sel.Route.ID, sel.Signals.SessionKey, 0, accountedAttempts)
 		*attempts = append(*attempts, shared.GatewayAttempt{
 			Plan: cand.Plan.ID, CredentialRef: cand.CredentialRef,
@@ -331,11 +396,11 @@ func (e *Executor) tryCandidate(
 			Protocol:        cand.EndpointProto,
 			Status:          http.StatusBadGateway,
 			ErrorKind:       fc.Kind,
-			ErrorMessage:    secret.ScrubText(err.Error(), secVal),
+			ErrorMessage:    secret.ScrubText(err.Error(), scrubVals...),
 			LatencyMs:       ttftMs,
 			CooldownApplied: fc.CooldownLabel,
 		})
-		return attemptOutcome{retryable: r.Context().Err() == nil, errMsg: err.Error()}
+		return attemptOutcome{retryable: r.Context().Err() == nil, errMsg: secret.ScrubText(err.Error(), scrubVals...)}
 	}
 
 	if e.Ledger != nil && e.Ledger.Calibrator != nil {
@@ -348,9 +413,11 @@ func (e *Executor) tryCandidate(
 		resp.Body.Close()
 		if readErr == nil && !strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
 			resp.Header, errBody, readErr = transform.Response(resp.Header, errBody, cand.Endpoint.AuthHeader, cand.Endpoint.ResponseTransform, cand.ModelSpec.ResponseTransform)
-			resp.Header = scrub.ScrubHeaders(resp.Header, []string{secVal}, cand.Endpoint.AuthHeader)
-			errBody = []byte(scrub.ScrubText(string(errBody), secVal))
+			resp.Header = scrub.ScrubHeaders(resp.Header, scrubVals, cand.Endpoint.AuthHeader)
+			errBody = []byte(scrub.ScrubText(string(errBody), scrubVals...))
 		}
+		resp.Header = scrub.ScrubHeaders(resp.Header, scrubVals, cand.Endpoint.AuthHeader)
+		errBody = []byte(scrub.ScrubText(string(errBody), scrubVals...))
 		if readErr != nil {
 			latMs := time.Since(attStart).Milliseconds()
 			fc := ClassifyHTTPFailure(http.StatusBadGateway, nil, nil, cand.Plan.ID, e.health(), cand.CredentialRef)
@@ -381,7 +448,7 @@ func (e *Executor) tryCandidate(
 			Protocol:        cand.EndpointProto,
 			Status:          resp.StatusCode,
 			ErrorKind:       fc.Kind,
-			ErrorMessage:    secret.ScrubText(fc.Summary, secVal),
+			ErrorMessage:    secret.ScrubText(fc.Summary, scrubVals...),
 			LatencyMs:       latMs,
 			CooldownApplied: fc.CooldownLabel,
 		})
@@ -395,6 +462,22 @@ func (e *Executor) tryCandidate(
 		}
 	}
 
+	if cand.Plan.SIWC != nil {
+		resp.Header = scrub.ScrubHeaders(resp.Header, scrubVals, cand.Endpoint.AuthHeader)
+		resp.Body = struct {
+			io.Reader
+			io.Closer
+		}{newScrubReader(resp.Body, scrubVals), resp.Body}
+		if !ingress.Stream && strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
+			body, readErr := completedResponse(resp.Body)
+			resp.Body.Close()
+			if readErr != nil {
+				return attemptOutcome{retryable: true, errMsg: readErr.Error()}
+			}
+			resp.Body = io.NopCloser(bytes.NewReader(body))
+			resp.Header.Set("Content-Type", "application/json")
+		}
+	}
 	isSSE := strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream")
 	if isSSE {
 		peeked, sseRest, sseErrCode, sseErrMsg, hasSSEErr, emptyEOF := peekFirstSSE(resp.Body, cand.EndpointProto)
@@ -404,6 +487,8 @@ func (e *Executor) tryCandidate(
 			if emptyEOF {
 				sseErrCode, sseErrMsg = "empty_stream", "upstream SSE stream closed with no events"
 			}
+			sseErrCode = secret.ScrubText(sseErrCode, scrubVals...)
+			sseErrMsg = secret.ScrubText(sseErrMsg, scrubVals...)
 			fc := ClassifySSEFailure(sseErrCode, sseErrMsg, cand.Plan.ID, e.health(), cand.CredentialRef)
 			e.applyFailure(cand, fc, latMs, sel.Route.ID, sel.Signals.SessionKey, http.StatusTooManyRequests, accountedAttempts)
 			ctxMin := 0
@@ -416,11 +501,11 @@ func (e *Executor) tryCandidate(
 				Protocol:        cand.EndpointProto,
 				Status:          200,
 				ErrorKind:       fc.Kind,
-				ErrorMessage:    secret.ScrubText(sseErrMsg, secVal),
+				ErrorMessage:    secret.ScrubText(sseErrMsg, scrubVals...),
 				LatencyMs:       latMs,
 				CooldownApplied: fc.CooldownLabel,
 			})
-			return attemptOutcome{retryable: fc.Retryable, contextMin: ctxMin, errMsg: sseErrMsg}
+			return attemptOutcome{retryable: fc.Retryable, contextMin: ctxMin, errMsg: secret.ScrubText(sseErrMsg, scrubVals...)}
 		}
 
 		// Commit streaming response downstream!
@@ -431,7 +516,7 @@ func (e *Executor) tryCandidate(
 			Status:   resp.StatusCode,
 		})
 
-		e.commitStream(w, r, rec, cand, sel, ingress, *attempts, resp, peeked, sseRest, bridgeState, secVal, accountedAttempts, exStarted, attStart)
+		e.commitStream(w, r, rec, cand, sel, ingress, *attempts, resp, peeked, sseRest, bridgeState, scrubVals, accountedAttempts, exStarted, attStart)
 		return attemptOutcome{committed: true}
 	}
 
@@ -440,8 +525,8 @@ func (e *Executor) tryCandidate(
 	respBytes, readErr := transform.ReadResponse(resp.Body)
 	if readErr == nil {
 		resp.Header, respBytes, readErr = transform.Response(resp.Header, respBytes, cand.Endpoint.AuthHeader, cand.Endpoint.ResponseTransform, cand.ModelSpec.ResponseTransform)
-		resp.Header = scrub.ScrubHeaders(resp.Header, []string{secVal}, cand.Endpoint.AuthHeader)
-		respBytes = []byte(scrub.ScrubText(string(respBytes), secVal))
+		resp.Header = scrub.ScrubHeaders(resp.Header, scrubVals, cand.Endpoint.AuthHeader)
+		respBytes = []byte(scrub.ScrubText(string(respBytes), scrubVals...))
 	}
 	latMs := time.Since(attStart).Milliseconds()
 	if readErr != nil {
@@ -453,11 +538,11 @@ func (e *Executor) tryCandidate(
 			Protocol:        cand.EndpointProto,
 			Status:          resp.StatusCode,
 			ErrorKind:       fc.Kind,
-			ErrorMessage:    secret.ScrubText(readErr.Error(), secVal),
+			ErrorMessage:    secret.ScrubText(readErr.Error(), scrubVals...),
 			LatencyMs:       latMs,
 			CooldownApplied: fc.CooldownLabel,
 		})
-		return attemptOutcome{retryable: true, errMsg: secret.ScrubText(readErr.Error(), secVal)}
+		return attemptOutcome{retryable: true, errMsg: secret.ScrubText(readErr.Error(), scrubVals...)}
 	}
 
 	outStatus := resp.StatusCode
@@ -493,10 +578,10 @@ func (e *Executor) tryCandidate(
 				Protocol:     cand.EndpointProto,
 				Status:       http.StatusBadGateway,
 				ErrorKind:    fc.Kind,
-				ErrorMessage: trErr.Error(),
+				ErrorMessage: secret.ScrubText(trErr.Error(), scrubVals...),
 				LatencyMs:    latMs,
 			})
-			return attemptOutcome{retryable: true, errMsg: trErr.Error()}
+			return attemptOutcome{retryable: true, errMsg: secret.ScrubText(trErr.Error(), scrubVals...)}
 		}
 	}
 
@@ -520,7 +605,7 @@ func (e *Executor) tryCandidate(
 	_, _ = w.Write(outBody)
 
 	e.recordSuccess(sel, cand, usage, ttftMs, time.Since(exStarted).Milliseconds(), 0, accountedAttempts)
-	e.finalizeRecord(rec, cand, *attempts, usage, outStatus, outHdr, outBody, needBridge, secVal, exStarted, "")
+	e.finalizeRecord(rec, cand, *attempts, usage, outStatus, outHdr, outBody, needBridge, scrubVals, exStarted, "")
 	return attemptOutcome{committed: true}
 }
 
@@ -536,7 +621,7 @@ func (e *Executor) commitStream(
 	peeked []byte,
 	sseRest io.Reader,
 	bridgeState any,
-	secVal string,
+	scrubVals []string,
 	accountedAttempts *int,
 	exStarted time.Time,
 	attStart time.Time,
@@ -615,13 +700,13 @@ func (e *Executor) commitStream(
 				IsRetry:    *accountedAttempts > 0,
 			})
 		}
-		writeMidStreamError(w, flusher, ingress.Protocol, streamErr.Error())
-		e.finalizeRecord(rec, cand, attempts, usage, http.StatusOK, w.Header(), preview.Bytes(), needBridge, secVal, exStarted, "downstream_stream")
+		writeMidStreamError(w, flusher, ingress.Protocol, secret.ScrubText(streamErr.Error(), scrubVals...))
+		e.finalizeRecord(rec, cand, attempts, usage, http.StatusOK, w.Header(), preview.Bytes(), needBridge, scrubVals, exStarted, "downstream_stream")
 		return
 	}
 
 	e.recordSuccess(sel, cand, usage, ttftMs, totalDur, genMs, accountedAttempts)
-	e.finalizeRecord(rec, cand, attempts, usage, http.StatusOK, w.Header(), preview.Bytes(), needBridge, secVal, exStarted, "")
+	e.finalizeRecord(rec, cand, attempts, usage, http.StatusOK, w.Header(), preview.Bytes(), needBridge, scrubVals, exStarted, "")
 }
 
 // ExecuteDecision executes an internal DecisionRequest (used by internal/decision and semanticTiering)
@@ -841,13 +926,13 @@ func (e *Executor) ExecuteDecision(ctx context.Context, snap *config.Snapshot, r
 			Status: resp.StatusCode, LatencyMs: latMs, TTFTMs: latMs,
 		})
 		e.recordSuccess(sel, cand, dresp.Usage, latMs, time.Since(started).Milliseconds(), 0, &accountedAttempts)
-		e.finalizeRecord(rec, cand, attempts, dresp.Usage, resp.StatusCode, resp.Header, respBytes, needBridge, secVal, started, "")
+		e.finalizeRecord(rec, cand, attempts, dresp.Usage, resp.StatusCode, resp.Header, respBytes, needBridge, []string{secVal}, started, "")
 		return dresp, nil
 	}
 
 	if rec != nil {
 		rec.Gateway.Attempts = attempts
-		e.finalizeRecord(rec, router.Candidate{}, attempts, shared.TokenUsage{}, http.StatusBadGateway, nil, nil, false, "", started, "decision_failed")
+		e.finalizeRecord(rec, router.Candidate{}, attempts, shared.TokenUsage{}, http.StatusBadGateway, nil, nil, false, nil, started, "decision_failed")
 	}
 	if lastErr == nil {
 		lastErr = fmt.Errorf("decision invocation failed")
@@ -1007,13 +1092,14 @@ func (e *Executor) recordSuccess(sel *router.Selection, cand router.Candidate, u
 	}
 }
 
-func (e *Executor) startRecord(r *http.Request, ingress codec.IngressInfo, sig router.Signals, rawBody []byte, started time.Time) *shared.Request {
+func (e *Executor) startRecord(r *http.Request, snap *config.Snapshot, ingress codec.IngressInfo, sig router.Signals, rawBody []byte, started time.Time) *shared.Request {
 	if e.Sink == nil || e.CaptureMode == CaptureOff {
 		return nil
 	}
-	scrubbedURL := codec.ScrubbedDisplayURL(r)
+	values := siwcValues(snap, e.Secrets)
+	scrubbedURL := secret.ScrubText(codec.ScrubbedDisplayURL(r), values...)
 	parsed, _ := url.Parse(scrubbedURL)
-	cleanHdrs := secret.StripAuthHeaders(r.Header)
+	cleanHdrs := secret.ScrubHeaders(secret.StripAuthHeaders(r.Header), values)
 	hdrList, flatHdrs := flattenHeaders(cleanHdrs)
 
 	path := ingress.CleanPath
@@ -1025,9 +1111,9 @@ func (e *Executor) startRecord(r *http.Request, ingress codec.IngressInfo, sig r
 		Kind:              "gateway",
 		Method:            r.Method,
 		Scheme:            "http",
-		Host:              r.Host,
-		Path:              path,
-		Query:             ingress.CleanQuery,
+		Host:              secret.ScrubText(r.Host, values...),
+		Path:              secret.ScrubText(path, values...),
+		Query:             secret.ScrubText(ingress.CleanQuery, values...),
 		URL:               scrubbedURL,
 		OriginalURL:       scrubbedURL,
 		EffectiveURL:      scrubbedURL,
@@ -1039,9 +1125,9 @@ func (e *Executor) startRecord(r *http.Request, ingress codec.IngressInfo, sig r
 			Profile:         ingress.Profile,
 			Family:          ingress.Family,
 			IngressProtocol: ingress.Protocol,
-			RequestedModel:  ingress.RequestedModel,
+			RequestedModel:  secret.ScrubText(ingress.RequestedModel, values...),
 			TurnPhase:       sig.TurnPhase,
-			SessionKey:      sig.SessionKey,
+			SessionKey:      secret.ScrubText(sig.SessionKey, values...),
 		},
 	}
 	rec = e.Sink.Start(rec)
@@ -1049,6 +1135,7 @@ func (e *Executor) startRecord(r *http.Request, ingress codec.IngressInfo, sig r
 		var secretVals []string
 		if e.Secrets != nil {
 			secretVals = e.Secrets.AllValues()
+			secretVals = append(secretVals, values...)
 		}
 		scrubbedBody := []byte(secret.ScrubText(string(rawBody), secretVals...))
 		if len(scrubbedBody) > shared.MaxBodySize {
@@ -1073,7 +1160,7 @@ func (e *Executor) finalizeRecord(
 	respHdr http.Header,
 	respBody []byte,
 	translated bool,
-	secVal string,
+	scrubVals []string,
 	started time.Time,
 	failureStage string,
 ) {
@@ -1086,7 +1173,7 @@ func (e *Executor) finalizeRecord(
 	rec.DurationMs = now.Sub(started).Milliseconds()
 	rec.FailureStage = failureStage
 
-	cleanRespHdr := secret.ScrubHeaders(respHdr, []string{secVal})
+	cleanRespHdr := secret.ScrubHeaders(respHdr, scrubVals)
 	rList, rFlat := flattenHeaders(cleanRespHdr)
 	rec.ResponseHeaderList = rList
 	rec.ResponseHeaders = rFlat
@@ -1111,7 +1198,7 @@ func (e *Executor) finalizeRecord(
 	}
 
 	if e.CaptureMode == CapturePreview && len(respBody) > 0 {
-		scrubbed := []byte(secret.ScrubText(string(respBody), secVal))
+		scrubbed := []byte(secret.ScrubText(string(respBody), scrubVals...))
 		if len(scrubbed) > shared.MaxBodySize {
 			scrubbed = scrubbed[:shared.MaxBodySize]
 			rec.ResponseBodyTruncated = true
@@ -1147,7 +1234,7 @@ func (e *Executor) writeFailure(w http.ResponseWriter, rec *shared.Request, prot
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_, _ = w.Write(payload)
-	e.finalizeRecord(rec, router.Candidate{}, nil, shared.TokenUsage{}, status, w.Header(), payload, false, "", started, "gateway")
+	e.finalizeRecord(rec, router.Candidate{}, nil, shared.TokenUsage{}, status, w.Header(), payload, false, nil, started, "gateway")
 }
 
 func (e *Executor) writeUpstreamError(w http.ResponseWriter, rec *shared.Request, attempts []shared.GatewayAttempt, status int, hdr http.Header, body []byte, started time.Time) {
@@ -1156,7 +1243,7 @@ func (e *Executor) writeUpstreamError(w http.ResponseWriter, rec *shared.Request
 	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
 	w.WriteHeader(status)
 	_, _ = w.Write(body)
-	e.finalizeRecord(rec, router.Candidate{}, attempts, shared.TokenUsage{}, status, hdr, body, false, "", started, "upstream")
+	e.finalizeRecord(rec, router.Candidate{}, attempts, shared.TokenUsage{}, status, hdr, body, false, nil, started, "upstream")
 }
 
 func setTraceHeaders(h http.Header, routeID string, cand router.Candidate, attemptCount int, translated bool) {
