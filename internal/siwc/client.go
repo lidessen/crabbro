@@ -94,8 +94,17 @@ func (c Client) Discover(ctx context.Context) (Discovery, error) {
 	if err := c.request(ctx, http.MethodGet, issuer+"/.well-known/openid-configuration", nil, "", &d); err != nil {
 		return Discovery{}, err
 	}
-	if d.Issuer != issuer || !validEndpoint(d.AuthorizationEndpoint) || !validEndpoint(d.TokenEndpoint) || !validEndpoint(d.JWKSURI) {
+	if d.Issuer != issuer {
 		return Discovery{}, errors.New("invalid SIWC discovery metadata")
+	}
+	for _, endpoint := range []string{d.AuthorizationEndpoint, d.TokenEndpoint, d.JWKSURI} {
+		if !validEndpoint(endpoint) {
+			return Discovery{}, errors.New("invalid SIWC discovery metadata")
+		}
+		endpointURL, _ := url.Parse(endpoint)
+		if endpointURL.Scheme != u.Scheme || !strings.EqualFold(endpointURL.Host, u.Host) {
+			return Discovery{}, errors.New("invalid SIWC discovery metadata")
+		}
 	}
 	return d, nil
 }
@@ -249,6 +258,9 @@ func (c Client) Refresh(ctx context.Context, d Discovery, old Tokens) (Tokens, e
 	}
 	if next.Scope == "" {
 		next.Scope = old.Scope
+	}
+	if !next.GrantedDirect() {
+		return Tokens{}, errors.New("SIWC refresh response lacks required direct scope")
 	}
 	return next, nil
 }

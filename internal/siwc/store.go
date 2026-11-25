@@ -38,6 +38,20 @@ func (t Tokens) GrantedDirect() bool {
 	return false
 }
 
+// ScrubValues returns the individual credentials that callers must redact.
+func ScrubValues(tokens *Tokens) []string {
+	if tokens == nil {
+		return nil
+	}
+	var values []string
+	for _, value := range []string{tokens.AccessToken, tokens.RefreshToken, tokens.IDToken} {
+		if value != "" {
+			values = append(values, value)
+		}
+	}
+	return values
+}
+
 // Store keeps each complete token set in one atomic secret file. Individual token
 // values must also be included in any capture/log scrubbing performed by callers;
 // secret.Store.AllValues only sees the serialized record.
@@ -110,6 +124,9 @@ func (s Store) HostID(ref string) (string, error) {
 	id = fmt.Sprintf("urn:uuid:%x-%x-%x-%x-%x", raw[0:4], raw[4:6], raw[6:8], raw[8:10], raw[10:16])
 	if os.MkdirAll(s.Secrets.Dir, 0700) != nil {
 		return "", errors.New("create SIWC host store")
+	}
+	if os.Chmod(s.Secrets.Dir, 0700) != nil {
+		return "", errors.New("protect SIWC host store")
 	}
 	f, err := os.CreateTemp(s.Secrets.Dir, ".siwc-host-*")
 	if err != nil {

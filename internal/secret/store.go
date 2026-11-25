@@ -48,11 +48,32 @@ func ValidRef(ref string) error {
 	return nil
 }
 
+// protectDir tightens an existing store directory without creating it.
+func (s *Store) protectDir() error {
+	fi, err := os.Stat(s.Dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf("secret store path is not a directory")
+	}
+	if fi.Mode().Perm()&0o077 != 0 {
+		return os.Chmod(s.Dir, fi.Mode().Perm()&0o700)
+	}
+	return nil
+}
+
 func (s *Store) pathFor(ref string) (string, error) {
 	if s == nil || strings.TrimSpace(s.Dir) == "" {
 		return "", fmt.Errorf("secret store is not configured")
 	}
 	if err := ValidRef(ref); err != nil {
+		return "", err
+	}
+	if err := s.protectDir(); err != nil {
 		return "", err
 	}
 	return filepath.Join(s.Dir, ref), nil
@@ -88,6 +109,9 @@ func (s *Store) Set(ref, value string) error {
 		return fmt.Errorf("secret value cannot be empty")
 	}
 	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
+		return err
+	}
+	if err := s.protectDir(); err != nil {
 		return err
 	}
 	if fi, err := os.Lstat(p); err == nil {
@@ -157,6 +181,9 @@ func (s *Store) Has(ref string) bool {
 func (s *Store) List() ([]Summary, error) {
 	if s == nil || strings.TrimSpace(s.Dir) == "" {
 		return nil, nil
+	}
+	if err := s.protectDir(); err != nil {
+		return nil, err
 	}
 	entries, err := os.ReadDir(s.Dir)
 	if err != nil {

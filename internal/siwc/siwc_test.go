@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -22,6 +23,63 @@ import (
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestScrubValues(t *testing.T) {
+	if got := ScrubValues(nil); len(got) != 0 {
+		t.Fatalf("nil tokens returned %d values", len(got))
+	}
+	for _, tc := range []struct {
+		tokens Tokens
+		want   []string
+	}{
+		{Tokens{}, nil},
+		{Tokens{AccessToken: "access", RefreshToken: "refresh", IDToken: "id"}, []string{"access", "refresh", "id"}},
+		{Tokens{RefreshToken: "refresh"}, []string{"refresh"}},
+	} {
+		if got := ScrubValues(&tc.tokens); !reflect.DeepEqual(got, tc.want) {
+			t.Fatalf("ScrubValues = %v, want %v", got, tc.want)
+		}
+	}
+}
+
+func TestDiscoveryPinsEndpoints(t *testing.T) {
+	for _, field := range []string{"authorization", "token", "jwks"} {
+		for _, endpoint := range []string{"https://attacker.example/path", "http://127.0.0.1:0/path"} {
+			t.Run(field+"/"+endpoint, func(t *testing.T) {
+				base, hc := testServer(t, func(base string) http.Handler {
+					return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						d := Discovery{Issuer: base, AuthorizationEndpoint: base + "/authorize", TokenEndpoint: base + "/token", JWKSURI: base + "/jwks"}
+						switch field {
+						case "authorization":
+							d.AuthorizationEndpoint = endpoint
+						case "token":
+							d.TokenEndpoint = endpoint
+						case "jwks":
+							d.JWKSURI = endpoint
+						}
+						json.NewEncoder(w).Encode(d)
+					})
+				})
+				if _, err := (Client{Issuer: base, HTTPClient: hc}).Discover(context.Background()); err == nil {
+					t.Fatal("accepted endpoint outside issuer host")
+				}
+			})
+		}
+	}
+}
+
+func TestRefreshRejectsScopeDowngrade(t *testing.T) {
+	base, hc := testServer(t, func(base string) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			io.WriteString(w, `{"access_token":"new-access","token_type":"Bearer","scope":"openid","expires_in":3600}`)
+		})
+	})
+	old := Tokens{ClientID: "client", RefreshToken: "refresh", Scope: DirectScope}
+	next, err := (Client{HTTPClient: hc}).Refresh(context.Background(), Discovery{TokenEndpoint: base + "/token"}, old)
+	if err == nil || !strings.Contains(err.Error(), "scope") || next != (Tokens{}) {
+		t.Fatal("refresh accepted downgraded scope")
+	}
+}
 
 // Prefer a real server, but fall back to an in-process transport in sandboxes
 // that disallow binding loopback sockets.
