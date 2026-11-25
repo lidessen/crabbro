@@ -366,6 +366,9 @@ func (s *Syncer) maybeAutoReset(p *config.Plan, q RemoteQuota) {
 // redeem performs one guarded redemption cycle for plan p.
 func (s *Syncer) redeem(ctx context.Context, p *config.Plan, scope string, dryRun bool, policy *config.AutoResetSpec) (ResetOutcome, error) {
 	out := ResetOutcome{Plan: p.ID, Scope: scope, DryRun: dryRun}
+	if p.SIWC != nil {
+		return out, errors.New("quota reset is unavailable for SIWC sessions")
+	}
 	minInterval := time.Duration(0)
 	if policy != nil {
 		minInterval = policy.MinIntervalDuration()

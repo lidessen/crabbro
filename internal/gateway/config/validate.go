@@ -82,6 +82,14 @@ func ValidatePlanBytes(filename, expectedID string, data []byte) (*Plan, []share
 	if expectedID != "" && plan.ID != expectedID {
 		diags = append(diags, shared.Diagnostic{File: filename, Path: "$.id", Message: "id does not match the filename"})
 	}
+	if plan.SIWC != nil {
+		if plan.SIWC.SessionRef == plan.SIWC.HostIDRef {
+			diags = append(diags, shared.Diagnostic{File: filename, Path: "$.siwc.hostIdRef", Message: "host ID and session must use distinct references"})
+		}
+		if len(plan.Endpoints) != 1 || plan.Endpoints[ProtocolOpenAIResponses] == nil || plan.Endpoints[ProtocolOpenAIResponses].BaseURL != "https://api.openai.com/v1" {
+			diags = append(diags, shared.Diagnostic{File: filename, Path: "$.endpoints", Message: "SIWC requires only the OpenAI Responses endpoint at https://api.openai.com/v1"})
+		}
+	}
 	if plan.ProxyURL != "" {
 		u, err := url.Parse(plan.ProxyURL)
 		if err != nil || u.Host == "" {

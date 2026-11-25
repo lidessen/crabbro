@@ -102,7 +102,7 @@ func ParseDuration(raw string) (time.Duration, error) {
 	return time.ParseDuration(s)
 }
 
-// Plan configures one API-key coding plan or decision backend.
+// Plan configures one coding plan or decision backend.
 type Plan struct {
 	Version       int                      `yaml:"version" json:"version"`
 	ID            string                   `yaml:"id" json:"id"`
@@ -111,6 +111,7 @@ type Plan struct {
 	Description   string                   `yaml:"description,omitempty" json:"description,omitempty"`
 	Credential    string                   `yaml:"credential,omitempty" json:"credential,omitempty"`
 	Credentials   *CredentialPool          `yaml:"credentials,omitempty" json:"credentials,omitempty"`
+	SIWC          *SIWCSpec                `yaml:"siwc,omitempty" json:"siwc,omitempty"`
 	ProxyURL      string                   `yaml:"proxyUrl,omitempty" json:"proxyUrl,omitempty"`
 	Timeout       TimeoutSpec              `yaml:"timeout,omitempty" json:"timeout,omitempty"`
 	Cache         CacheSpec                `yaml:"cache,omitempty" json:"cache,omitempty"`
@@ -119,6 +120,12 @@ type Plan struct {
 	QuotaReminder QuotaReminderSpec        `yaml:"quotaReminder,omitempty" json:"quotaReminder,omitempty"`
 	Endpoints     map[string]*EndpointSpec `yaml:"endpoints" json:"endpoints"`
 	Models        map[string]*ModelSpec    `yaml:"models" json:"models"`
+}
+
+// SIWCSpec contains references to the stored session and persistent host ID.
+type SIWCSpec struct {
+	SessionRef string `yaml:"sessionRef" json:"sessionRef"`
+	HostIDRef  string `yaml:"hostIdRef" json:"hostIdRef"`
 }
 
 // CredentialPool declares an ordered set of secret references.
@@ -130,6 +137,9 @@ type CredentialPool struct {
 func (p *Plan) CredentialRefs() []string {
 	if p == nil {
 		return nil
+	}
+	if p.SIWC != nil {
+		return []string{p.SIWC.SessionRef}
 	}
 	if p.Credentials != nil {
 		return p.Credentials.Refs

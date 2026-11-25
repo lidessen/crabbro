@@ -183,6 +183,9 @@ func percent(used, cap any) *float64 {
 var providerNoQuota = []string{"zenmux-jev"}
 
 func provider(p *config.Plan) string {
+	if p.SIWC != nil {
+		return ""
+	}
 	s := strings.ToLower(p.ID + " " + p.Credential)
 	for _, n := range providerNoQuota {
 		if strings.Contains(s, n) {

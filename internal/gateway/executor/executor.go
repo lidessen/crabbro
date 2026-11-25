@@ -175,6 +175,10 @@ func (e *Executor) ServeHTTP(w http.ResponseWriter, r *http.Request, snap *confi
 		e.writeUpstreamError(w, rec, attempts, lastStatus, lastHeaders, lastErrBody, started)
 		return
 	}
+	if lastStatus == http.StatusUnauthorized && len(attempts) > 0 && attempts[len(attempts)-1].ErrorKind == ErrKindAuthError {
+		e.writeFailure(w, rec, ingress.Protocol, http.StatusUnauthorized, ErrKindAuthError, lastErrMsg, started)
+		return
+	}
 	if lastErrMsg == "" {
 		lastErrMsg = "all gateway candidates failed"
 	}
@@ -204,6 +208,12 @@ func (e *Executor) tryCandidate(
 	exStarted time.Time,
 ) attemptOutcome {
 	attStart := time.Now()
+	// Stored SIWC tokens are unverified and must never be treated as API keys.
+	if cand.Plan.SIWC != nil {
+		const msg = "SIWC session identity verification is unavailable"
+		*attempts = append(*attempts, shared.GatewayAttempt{Plan: cand.Plan.ID, CredentialRef: cand.CredentialRef, Model: cand.Target.Model, Protocol: cand.EndpointProto, Status: http.StatusUnauthorized, ErrorKind: ErrKindAuthError, ErrorMessage: msg})
+		return attemptOutcome{status: http.StatusUnauthorized, errMsg: msg}
+	}
 	needBridge := cand.EndpointProto != ingress.Protocol
 	if needBridge && e.Bridge == nil {
 		*attempts = append(*attempts, shared.GatewayAttempt{
@@ -692,6 +702,10 @@ func (e *Executor) ExecuteDecision(ctx context.Context, snap *config.Snapshot, r
 			break
 		}
 		if e.candidateCooling(cand) {
+			continue
+		}
+		if cand.Plan.SIWC != nil {
+			lastErr = errors.New("SIWC session identity verification is unavailable")
 			continue
 		}
 		attStart := time.Now()
