@@ -119,6 +119,7 @@ Commands:
   plugin invoke <p> <i> <t> Call a tool
   secrets list|set|delete   Manage mode-0600 credentials under ~/.crabbro/secrets/
   gateway status|plans|routes    Inspect multi-protocol LLM & Decision gateway
+  gateway siwc-status       Inspect SIWC plan references and health
   gateway usage|preview|reload  View quota usage, dry-run router, or reload config
   gateway why <request-id>  Explain a recorded gateway route
   gateway cooldown-clear <plan> Clear an active plan cooldown

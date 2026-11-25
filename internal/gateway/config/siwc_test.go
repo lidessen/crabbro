@@ -31,3 +31,34 @@ func TestSIWCPlanValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestSIWCProxyURLRejected(t *testing.T) {
+	base := `version: 1
+id: test
+%s
+proxyUrl: https://proxy.example.com
+endpoints:
+  openai-responses:
+    baseUrl: https://api.openai.com/v1
+models:
+  model: {}
+`
+	for _, tc := range []struct {
+		name, auth string
+		wantError  bool
+	}{
+		{"siwc", "siwc:\n  sessionRef: session\n  hostIdRef: host", true},
+		{"credential", "credential: key", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, diags := ValidatePlanBytes("test.yaml", "test", []byte(fmt.Sprintf(base, tc.auth)))
+			if tc.wantError {
+				if len(diags) != 1 || diags[0].Path != "$.proxyUrl" || diags[0].Message != "proxyUrl is not allowed for SIWC plans" {
+					t.Fatalf("unexpected diagnostics: %+v", diags)
+				}
+			} else if len(diags) != 0 {
+				t.Fatalf("unexpected diagnostics: %+v", diags)
+			}
+		})
+	}
+}

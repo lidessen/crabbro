@@ -83,6 +83,9 @@ func ValidatePlanBytes(filename, expectedID string, data []byte) (*Plan, []share
 		diags = append(diags, shared.Diagnostic{File: filename, Path: "$.id", Message: "id does not match the filename"})
 	}
 	if plan.SIWC != nil {
+		if plan.ProxyURL != "" {
+			diags = append(diags, shared.Diagnostic{File: filename, Path: "$.proxyUrl", Message: "proxyUrl is not allowed for SIWC plans"})
+		}
 		if plan.SIWC.SessionRef == plan.SIWC.HostIDRef {
 			diags = append(diags, shared.Diagnostic{File: filename, Path: "$.siwc.hostIdRef", Message: "host ID and session must use distinct references"})
 		}

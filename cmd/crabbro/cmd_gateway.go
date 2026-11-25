@@ -18,12 +18,14 @@ import (
 
 func cmdGateway(cfg *clientConfig, args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: crabbro gateway <status|plans|routes|quotas|usage|why|cooldown-clear|preview|reload>")
+		return fmt.Errorf("usage: crabbro gateway <status|plans|siwc-status|routes|quotas|usage|why|cooldown-clear|preview|reload>")
 	}
 	switch args[0] {
 	case "help", "--help", "-h":
-		fmt.Println("usage: crabbro gateway <status|plans|routes|quotas|usage|why|cooldown-clear|preview|reload>")
+		fmt.Println("usage: crabbro gateway <status|plans|siwc-status|routes|quotas|usage|why|cooldown-clear|preview|reload>")
 		return nil
+	case "siwc-status":
+		return gatewaySIWCStatus(cfg, args[1:])
 	case "status":
 		return gatewayGetJSON(cfg, args[1:], "/v1/gateway/status", func(raw []byte) {
 			var st shared.GatewayStatusResponse
@@ -241,6 +243,78 @@ func cmdGateway(cfg *clientConfig, args []string) error {
 	default:
 		return fmt.Errorf("unknown gateway subcommand: %s", args[0])
 	}
+}
+
+type gatewaySIWCStatusEntry struct {
+	PlanID     string `json:"planId"`
+	SessionRef string `json:"sessionRef"`
+	HostIDRef  string `json:"hostIdRef"`
+	Healthy    bool   `json:"healthy"`
+}
+
+func gatewaySIWCStatus(cfg *clientConfig, args []string) error {
+	fs := flag.NewFlagSet("gateway siwc-status", flag.ContinueOnError)
+	pretty := fs.Bool("pretty", false, "Human-readable output")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("usage: crabbro gateway siwc-status [--pretty]")
+	}
+	resp, err := doRequest(cfg, http.MethodGet, "/v1/gateway/plans", nil)
+	if err != nil {
+		return fmt.Errorf("fetch gateway plans: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("fetch gateway plans: HTTP %d", resp.StatusCode)
+	}
+	return renderGatewaySIWCStatus(os.Stdout, resp.Body, *pretty)
+}
+
+func renderGatewaySIWCStatus(w io.Writer, body io.Reader, pretty bool) error {
+	var out struct {
+		Plans *[]struct {
+			ID      string          `json:"id"`
+			Healthy bool            `json:"healthy"`
+			SIWC    json.RawMessage `json:"siwc"`
+		} `json:"plans"`
+	}
+	if err := json.NewDecoder(body).Decode(&out); err != nil || out.Plans == nil {
+		return fmt.Errorf("invalid gateway plans response")
+	}
+	entries := make([]gatewaySIWCStatusEntry, 0)
+	for _, p := range *out.Plans {
+		// The server must explicitly report null for non-SIWC plans. Missing
+		// metadata cannot distinguish an older daemon from a non-SIWC plan.
+		if len(p.SIWC) == 0 {
+			return fmt.Errorf("gateway plans response does not include SIWC metadata; daemon update required")
+		}
+		if string(p.SIWC) == "null" {
+			continue
+		}
+		var refs struct {
+			SessionRef string `json:"sessionRef"`
+			HostIDRef  string `json:"hostIdRef"`
+		}
+		if err := json.Unmarshal(p.SIWC, &refs); err != nil || p.ID == "" || refs.SessionRef == "" || refs.HostIDRef == "" {
+			return fmt.Errorf("invalid SIWC metadata in gateway plans response")
+		}
+		entries = append(entries, gatewaySIWCStatusEntry{p.ID, refs.SessionRef, refs.HostIDRef, p.Healthy})
+	}
+	if pretty {
+		if len(entries) == 0 {
+			_, err := fmt.Fprintln(w, "no SIWC plans configured")
+			return err
+		}
+		for _, p := range entries {
+			if _, err := fmt.Fprintf(w, "planId=%s sessionRef=%s hostIdRef=%s healthy=%t\n", p.PlanID, p.SessionRef, p.HostIDRef, p.Healthy); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return json.NewEncoder(w).Encode(entries)
 }
 
 func gatewayWhy(cfg *clientConfig, args []string) error {
