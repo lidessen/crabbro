@@ -2,8 +2,10 @@ package router
 
 import (
 	"context"
+	"encoding/json"
 	"math"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -233,6 +235,95 @@ func TestMatchModelAnySlashWildcard(t *testing.T) {
 type quotaFixture map[string]*quota.RemoteQuota
 
 func (q quotaFixture) Get(id string) (*quota.RemoteQuota, bool) { v, ok := q[id]; return v, ok }
+
+func TestRemoteQuotaExhaustionRoutesAndPreview(t *testing.T) {
+	used := 100.0
+	below := 99.0
+	tests := []struct {
+		name      string
+		quota     *quota.RemoteQuota
+		exhausted bool
+	}{
+		{"weekly usage", &quota.RemoteQuota{Windows: []api.RemoteQuotaWindow{{Name: "Weekly", UsagePct: &used}}}, true},
+		{"window status", &quota.RemoteQuota{Windows: []api.RemoteQuotaWindow{{Name: "Weekly", Trend: &api.WindowTrend{Status: "exhausted"}}}}, true},
+		{"top-level usage", &quota.RemoteQuota{UsagePct: &used}, true},
+		{"below threshold", &quota.RemoteQuota{Windows: []api.RemoteQuotaWindow{{Name: "Weekly", UsagePct: &below}}}, false},
+		{"stale", &quota.RemoteQuota{Stale: true, UsagePct: &used}, false},
+		{"unknown", nil, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r, snap, _, _ := setupRouterFixture(t)
+			q := quotaFixture{}
+			if tt.quota != nil {
+				q["kimi-coding"] = tt.quota
+			}
+			r.Quotas = q
+			preview := r.Preview(context.Background(), snap, shared.GatewayPreviewRequest{Model: "coding-main"})
+			if preview.Error != "" || preview.Decision == nil {
+				t.Fatalf("preview failed: %+v", preview)
+			}
+			want := "kimi-coding"
+			if tt.exhausted {
+				want = "glm-coding"
+			}
+			if preview.Decision.Candidates[0].Plan != want {
+				t.Fatalf("selected candidates = %+v, want %s first", preview.Decision.Candidates, want)
+			}
+			for _, c := range preview.Decision.Candidates {
+				if c.Plan == "kimi-coding" && (c.Eligible == tt.exhausted || (tt.exhausted && c.RejectReason != "quota exhausted")) {
+					t.Fatalf("unexpected preview candidate: %+v", c)
+				}
+			}
+			if tt.exhausted {
+				data, err := json.Marshal(preview)
+				if err != nil || !strings.Contains(string(data), `"rejectReason":"quota exhausted"`) || !strings.Contains(string(data), `"eligible":false`) {
+					t.Fatalf("preview JSON does not show quota rejection: %s, error: %v", data, err)
+				}
+			}
+		})
+	}
+}
+
+func TestRemoteQuotaExhaustionRejectsAllCandidates(t *testing.T) {
+	r, snap, _, _ := setupRouterFixture(t)
+	used := 100.0
+	r.Quotas = quotaFixture{"kimi-coding": {UsagePct: &used}, "glm-coding": {UsagePct: &used}}
+	preview := r.Preview(context.Background(), snap, shared.GatewayPreviewRequest{Model: "coding-main"})
+	if preview.Error == "" || preview.Decision == nil || len(preview.Decision.Candidates) != 2 {
+		t.Fatalf("expected no eligible candidates: %+v", preview)
+	}
+	for _, c := range preview.Decision.Candidates {
+		if c.Eligible || c.RejectReason != "quota exhausted" {
+			t.Fatalf("unexpected candidate: %+v", c)
+		}
+	}
+}
+
+func TestRemoteQuotaExhaustionCredentialPool(t *testing.T) {
+	r, snap, _, sec := setupRouterFixture(t)
+	if err := sec.Set("extra", "fixture"); err != nil {
+		t.Fatal(err)
+	}
+	p := snap.Plans["kimi-coding"]
+	p.Credentials = &config.CredentialPool{Refs: []string{"k1", "extra"}}
+	used := 100.0
+	r.Quotas = quotaFixture{
+		p.ID:         {UsagePct: &used},
+		p.ID + "/k1": {UsagePct: &used},
+	}
+	sig := ExtractSignals("", config.ProtocolAnthropic, config.FamilyGenerative, "coding-main", "", []byte(`{"model":"coding-main","messages":[{"role":"user","content":"hello"}]}`))
+	sel, err := r.Select(context.Background(), snap, sig)
+	if err != nil || sel.Candidates[0].Plan.ID != p.ID || len(sel.Candidates[0].CredentialRefs) != 1 || sel.Candidates[0].CredentialRefs[0] != "extra" {
+		t.Fatalf("unknown credential should remain available: selection=%+v error=%v", sel, err)
+	}
+	r.Quotas = quotaFixture{p.ID + "/k1": {UsagePct: &used}, p.ID + "/extra": {UsagePct: &used}}
+	sel, err = r.Select(context.Background(), snap, sig)
+	if err != nil || sel.Candidates[0].Plan.ID != "glm-coding" || sel.AllEvaluated[1].RejectReason != "quota exhausted" {
+		t.Fatalf("exhausted pool should be rejected: selection=%+v error=%v", sel, err)
+	}
+}
+
 func TestExpiringCouponBoost(t *testing.T) {
 	r, snap, _, _ := setupRouterFixture(t)
 	now := time.Now().UTC()

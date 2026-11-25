@@ -591,6 +591,34 @@ func (r *Router) evalTargets(snap *config.Snapshot, rt *config.Route, sig Signal
 			out = append(out, cand)
 			continue
 		}
+		if r.Quotas != nil {
+			// The plan snapshot represents one credential, not the whole pool.
+			// Prefer per-key evidence whenever it exists, and leave unknown or
+			// stale snapshots available for routing.
+			refs := make([]string, 0, len(cand.CredentialRefs))
+			hasKeySnapshot := false
+			for _, ref := range cand.CredentialRefs {
+				q, ok := r.Quotas.Get(plan.ID + "/" + ref)
+				if ok && q != nil {
+					hasKeySnapshot = true
+				}
+				if !remoteQuotaExhausted(q) {
+					refs = append(refs, ref)
+				}
+			}
+			if !hasKeySnapshot && len(plan.CredentialRefs()) == 1 {
+				q, _ := r.Quotas.Get(plan.ID)
+				if remoteQuotaExhausted(q) {
+					refs = nil
+				}
+			}
+			if len(refs) == 0 {
+				cand.RejectReason = "quota exhausted"
+				out = append(out, cand)
+				continue
+			}
+			cand.CredentialRefs = refs
+		}
 		if plan.CredentialStrategy() == "round-robin" && r.Health != nil {
 			n := int(r.Health.NextKeyCursor(plan.ID) % uint64(len(cand.CredentialRefs)))
 			cand.CredentialRefs = append(append([]string{}, cand.CredentialRefs[n:]...), cand.CredentialRefs[:n]...)
@@ -932,6 +960,23 @@ func (r *Router) computeQuotaScore(plan *config.Plan, now time.Time) (urgency fl
 		return maxWeightedSurplus, blockedHard, blockedSoft
 	}
 	return 0.0, blockedHard, blockedSoft
+}
+
+// remoteQuotaExhausted only uses current provider observations, never a
+// projection or a stale snapshot, to reject a credential.
+func remoteQuotaExhausted(q *quota.RemoteQuota) bool {
+	if q == nil || q.Stale {
+		return false
+	}
+	if q.UsagePct != nil && *q.UsagePct >= 100 {
+		return true
+	}
+	for _, w := range q.Windows {
+		if (w.UsagePct != nil && *w.UsagePct >= 100) || (w.Trend != nil && w.Trend.Status == "exhausted") {
+			return true
+		}
+	}
+	return false
 }
 
 const (
