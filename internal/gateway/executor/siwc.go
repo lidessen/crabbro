@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/lidessen/crabbro/internal/gateway/config"
+	"github.com/lidessen/crabbro/internal/gateway/provider"
 	"github.com/lidessen/crabbro/internal/secret"
 	"github.com/lidessen/crabbro/internal/siwc"
 )
@@ -120,8 +121,8 @@ func siwcValues(snap *config.Snapshot, secrets *secret.Store) []string {
 	}
 	var values []string
 	for _, p := range snap.AllPlans {
-		if p != nil && p.SIWC != nil {
-			if t, err := (siwc.Store{Secrets: secrets}).Load(p.SIWC.SessionRef); err == nil {
+		if auth := p.EffectiveAuth(); auth != nil && auth.Kind == provider.OAuthSIWC {
+			if t, err := (siwc.Store{Secrets: secrets}).Load(auth.SessionRef); err == nil {
 				values = append(values, siwc.ScrubValues(&t)...)
 			}
 		}

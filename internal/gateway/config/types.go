@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/lidessen/crabbro/internal/gateway/protocol"
+	"github.com/lidessen/crabbro/internal/gateway/provider"
 	"github.com/lidessen/crabbro/internal/shared"
 	"github.com/lidessen/crabbro/internal/transform"
 )
@@ -109,6 +110,8 @@ type Plan struct {
 	Enabled       *bool                    `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 	Direct        *DirectSpec              `yaml:"direct,omitempty" json:"direct,omitempty"`
 	Description   string                   `yaml:"description,omitempty" json:"description,omitempty"`
+	Provider      string                   `yaml:"provider,omitempty" json:"provider,omitempty"`
+	Auth          *AuthSpec                `yaml:"auth,omitempty" json:"auth,omitempty"`
 	Credential    string                   `yaml:"credential,omitempty" json:"credential,omitempty"`
 	Credentials   *CredentialPool          `yaml:"credentials,omitempty" json:"credentials,omitempty"`
 	SIWC          *SIWCSpec                `yaml:"siwc,omitempty" json:"siwc,omitempty"`
@@ -120,6 +123,36 @@ type Plan struct {
 	QuotaReminder QuotaReminderSpec        `yaml:"quotaReminder,omitempty" json:"quotaReminder,omitempty"`
 	Endpoints     map[string]*EndpointSpec `yaml:"endpoints" json:"endpoints"`
 	Models        map[string]*ModelSpec    `yaml:"models" json:"models"`
+}
+
+// AuthSpec configures one authentication method. Secret values remain in the secret store.
+type AuthSpec struct {
+	Kind       provider.AuthKind `yaml:"kind" json:"kind"`
+	Ref        string            `yaml:"ref,omitempty" json:"ref,omitempty"`
+	Refs       []string          `yaml:"refs,omitempty" json:"refs,omitempty"`
+	Strategy   string            `yaml:"strategy,omitempty" json:"strategy,omitempty"`
+	SessionRef string            `yaml:"sessionRef,omitempty" json:"sessionRef,omitempty"`
+	HostIDRef  string            `yaml:"hostIdRef,omitempty" json:"hostIdRef,omitempty"`
+}
+
+// EffectiveAuth also supports plans constructed directly by older callers.
+func (p *Plan) EffectiveAuth() *AuthSpec {
+	if p == nil {
+		return nil
+	}
+	if p.Auth != nil {
+		return p.Auth
+	}
+	if p.SIWC != nil {
+		return &AuthSpec{Kind: provider.OAuthSIWC, SessionRef: p.SIWC.SessionRef, HostIDRef: p.SIWC.HostIDRef}
+	}
+	if p.Credentials != nil {
+		return &AuthSpec{Kind: provider.KeyPool, Refs: p.Credentials.Refs, Strategy: p.Credentials.Strategy}
+	}
+	if p.Credential != "" {
+		return &AuthSpec{Kind: provider.APIKey, Ref: p.Credential}
+	}
+	return nil
 }
 
 // SIWCSpec contains references to the stored session and persistent host ID.
@@ -138,20 +171,21 @@ func (p *Plan) CredentialRefs() []string {
 	if p == nil {
 		return nil
 	}
-	if p.SIWC != nil {
-		return []string{p.SIWC.SessionRef}
-	}
-	if p.Credentials != nil {
-		return p.Credentials.Refs
-	}
-	if p.Credential != "" {
-		return []string{p.Credential}
+	if auth := p.EffectiveAuth(); auth != nil {
+		switch auth.Kind {
+		case provider.OAuthSIWC:
+			return []string{auth.SessionRef}
+		case provider.KeyPool:
+			return auth.Refs
+		case provider.APIKey:
+			return []string{auth.Ref}
+		}
 	}
 	return nil
 }
 func (p *Plan) CredentialStrategy() string {
-	if p != nil && p.Credentials != nil && p.Credentials.Strategy != "" {
-		return p.Credentials.Strategy
+	if auth := p.EffectiveAuth(); auth != nil && auth.Kind == provider.KeyPool && auth.Strategy != "" {
+		return auth.Strategy
 	}
 	return "priority"
 }

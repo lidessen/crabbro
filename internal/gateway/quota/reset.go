@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/lidessen/crabbro/internal/gateway/config"
+	gatewayprovider "github.com/lidessen/crabbro/internal/gateway/provider"
 )
 
 // ResetOutcome is the sanitized result of one redemption attempt. It is the
@@ -366,7 +367,7 @@ func (s *Syncer) maybeAutoReset(p *config.Plan, q RemoteQuota) {
 // redeem performs one guarded redemption cycle for plan p.
 func (s *Syncer) redeem(ctx context.Context, p *config.Plan, scope string, dryRun bool, policy *config.AutoResetSpec) (ResetOutcome, error) {
 	out := ResetOutcome{Plan: p.ID, Scope: scope, DryRun: dryRun}
-	if p.SIWC != nil {
+	if auth := p.EffectiveAuth(); auth != nil && auth.Kind == gatewayprovider.OAuthSIWC {
 		return out, errors.New("quota reset is unavailable for SIWC sessions")
 	}
 	minInterval := time.Duration(0)

@@ -20,6 +20,7 @@ import (
 
 	"github.com/lidessen/crabbro/internal/gateway/codec"
 	"github.com/lidessen/crabbro/internal/gateway/config"
+	"github.com/lidessen/crabbro/internal/gateway/provider"
 	"github.com/lidessen/crabbro/internal/gateway/router"
 	"github.com/lidessen/crabbro/internal/secret"
 	"github.com/lidessen/crabbro/internal/shared"
@@ -137,6 +138,10 @@ func TestSIWCVerifiedExecution(t *testing.T) {
 			}
 			model := &config.ModelSpec{}
 			cand := router.Candidate{Plan: &config.Plan{ID: "plan", SIWC: &config.SIWCSpec{SessionRef: "session", HostIDRef: "host"}}, CredentialRef: "session", Endpoint: endpoint, EndpointProto: config.ProtocolOpenAIResponses, ModelSpec: model, Target: config.Target{Model: "model"}}
+			if tc.refresh || tc.stream || tc.invalid {
+				cand.Plan.SIWC = nil
+				cand.Plan.Auth = &config.AuthSpec{Kind: provider.OAuthSIWC, SessionRef: "session", HostIDRef: "host"}
+			}
 			selection := &router.Selection{Route: &config.Route{ID: "route"}}
 			request := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 			request.Header.Set("X-Api-Key", "test-gateway-key")

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/lidessen/crabbro/internal/gateway/config"
+	gatewayprovider "github.com/lidessen/crabbro/internal/gateway/provider"
 )
 
 var safeLabel = regexp.MustCompile(`^[A-Za-z0-9 $.,_+%-]{1,80}$`)
@@ -183,7 +184,7 @@ func percent(used, cap any) *float64 {
 var providerNoQuota = []string{"zenmux-jev"}
 
 func provider(p *config.Plan) string {
-	if p.SIWC != nil {
+	if auth := p.EffectiveAuth(); auth != nil && auth.Kind == gatewayprovider.OAuthSIWC {
 		return ""
 	}
 	s := strings.ToLower(p.ID + " " + p.Credential)

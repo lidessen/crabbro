@@ -222,24 +222,20 @@ func (e *Executor) tryCandidate(
 	exStarted time.Time,
 ) attemptOutcome {
 	attStart := time.Now()
-	var tokens siwc.Tokens
-	var secVal string
-	var scrubVals []string
-	var refreshed bool
-	var err error
-	if cand.Plan.SIWC != nil {
-		if cand.Endpoint == nil || cand.Endpoint.BaseURL != "https://api.openai.com/v1" || cand.EndpointProto != config.ProtocolOpenAIResponses || cand.Plan.ProxyURL != "" {
-			*attempts = append(*attempts, shared.GatewayAttempt{Plan: cand.Plan.ID, CredentialRef: cand.CredentialRef, Status: http.StatusUnauthorized, ErrorKind: ErrKindAuthError, ErrorMessage: "invalid SIWC endpoint"})
-			return attemptOutcome{status: http.StatusUnauthorized, errMsg: "invalid SIWC endpoint"}
+	auth := e.authenticator(cand)
+	err := auth.Load(r.Context())
+	scrubVals := auth.ScrubValues()
+	if err != nil {
+		status := http.StatusBadGateway
+		msg := "credential unavailable"
+		retryable := true
+		if !auth.DecisionAllowed() {
+			status = http.StatusUnauthorized
+			msg = secret.ScrubText(err.Error(), scrubVals...)
+			retryable = false
 		}
-		original, _ := (siwc.Store{Secrets: e.Secrets}).Load(cand.Plan.SIWC.SessionRef)
-		scrubVals = siwc.ScrubValues(&original)
-		tokens, secVal, refreshed, err = e.siwcSession(r.Context(), cand.Plan.SIWC.SessionRef, nil)
-		scrubVals = append(scrubVals, siwc.ScrubValues(&tokens)...)
-		if err != nil {
-			*attempts = append(*attempts, shared.GatewayAttempt{Plan: cand.Plan.ID, CredentialRef: cand.CredentialRef, Status: http.StatusUnauthorized, ErrorKind: ErrKindAuthError, ErrorMessage: secret.ScrubText(err.Error(), scrubVals...)})
-			return attemptOutcome{status: http.StatusUnauthorized, errMsg: secret.ScrubText(err.Error(), scrubVals...)}
-		}
+		*attempts = append(*attempts, shared.GatewayAttempt{Plan: cand.Plan.ID, CredentialRef: cand.CredentialRef, Status: status, ErrorKind: ErrKindAuthError, ErrorMessage: msg})
+		return attemptOutcome{status: status, retryable: retryable, errMsg: msg}
 	}
 	needBridge := cand.EndpointProto != ingress.Protocol
 	if needBridge && e.Bridge == nil {
@@ -252,22 +248,6 @@ func (e *Executor) tryCandidate(
 			ErrorMessage: fmt.Sprintf("cross-protocol bridge %s -> %s not configured", ingress.Protocol, cand.EndpointProto),
 		})
 		return attemptOutcome{retryable: true, errMsg: "cross-protocol bridge unavailable"}
-	}
-
-	if cand.Plan.SIWC == nil {
-		secVal, err = e.Secrets.Get(cand.CredentialRef)
-		scrubVals = []string{secVal}
-	}
-	if err != nil {
-		*attempts = append(*attempts, shared.GatewayAttempt{
-			Plan: cand.Plan.ID, CredentialRef: cand.CredentialRef,
-			Model:        cand.Target.Model,
-			Protocol:     cand.EndpointProto,
-			Status:       http.StatusBadGateway,
-			ErrorKind:    ErrKindAuthError,
-			ErrorMessage: "credential unavailable",
-		})
-		return attemptOutcome{retryable: true, errMsg: "credential unavailable"}
 	}
 
 	var upBody []byte
@@ -342,22 +322,10 @@ func (e *Executor) tryCandidate(
 		*attempts = append(*attempts, shared.GatewayAttempt{Plan: cand.Plan.ID, CredentialRef: cand.CredentialRef, Model: cand.Target.Model, Protocol: cand.EndpointProto, Status: http.StatusBadRequest, ErrorKind: ErrKindClientBadRequest, ErrorMessage: secret.ScrubText(err.Error(), scrubVals...)})
 		return attemptOutcome{retryable: false, errMsg: secret.ScrubText(err.Error(), scrubVals...)}
 	}
-	if cand.Plan.SIWC != nil {
-		if !siwcTarget(upReq) {
-			ttftTimer.Stop()
-			return attemptOutcome{status: http.StatusUnauthorized, errMsg: "invalid SIWC endpoint"}
-		}
-		upBody, err = siwcBody(upBody)
-		if err != nil {
-			ttftTimer.Stop()
-			return attemptOutcome{errMsg: secret.ScrubText(err.Error(), scrubVals...)}
-		}
-		upReq.Body = io.NopCloser(bytes.NewReader(upBody))
-		upReq.ContentLength = int64(len(upBody))
-		upReq.Header = scrub.StripAuthHeaders(upReq.Header)
-		upReq.Header.Set("Authorization", "Bearer "+secVal)
-	} else {
-		codec.InjectCredential(upReq.Header, cand.Endpoint, cand.EndpointProto, secVal)
+	upBody, err = auth.Prepare(upReq, upBody)
+	if err != nil {
+		ttftTimer.Stop()
+		return attemptOutcome{status: http.StatusUnauthorized, errMsg: secret.ScrubText(err.Error(), scrubVals...)}
 	}
 
 	if e.Router != nil && e.Router.Health != nil {
@@ -370,22 +338,21 @@ func (e *Executor) tryCandidate(
 		doRoundTrip = e.roundTrip
 	}
 	resp, err := doRoundTrip(upReq)
-	if err == nil && resp.StatusCode == http.StatusUnauthorized && cand.Plan.SIWC != nil && !refreshed {
-		resp.Body.Close()
-		previous := tokens
-		var next siwc.Tokens
-		next, secVal, _, err = e.siwcSession(r.Context(), cand.Plan.SIWC.SessionRef, &previous)
-		scrubVals = append(scrubVals, siwc.ScrubValues(&next)...)
-		if err == nil {
-			upReq.Body = io.NopCloser(bytes.NewReader(upBody))
-			upReq.Header.Set("Authorization", "Bearer "+secVal)
-			resp, err = doRoundTrip(upReq)
-		} else {
+	if err == nil && resp.StatusCode == http.StatusUnauthorized {
+		retry, authErr := auth.HandleUnauthorized(r.Context(), upReq, upBody)
+		scrubVals = auth.ScrubValues()
+		if authErr != nil {
+			resp.Body.Close()
 			ttftTimer.Stop()
 			*attempts = append(*attempts, shared.GatewayAttempt{Plan: cand.Plan.ID, CredentialRef: cand.CredentialRef, Status: http.StatusUnauthorized, ErrorKind: ErrKindAuthError, ErrorMessage: "SIWC refresh failed"})
 			return attemptOutcome{status: http.StatusUnauthorized, errMsg: "SIWC refresh failed"}
 		}
+		if retry {
+			resp.Body.Close()
+			resp, err = doRoundTrip(upReq)
+		}
 	}
+
 	ttftTimer.Stop()
 	ttftMs := time.Since(attStart).Milliseconds()
 	if err != nil {
@@ -463,22 +430,10 @@ func (e *Executor) tryCandidate(
 		}
 	}
 
-	if cand.Plan.SIWC != nil {
-		resp.Header = scrub.ScrubHeaders(resp.Header, scrubVals, cand.Endpoint.AuthHeader)
-		resp.Body = struct {
-			io.Reader
-			io.Closer
-		}{newScrubReader(resp.Body, scrubVals), resp.Body}
-		if !ingress.Stream && strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
-			body, readErr := completedResponse(resp.Body)
-			resp.Body.Close()
-			if readErr != nil {
-				return attemptOutcome{retryable: true, errMsg: readErr.Error()}
-			}
-			resp.Body = io.NopCloser(bytes.NewReader(body))
-			resp.Header.Set("Content-Type", "application/json")
-		}
+	if err := auth.ProcessResponse(resp, ingress.Stream); err != nil {
+		return attemptOutcome{retryable: true, errMsg: err.Error()}
 	}
+
 	isSSE := strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream")
 	if isSSE {
 		peeked, sseRest, sseErrCode, sseErrMsg, hasSSEErr, emptyEOF := peekFirstSSE(resp.Body, cand.EndpointProto)
@@ -790,16 +745,18 @@ func (e *Executor) ExecuteDecision(ctx context.Context, snap *config.Snapshot, r
 		if e.candidateCooling(cand) {
 			continue
 		}
-		if cand.Plan.SIWC != nil {
+		auth := e.authenticator(cand)
+		if !auth.DecisionAllowed() {
 			lastErr = errors.New("SIWC session identity verification is unavailable")
 			continue
 		}
 		attStart := time.Now()
-		secVal, secErr := e.Secrets.Get(cand.CredentialRef)
+		secErr := auth.Load(ctx)
 		if secErr != nil {
 			lastErr = secErr
 			continue
 		}
+		scrubVals := auth.ScrubValues()
 		needBridge := cand.EndpointProto != config.ProtocolTypeSafeJev
 		if needBridge && e.Bridge == nil {
 			lastErr = fmt.Errorf("bridge unavailable for %s", cand.EndpointProto)
@@ -843,7 +800,13 @@ func (e *Executor) ExecuteDecision(ctx context.Context, snap *config.Snapshot, r
 			lastErr = err
 			continue
 		}
-		codec.InjectCredential(upReq.Header, cand.Endpoint, cand.EndpointProto, secVal)
+		upBody, err = auth.Prepare(upReq, upBody)
+		if err != nil {
+			timer.Stop()
+			cancelReq()
+			lastErr = err
+			continue
+		}
 
 		if e.health() != nil {
 			e.health().AcquireInFlight(cand.Plan.ID)
@@ -861,7 +824,7 @@ func (e *Executor) ExecuteDecision(ctx context.Context, snap *config.Snapshot, r
 			e.applyFailure(cand, fc, latMs, sel.Route.ID, "", 0, &accountedAttempts)
 			attempts = append(attempts, shared.GatewayAttempt{
 				Plan: cand.Plan.ID, CredentialRef: cand.CredentialRef, Model: cand.Target.Model, Protocol: cand.EndpointProto,
-				Status: http.StatusBadGateway, ErrorKind: fc.Kind, ErrorMessage: secret.ScrubText(err.Error(), secVal),
+				Status: http.StatusBadGateway, ErrorKind: fc.Kind, ErrorMessage: secret.ScrubText(err.Error(), scrubVals...),
 				LatencyMs: latMs, CooldownApplied: fc.CooldownLabel,
 			})
 			lastErr = err
@@ -871,15 +834,15 @@ func (e *Executor) ExecuteDecision(ctx context.Context, snap *config.Snapshot, r
 		respBytes, readErr := transform.ReadResponse(resp.Body)
 		if readErr == nil && !strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
 			resp.Header, respBytes, readErr = transform.Response(resp.Header, respBytes, cand.Endpoint.AuthHeader, cand.Endpoint.ResponseTransform, cand.ModelSpec.ResponseTransform)
-			resp.Header = scrub.ScrubHeaders(resp.Header, []string{secVal}, cand.Endpoint.AuthHeader)
-			respBytes = []byte(scrub.ScrubText(string(respBytes), secVal))
+			resp.Header = scrub.ScrubHeaders(resp.Header, scrubVals, cand.Endpoint.AuthHeader)
+			respBytes = []byte(scrub.ScrubText(string(respBytes), scrubVals...))
 		}
 		resp.Body.Close()
 		cancelReq()
 		if readErr != nil {
 			fc := ClassifyHTTPFailure(http.StatusBadGateway, []byte(readErr.Error()), nil, cand.Plan.ID, e.health(), cand.CredentialRef)
 			e.applyFailure(cand, fc, time.Since(attStart).Milliseconds(), sel.Route.ID, "", http.StatusBadGateway, &accountedAttempts)
-			lastErr = fmt.Errorf("%s", secret.ScrubText(readErr.Error(), secVal))
+			lastErr = fmt.Errorf("%s", secret.ScrubText(readErr.Error(), scrubVals...))
 			continue
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -887,7 +850,7 @@ func (e *Executor) ExecuteDecision(ctx context.Context, snap *config.Snapshot, r
 			e.applyFailure(cand, fc, latMs, sel.Route.ID, "", resp.StatusCode, &accountedAttempts)
 			attempts = append(attempts, shared.GatewayAttempt{
 				Plan: cand.Plan.ID, CredentialRef: cand.CredentialRef, Model: cand.Target.Model, Protocol: cand.EndpointProto,
-				Status: resp.StatusCode, ErrorKind: fc.Kind, ErrorMessage: secret.ScrubText(fc.Summary, secVal),
+				Status: resp.StatusCode, ErrorKind: fc.Kind, ErrorMessage: secret.ScrubText(fc.Summary, scrubVals...),
 				LatencyMs: latMs, CooldownApplied: fc.CooldownLabel,
 			})
 			lastErr = fmt.Errorf("decision backend status %d", resp.StatusCode)
@@ -927,7 +890,7 @@ func (e *Executor) ExecuteDecision(ctx context.Context, snap *config.Snapshot, r
 			Status: resp.StatusCode, LatencyMs: latMs, TTFTMs: latMs,
 		})
 		e.recordSuccess(sel, cand, dresp.Usage, latMs, time.Since(started).Milliseconds(), 0, &accountedAttempts)
-		e.finalizeRecord(rec, cand, attempts, dresp.Usage, resp.StatusCode, resp.Header, respBytes, needBridge, []string{secVal}, started, "")
+		e.finalizeRecord(rec, cand, attempts, dresp.Usage, resp.StatusCode, resp.Header, respBytes, needBridge, scrubVals, started, "")
 		return dresp, nil
 	}
 

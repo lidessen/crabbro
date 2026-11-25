@@ -6,7 +6,7 @@
   "type": "object",
   "additionalProperties": false,
   "required": ["version", "id", "endpoints", "models"],
-  "oneOf": [{"required": ["credential"]}, {"required": ["credentials"]}, {"required": ["siwc"]}],
+  "oneOf": [{"required": ["credential"]}, {"required": ["credentials"]}, {"required": ["siwc"]}, {"required": ["auth"]}],
   "properties": {
     "version": { "const": 1 },
     "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
@@ -17,6 +17,23 @@
       "fallbackRoute": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$", "description": "Opt-in explicit fallback for direct addressing. Names an enabled same-family route whose targets are appended after the direct target. Omitted (the default) keeps direct addressing single-target with maxAttempts 1." }
     } },
     "description": { "type": "string", "maxLength": 1024 },
+    "provider": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$" },
+    "auth": {
+      "type": "object", "additionalProperties": false, "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["api-key", "key-pool", "oauth-siwc"] },
+        "ref": { "$ref": "#/$defs/secretRef" },
+        "refs": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/secretRef" } },
+        "strategy": { "enum": ["priority", "round-robin", "quota-weighted"] },
+        "sessionRef": { "$ref": "#/$defs/secretRef" },
+        "hostIdRef": { "$ref": "#/$defs/secretRef" }
+      },
+      "oneOf": [
+        { "properties": { "kind": { "const": "api-key" } }, "required": ["ref"], "not": { "anyOf": [{"required": ["refs"]}, {"required": ["strategy"]}, {"required": ["sessionRef"]}, {"required": ["hostIdRef"]}] } },
+        { "properties": { "kind": { "const": "key-pool" } }, "required": ["refs"], "not": { "anyOf": [{"required": ["ref"]}, {"required": ["sessionRef"]}, {"required": ["hostIdRef"]}] } },
+        { "properties": { "kind": { "const": "oauth-siwc" } }, "required": ["sessionRef", "hostIdRef"], "not": { "anyOf": [{"required": ["ref"]}, {"required": ["refs"]}, {"required": ["strategy"]}] } }
+      ]
+    },
     "credential": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$" },
     "siwc": { "type": "object", "additionalProperties": false, "required": ["sessionRef", "hostIdRef"], "properties": {
       "sessionRef": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$" },
@@ -126,6 +143,7 @@
     }
   },
   "$defs": {
+    "secretRef": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$" },
     "requestTransform": {
       "type": "object",
       "additionalProperties": false,

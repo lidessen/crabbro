@@ -21,6 +21,7 @@ import (
 	"github.com/lidessen/crabbro/internal/gateway/executor"
 	"github.com/lidessen/crabbro/internal/gateway/ir"
 	"github.com/lidessen/crabbro/internal/gateway/ledger"
+	"github.com/lidessen/crabbro/internal/gateway/provider"
 	"github.com/lidessen/crabbro/internal/gateway/quota"
 	"github.com/lidessen/crabbro/internal/gateway/router"
 	"github.com/lidessen/crabbro/internal/secret"
@@ -502,10 +503,11 @@ func (g *Gateway) Plans() shared.GatewayPlanListResponse {
 		out = append(out, shared.GatewayPlanStatus{
 			ID: p.ID,
 			SIWC: func() *shared.GatewaySIWCRefs {
-				if p.SIWC == nil {
+				auth := p.EffectiveAuth()
+				if auth == nil || auth.Kind != provider.OAuthSIWC {
 					return nil
 				}
-				return &shared.GatewaySIWCRefs{SessionRef: p.SIWC.SessionRef, HostIDRef: p.SIWC.HostIDRef}
+				return &shared.GatewaySIWCRefs{SessionRef: auth.SessionRef, HostIDRef: auth.HostIDRef}
 			}(),
 			Enabled: p.IsEnabled(),
 			AutoReset: func() *shared.PlanAutoResetSpec {

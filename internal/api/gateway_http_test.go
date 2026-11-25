@@ -13,6 +13,7 @@ import (
 
 	"github.com/lidessen/crabbro/internal/gateway"
 	"github.com/lidessen/crabbro/internal/gateway/config"
+	"github.com/lidessen/crabbro/internal/gateway/provider"
 	"github.com/lidessen/crabbro/internal/secret"
 	"github.com/lidessen/crabbro/internal/shared"
 )
@@ -353,6 +354,7 @@ func TestGatewayPlansSIWCProjection(t *testing.T) {
 	gw.Config.SetSnapshot(&config.Snapshot{AllPlans: map[string]*config.Plan{
 		"siwc": {ID: "siwc", SIWC: &config.SIWCSpec{SessionRef: "session-ref", HostIDRef: "host-ref"}},
 		"key":  {ID: "key", Credential: "key-ref"},
+		"new":  {ID: "new", Auth: &config.AuthSpec{Kind: provider.OAuthSIWC, SessionRef: "session-ref", HostIDRef: "host-ref"}},
 	}})
 	s.Gateway = gw
 	w := httptest.NewRecorder()
@@ -375,7 +377,7 @@ func TestGatewayPlansSIWCProjection(t *testing.T) {
 			if string(p.SIWC) != "null" {
 				t.Fatal("missing explicit null")
 			}
-		case "siwc":
+		case "siwc", "new":
 			if string(p.SIWC) != `{"sessionRef":"session-ref","hostIdRef":"host-ref"}` {
 				t.Fatalf("incorrect projection: %s", p.SIWC)
 			}
@@ -383,7 +385,7 @@ func TestGatewayPlansSIWCProjection(t *testing.T) {
 			t.Fatal("unexpected plan")
 		}
 	}
-	if len(out.Plans) != 2 {
+	if len(out.Plans) != 3 {
 		t.Fatal("missing plans")
 	}
 }

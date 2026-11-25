@@ -12,6 +12,7 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"gopkg.in/yaml.v3"
 
+	"github.com/lidessen/crabbro/internal/gateway/provider"
 	"github.com/lidessen/crabbro/internal/shared"
 )
 
@@ -78,16 +79,21 @@ func ValidatePlanBytes(filename, expectedID string, data []byte) (*Plan, []share
 	if err := yaml.Unmarshal(data, &plan); err != nil {
 		return nil, []shared.Diagnostic{{File: filename, Path: "$", Message: "invalid YAML"}}
 	}
+	plan.Auth = plan.EffectiveAuth()
 	var diags []shared.Diagnostic
 	if expectedID != "" && plan.ID != expectedID {
 		diags = append(diags, shared.Diagnostic{File: filename, Path: "$.id", Message: "id does not match the filename"})
 	}
-	if plan.SIWC != nil {
+	if plan.Auth != nil && plan.Auth.Kind == provider.OAuthSIWC {
 		if plan.ProxyURL != "" {
 			diags = append(diags, shared.Diagnostic{File: filename, Path: "$.proxyUrl", Message: "proxyUrl is not allowed for SIWC plans"})
 		}
-		if plan.SIWC.SessionRef == plan.SIWC.HostIDRef {
-			diags = append(diags, shared.Diagnostic{File: filename, Path: "$.siwc.hostIdRef", Message: "host ID and session must use distinct references"})
+		if plan.Auth.SessionRef == plan.Auth.HostIDRef {
+			path := "$.auth.hostIdRef"
+			if plan.SIWC != nil {
+				path = "$.siwc.hostIdRef"
+			}
+			diags = append(diags, shared.Diagnostic{File: filename, Path: path, Message: "host ID and session must use distinct references"})
 		}
 		if len(plan.Endpoints) != 1 || plan.Endpoints[ProtocolOpenAIResponses] == nil || plan.Endpoints[ProtocolOpenAIResponses].BaseURL != "https://api.openai.com/v1" {
 			diags = append(diags, shared.Diagnostic{File: filename, Path: "$.endpoints", Message: "SIWC requires only the OpenAI Responses endpoint at https://api.openai.com/v1"})
@@ -173,8 +179,10 @@ func ValidatePlanBytes(filename, expectedID string, data []byte) (*Plan, []share
 	if len(diags) > 0 {
 		return nil, diags
 	}
-	if plan.Credentials != nil {
-		plan.Credential = plan.Credentials.Refs[0]
+	if plan.Auth.Kind == provider.KeyPool {
+		plan.Credential = plan.Auth.Refs[0]
+	} else if plan.Auth.Kind == provider.APIKey {
+		plan.Credential = plan.Auth.Ref
 	}
 	return &plan, nil
 }
