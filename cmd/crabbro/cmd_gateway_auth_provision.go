@@ -14,15 +14,24 @@ import (
 	"github.com/lidessen/crabbro/internal/gateway/config"
 	"github.com/lidessen/crabbro/internal/gateway/provider"
 	"github.com/lidessen/crabbro/internal/secret"
+	"github.com/lidessen/crabbro/internal/siwc"
 	"gopkg.in/yaml.v3"
 )
 
 var gatewayPlanID = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
 
-func gatewayAuthProvision(ctx context.Context, cfg *clientConfig, target, planID string, method provider.AuthKind, fromStdin bool, input io.Reader, out io.Writer, login func(gatewaySIWCStatusEntry) error) error {
-	_ = ctx
+func gatewayAuthProvision(ctx context.Context, cfg *clientConfig, target, planID string, method provider.AuthKind, fromStdin bool, input io.Reader, out io.Writer, login func(siwc.Store, gatewaySIWCStatusEntry) error) (err error) {
 	if !gatewayPlanID.MatchString(target) || (planID != "" && !gatewayPlanID.MatchString(planID)) {
 		return errors.New("invalid gateway plan or provider ID")
+	}
+	loginExisting := func(refs gatewaySIWCStatusEntry) error {
+		if err := login(gatewayAuthStore(), refs); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintln(out, gatewayAuthSessionSaved); err != nil {
+			return errors.New("print gateway authentication status failed")
+		}
+		return nil
 	}
 	// A local plan takes precedence over a provider with the same ID.
 	local, exists, err := readGatewayAuthPlan(target)
@@ -33,7 +42,7 @@ func gatewayAuthProvision(ctx context.Context, cfg *clientConfig, target, planID
 		if planID != "" && planID != target {
 			return errors.New("--plan cannot rename an existing plan")
 		}
-		return loginGatewayExisting(local, method, fromStdin, input, out, login)
+		return loginGatewayExisting(local, method, fromStdin, input, out, loginExisting)
 	}
 	p, isProvider := provider.Lookup(target)
 	if planID == "" {
@@ -42,9 +51,9 @@ func gatewayAuthProvision(ctx context.Context, cfg *clientConfig, target, planID
 			if method != "" && method != provider.OAuthSIWC || fromStdin {
 				return errors.New("existing plan uses oauth-siwc")
 			}
-			return login(refs)
+			return loginExisting(refs)
 		}
-		if !isProvider || (!errors.Is(remoteErr, errGatewayPlanNotFound) && remoteErr.Error() != "fetch gateway plans failed") {
+		if !isProvider || !errors.Is(remoteErr, errGatewayPlanNotFound) {
 			return remoteErr
 		}
 		planID = target
@@ -85,7 +94,7 @@ func gatewayAuthProvision(ctx context.Context, cfg *clientConfig, target, planID
 		if existing.Provider != p.ID || existing.EffectiveAuth() == nil || existing.EffectiveAuth().Kind != method {
 			return errors.New("plan already exists with different provider or authentication")
 		}
-		return loginGatewayExisting(existing, method, fromStdin, input, out, login)
+		return loginGatewayExisting(existing, method, fromStdin, input, out, loginExisting)
 	}
 	if p.DefaultBaseURL == "" || len(p.DefaultEndpoints) == 0 {
 		return errors.New("provider has no default endpoint; configure a plan manually")
@@ -126,8 +135,9 @@ func gatewayAuthProvision(ctx context.Context, cfg *clientConfig, target, planID
 	if method == provider.OAuthSIWC {
 		newRefs = []string{refs.SessionRef, refs.HostIDRef}
 	}
+	secretDir := gatewayAuthStore().Secrets.Dir
 	for _, ref := range newRefs {
-		_, err := os.Lstat(filepath.Join(gatewayAuthStore().Secrets.Dir, ref))
+		_, err := os.Lstat(filepath.Join(secretDir, ref))
 		if err == nil {
 			return errors.New("generated secret reference already exists; choose a different --plan")
 		}
@@ -135,15 +145,39 @@ func gatewayAuthProvision(ctx context.Context, cfg *clientConfig, target, planID
 			return errors.New("check gateway secret reference failed")
 		}
 	}
-	if method == provider.APIKey {
-		if err := saveGatewayAPIKey(keyRef, fromStdin, input); err != nil {
-			return err
-		}
-	} else if err := login(refs); err != nil {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := createGatewayAuthPlan(planID, body); err != nil {
+	if err := os.MkdirAll(secretDir, 0700); err != nil {
+		return errors.New("create gateway secret directory failed")
+	}
+	if err := os.Chmod(secretDir, 0700); err != nil {
+		return errors.New("protect gateway secret directory failed")
+	}
+	// Keep new credentials private until authentication succeeds. Staging here
+	// allows publication with hard links that cannot replace existing secrets.
+	pendingDir, err := os.MkdirTemp(secretDir, ".gateway-auth-*")
+	if err != nil {
+		return errors.New("stage gateway authentication secrets failed")
+	}
+	defer func() {
+		if cleanupErr := os.RemoveAll(pendingDir); cleanupErr != nil {
+			err = errors.Join(err, errors.New("remove staged gateway authentication secrets failed"))
+		}
+	}()
+	pending := siwc.Store{Secrets: secret.New(pendingDir)}
+	if method == provider.APIKey {
+		if err := saveGatewayAPIKey(pending.Secrets, keyRef, fromStdin, input); err != nil {
+			return err
+		}
+	} else if err := login(pending, refs); err != nil {
 		return err
+	}
+	if err := createGatewayAuthPlan(ctx, planID, body, pendingDir, secretDir, newRefs); err != nil {
+		return err
+	}
+	if method == provider.OAuthSIWC {
+		fmt.Fprintln(out, gatewayAuthSessionSaved)
 	}
 	fmt.Fprintln(out, "Gateway plan created.")
 	if placeholder {
@@ -184,7 +218,7 @@ func loginGatewayExisting(p *config.Plan, method provider.AuthKind, fromStdin bo
 		}
 		return login(gatewaySIWCStatusEntry{PlanID: p.ID, SessionRef: a.SessionRef, HostIDRef: a.HostIDRef})
 	case provider.APIKey:
-		if err := saveGatewayAPIKey(a.Ref, fromStdin, input); err != nil {
+		if err := saveGatewayAPIKey(gatewayAuthStore().Secrets, a.Ref, fromStdin, input); err != nil {
 			return err
 		}
 		_, err := fmt.Fprintln(out, "Gateway API key saved.")
@@ -194,7 +228,7 @@ func loginGatewayExisting(p *config.Plan, method provider.AuthKind, fromStdin bo
 	}
 }
 
-func saveGatewayAPIKey(ref string, fromStdin bool, input io.Reader) error {
+func saveGatewayAPIKey(store *secret.Store, ref string, fromStdin bool, input io.Reader) error {
 	if !fromStdin {
 		tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
 		if err != nil {
@@ -242,13 +276,13 @@ func saveGatewayAPIKey(ref string, fromStdin bool, input io.Reader) error {
 	if len(data) > 65536 || strings.TrimSpace(string(data)) == "" {
 		return errors.New("invalid API key input")
 	}
-	if err := gatewayAuthStore().Secrets.Set(ref, strings.TrimSpace(string(data))); err != nil {
+	if err := store.Set(ref, strings.TrimSpace(string(data))); err != nil {
 		return errors.New("save gateway API key failed")
 	}
 	return nil
 }
 
-func createGatewayAuthPlan(id string, body []byte) error {
+func createGatewayAuthPlan(ctx context.Context, id string, body []byte, pendingDir, secretDir string, refs []string) (err error) {
 	dir := filepath.Join(expandPath("~/.crabbro"), "gateway", "plans")
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return errors.New("create gateway plan directory failed")
@@ -265,8 +299,53 @@ func createGatewayAuthPlan(id string, body []byte) error {
 	if err = f.Close(); err != nil {
 		return errors.New("write gateway plan failed")
 	}
+	// Publish secrets before the plan so readers never see a plan whose
+	// credentials are still staged. Roll back only links made by this attempt.
+	published := 0
+	defer func() {
+		if err == nil {
+			return
+		}
+		for _, ref := range refs[:published] {
+			if rollbackErr := removePublishedGatewaySecret(filepath.Join(pendingDir, ref), filepath.Join(secretDir, ref)); rollbackErr != nil {
+				err = errors.Join(err, rollbackErr)
+			}
+		}
+	}()
+	for _, ref := range refs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := os.Link(filepath.Join(pendingDir, ref), filepath.Join(secretDir, ref)); err != nil {
+			if errors.Is(err, os.ErrExist) {
+				return errors.New("generated secret reference already exists; choose a different --plan")
+			}
+			return errors.New("publish gateway authentication secret failed")
+		}
+		published++
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err = os.Link(f.Name(), filepath.Join(dir, id+".yaml")); err != nil {
 		return errors.New("gateway plan already exists or could not be created")
+	}
+	return nil
+}
+
+func removePublishedGatewaySecret(stagedPath, publishedPath string) error {
+	staged, stagedErr := os.Lstat(stagedPath)
+	published, err := os.Lstat(publishedPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if stagedErr != nil || err != nil {
+		return errors.New("check published gateway authentication secret failed")
+	}
+	if os.SameFile(staged, published) {
+		if err := os.Remove(publishedPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return errors.New("remove published gateway authentication secret failed")
+		}
 	}
 	return nil
 }

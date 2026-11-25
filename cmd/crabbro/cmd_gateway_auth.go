@@ -25,6 +25,7 @@ import (
 var gatewayAuthRequest = doRequest
 
 const gatewayAuthUsage = "usage: crabbro gateway auth <providers|login|status|logout>"
+const gatewayAuthSessionSaved = "Gateway authentication session saved."
 
 func gatewayAuth(cfg *clientConfig, args []string) error {
 	if len(args) == 0 {
@@ -64,8 +65,8 @@ func gatewayAuth(cfg *clientConfig, args []string) error {
 		defer stop()
 		ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 		defer cancel()
-		return gatewayAuthProvision(ctx, cfg, fs.Arg(0), *planID, provider.AuthKind(*method), *stdin, os.Stdin, os.Stdout, func(refs gatewaySIWCStatusEntry) error {
-			return gatewayAuthLogin(ctx, siwc.Client{}, gatewayAuthStore(), refs, os.Stdout, !*noBrowser, openGatewayAuthBrowser, net.Listen)
+		return gatewayAuthProvision(ctx, cfg, fs.Arg(0), *planID, provider.AuthKind(*method), *stdin, os.Stdin, os.Stdout, func(store siwc.Store, refs gatewaySIWCStatusEntry) error {
+			return gatewayAuthLogin(ctx, siwc.Client{}, store, refs, os.Stdout, !*noBrowser, openGatewayAuthBrowser, net.Listen)
 		})
 	case "logout":
 		if len(args) == 2 && (args[1] == "--help" || args[1] == "-h") {
@@ -140,7 +141,8 @@ func gatewayAuthStore() siwc.Store {
 func gatewayAuthPlan(cfg *clientConfig, id string) (gatewaySIWCStatusEntry, error) {
 	resp, err := gatewayAuthRequest(cfg, http.MethodGet, "/v1/gateway/plans", nil)
 	if err != nil {
-		return gatewaySIWCStatusEntry{}, errors.New("fetch gateway plans failed")
+		// Provider login can provision a local plan while the daemon is unavailable.
+		return gatewaySIWCStatusEntry{}, fmt.Errorf("fetch gateway plans failed: %w", errGatewayPlanNotFound)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -263,9 +265,6 @@ func gatewayAuthLogin(ctx context.Context, client siwc.Client, store siwc.Store,
 		}
 		if err := store.Save(refs.SessionRef, tokens); err != nil {
 			return errors.New("save gateway authentication session failed")
-		}
-		if _, err = fmt.Fprintln(out, "Gateway authentication session saved."); err != nil {
-			return errors.New("print gateway authentication status failed")
 		}
 		return nil
 	}

@@ -8,7 +8,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -151,7 +150,7 @@ func TestGatewayAuthAPIKeyProvision(t *testing.T) {
 func TestGatewayAuthProvisionPreservesOtherPlans(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	var out bytes.Buffer
-	login := func(gatewaySIWCStatusEntry) error { t.Fatal("unexpected login"); return nil }
+	login := func(siwc.Store, gatewaySIWCStatusEntry) error { t.Fatal("unexpected login"); return nil }
 	if err := gatewayAuthProvision(context.Background(), &clientConfig{}, "anthropic", "shared", provider.APIKey, true, strings.NewReader("first"), &out, login); err != nil {
 		t.Fatal(err)
 	}
@@ -176,23 +175,49 @@ func TestGatewayAuthProvisionPreservesOtherPlans(t *testing.T) {
 func TestGatewayAuthProvisionPreservesExistingSecret(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	store := gatewayAuthStore()
-	if err := store.Secrets.Set("openai_api_key", "existing-value"); err != nil {
-		t.Fatal(err)
-	}
-	var out bytes.Buffer
-	err := gatewayAuthProvision(context.Background(), &clientConfig{}, "openai", "openai", provider.APIKey, true, strings.NewReader("replacement"), &out, func(gatewaySIWCStatusEntry) error { t.Fatal("unexpected OAuth login"); return nil })
-	if err == nil {
-		t.Fatal("accepted existing secret reference")
-	}
-	got, err := store.Secrets.Get("openai_api_key")
-	if err != nil || got != "existing-value" {
-		t.Fatal("overwrote existing secret")
+	for _, test := range []struct {
+		method provider.AuthKind
+		ref    string
+	}{
+		{method: provider.APIKey, ref: "openai_api_key"},
+		{method: provider.OAuthSIWC, ref: "openai_siwc_session"},
+	} {
+		t.Run(string(test.method), func(t *testing.T) {
+			if err := store.Secrets.Set(test.ref, "existing-value"); err != nil {
+				t.Fatal(err)
+			}
+			err := gatewayAuthProvision(context.Background(), &clientConfig{}, "openai", "openai", test.method, test.method == provider.APIKey, strings.NewReader("replacement"), io.Discard, func(siwc.Store, gatewaySIWCStatusEntry) error {
+				t.Fatal("unexpected OAuth login")
+				return nil
+			})
+			if err == nil || err.Error() != "generated secret reference already exists; choose a different --plan" {
+				t.Fatalf("expected a secret reference conflict, got %v", err)
+			}
+			got, err := store.Secrets.Get(test.ref)
+			if err != nil || got != "existing-value" {
+				t.Fatal("overwrote existing secret")
+			}
+		})
 	}
 }
 
 func TestGatewayAuthLoginRoundTrip(t *testing.T) {
-	for _, validNonce := range []bool{true, false} {
-		t.Run(fmt.Sprint("validNonce=", validNonce), func(t *testing.T) {
+	// Each attempt uses the same home and plan ID, including the final retry.
+	t.Setenv("HOME", t.TempDir())
+	store := gatewayAuthStore()
+	for _, test := range []struct {
+		name         string
+		badNonce     bool
+		cancelLogin  bool
+		planConflict bool
+		wantErr      string
+	}{
+		{name: "failed exchange", badNonce: true, wantErr: "gateway authentication exchange or verification failed"},
+		{name: "canceled login", cancelLogin: true, wantErr: "gateway authentication canceled or timed out"},
+		{name: "failed plan creation", planConflict: true, wantErr: "gateway plan already exists or could not be created"},
+		{name: "same plan retry"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
 			pub, priv, err := ed25519.GenerateKey(rand.Reader)
 			if err != nil {
 				t.Fatal(err)
@@ -216,7 +241,7 @@ func TestGatewayAuthLoginRoundTrip(t *testing.T) {
 					if encode(sum[:]) != challenge || r.Form.Get("code") != code || r.Form.Get("client_id") != "issued-client" || r.Form.Get("redirect_uri") != redirect {
 						t.Error("invalid exchange parameters")
 					}
-					if !validNonce {
+					if test.badNonce {
 						nonce = "incorrect"
 					}
 					header, _ := json.Marshal(map[string]string{"alg": "EdDSA", "kid": "test"})
@@ -230,13 +255,27 @@ func TestGatewayAuthLoginRoundTrip(t *testing.T) {
 				return w.Result(), nil
 			})}}
 			listener := &memoryAuthListener{conns: make(chan net.Conn), closed: make(chan struct{})}
-			t.Setenv("HOME", t.TempDir())
-			store := gatewayAuthStore()
 			var output bytes.Buffer
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			err = gatewayAuthProvision(ctx, &clientConfig{}, "openai", "account", provider.OAuthSIWC, false, nil, &output, func(refs gatewaySIWCStatusEntry) error {
-				return gatewayAuthLogin(ctx, client, store, refs, &output, true, func(ctx context.Context, raw string) error {
+			planPath := filepath.Join(expandPath("~/.crabbro"), "gateway", "plans", "account.yaml")
+			err = gatewayAuthProvision(ctx, &clientConfig{}, "openai", "account", provider.OAuthSIWC, false, nil, &output, func(pending siwc.Store, refs gatewaySIWCStatusEntry) error {
+				if test.planConflict {
+					// Obstruct publication after the existence check and before the final plan link.
+					if err := os.MkdirAll(planPath, 0700); err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(func() {
+						if err := os.Remove(planPath); err != nil {
+							t.Error(err)
+						}
+					})
+				}
+				return gatewayAuthLogin(ctx, client, pending, refs, &output, true, func(ctx context.Context, raw string) error {
+					if test.cancelLogin {
+						cancel()
+						return nil
+					}
 					u, err := url.Parse(raw)
 					if err != nil {
 						return err
@@ -272,11 +311,11 @@ func TestGatewayAuthLoginRoundTrip(t *testing.T) {
 					return nil
 				}, func(string, string) (net.Listener, error) { return listener, nil })
 			})
-			if validNonce && err != nil {
+			if test.wantErr == "" && err != nil {
 				t.Fatalf("login failed: %v", err)
 			}
-			if !validNonce && err == nil {
-				t.Fatal("accepted incorrect nonce")
+			if test.wantErr != "" && (err == nil || err.Error() != test.wantErr) {
+				t.Fatalf("expected %q, got %v", test.wantErr, err)
 			}
 			if err != nil && strings.Contains(err.Error(), code) {
 				t.Fatal("error leaked code")
@@ -286,8 +325,11 @@ func TestGatewayAuthLoginRoundTrip(t *testing.T) {
 					t.Error("output leaked credential")
 				}
 			}
-			got, loadErr := store.Load("account_siwc_session")
-			if validNonce {
+			if strings.Contains(output.String(), gatewayAuthSessionSaved) != (test.wantErr == "") {
+				t.Fatal("login reported an incorrect session status")
+			}
+			if test.wantErr == "" {
+				got, loadErr := store.Load("account_siwc_session")
 				if loadErr != nil || got.AccessToken != access || got.RefreshToken != refresh || got.IDToken != idToken {
 					t.Fatal("session not saved")
 				}
@@ -299,9 +341,21 @@ func TestGatewayAuthLoginRoundTrip(t *testing.T) {
 				if err != nil || !exists || p.Provider != "openai" || p.Auth.Kind != provider.OAuthSIWC || p.Auth.HostIDRef != "account_siwc_host" {
 					t.Fatal("valid SIWC plan not created")
 				}
-			} else if !os.IsNotExist(loadErr) {
-				t.Fatal("invalid token was stored")
-			} else if _, exists, _ := readGatewayAuthPlan("account"); exists {
+				if !store.Secrets.Has(p.Auth.HostIDRef) {
+					t.Fatal("host ID not saved")
+				}
+				return
+			}
+			entries, err := os.ReadDir(store.Secrets.Dir)
+			if err != nil || len(entries) != 0 {
+				t.Fatal("failed login left credentials or staging files behind")
+			}
+			fi, err := os.Lstat(planPath)
+			if test.planConflict {
+				if err != nil || !fi.IsDir() {
+					t.Fatal("plan conflict was overwritten")
+				}
+			} else if !os.IsNotExist(err) {
 				t.Fatal("plan created for invalid token")
 			}
 		})
