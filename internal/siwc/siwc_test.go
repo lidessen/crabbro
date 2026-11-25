@@ -184,7 +184,7 @@ func TestAuthorizationExchangeRefresh(t *testing.T) {
 }
 
 func TestCallbackValidation(t *testing.T) {
-	d := Discovery{AuthorizationEndpoint: "https://auth.openai.com/authorize"}
+	d := Discovery{Issuer: DefaultIssuer, AuthorizationEndpoint: DefaultIssuer + "/authorize", TokenEndpoint: DefaultIssuer + "/token", JWKSURI: DefaultIssuer + "/jwks"}
 	_, a, err := d.AuthorizationURL("http://127.0.0.1:34567/auth/callback", "host", "Crabbro", "")
 	if err != nil {
 		t.Fatal(err)
@@ -276,5 +276,53 @@ func TestErrorsDoNotLeak(t *testing.T) {
 	_, err = c.Refresh(context.Background(), d, Tokens{ClientID: "client", RefreshToken: "refresh-secret"})
 	if err == nil || strings.Contains(err.Error(), "secret") {
 		t.Fatal("response error leaked credentials")
+	}
+}
+
+func TestDiscoveryRejectsIssuerMismatchAndUserinfo(t *testing.T) {
+	for _, field := range []string{"issuer", "authorization", "token", "jwks"} {
+		t.Run(field, func(t *testing.T) {
+			base, hc := testServer(t, func(base string) http.Handler {
+				return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					d := Discovery{Issuer: base, AuthorizationEndpoint: base + "/authorize", TokenEndpoint: base + "/token", JWKSURI: base + "/jwks"}
+					switch field {
+					case "issuer":
+						d.Issuer = "https://other.example"
+					case "authorization":
+						d.AuthorizationEndpoint = "https://issuer@attacker.example/authorize"
+					case "token":
+						d.TokenEndpoint = "https://issuer@attacker.example/token"
+					case "jwks":
+						d.JWKSURI = "https://issuer@attacker.example/jwks"
+					}
+					_ = json.NewEncoder(w).Encode(d)
+				})
+			})
+			if _, err := (Client{Issuer: base, HTTPClient: hc}).Discover(context.Background()); err == nil {
+				t.Fatal("invalid discovery accepted")
+			}
+		})
+	}
+}
+
+func TestAuthorizationAndTokenRejectUntrustedDiscovery(t *testing.T) {
+	base := "https://issuer.example"
+	good := Discovery{Issuer: base, AuthorizationEndpoint: base + "/authorize", TokenEndpoint: base + "/token", JWKSURI: base + "/jwks"}
+	for name, mutate := range map[string]func(*Discovery){
+		"issuer mismatch":        func(d *Discovery) { d.Issuer = "https://other.example" },
+		"authorization userinfo": func(d *Discovery) { d.AuthorizationEndpoint = "https://issuer@attacker.example/authorize" },
+		"token userinfo":         func(d *Discovery) { d.TokenEndpoint = "https://issuer@attacker.example/token" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := good
+			mutate(&d)
+			if _, _, err := d.AuthorizationURL("http://127.0.0.1:1234/callback", "host", "agent", ""); err == nil {
+				t.Fatal("authorization accepted invalid discovery")
+			}
+			c := Client{Issuer: base, HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) { t.Fatal("unexpected token request"); return nil, nil })}}
+			if _, err := c.Refresh(context.Background(), d, Tokens{ClientID: "issued", RefreshToken: "refresh"}); err == nil {
+				t.Fatal("refresh accepted invalid discovery")
+			}
+		})
 	}
 }

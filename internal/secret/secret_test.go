@@ -104,3 +104,20 @@ func TestScrubbers(t *testing.T) {
 		t.Fatalf("ScrubAny = %#v", m)
 	}
 }
+
+func TestSetRestoresDirectoryOwnerPermissions(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "secrets")
+	if err := os.Mkdir(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	if err := New(dir).Set("example", "value"); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o700 {
+		t.Fatalf("directory mode = %o", info.Mode().Perm())
+	}
+}

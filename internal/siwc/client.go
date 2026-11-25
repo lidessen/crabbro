@@ -145,7 +145,7 @@ func validRedirect(raw string) bool {
 // AuthorizationURL starts dynamic registration when clientID is empty; otherwise
 // it starts reauthorization of the specified issued client.
 func (d Discovery) AuthorizationURL(redirectURI, hostID, agentName, clientID string) (string, Attempt, error) {
-	if !validEndpoint(d.AuthorizationEndpoint) || !validRedirect(redirectURI) || hostID == "" {
+	if (Client{Issuer: d.Issuer}).validateDiscovery(d) != nil || !validRedirect(redirectURI) || hostID == "" {
 		return "", Attempt{}, errors.New("invalid SIWC authorization configuration")
 	}
 	if clientID == "" {

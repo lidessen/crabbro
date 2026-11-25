@@ -60,8 +60,8 @@ func (s *Store) protectDir() error {
 	if !fi.IsDir() {
 		return fmt.Errorf("secret store path is not a directory")
 	}
-	if fi.Mode().Perm()&0o077 != 0 {
-		return os.Chmod(s.Dir, fi.Mode().Perm()&0o700)
+	if fi.Mode().Perm() != 0o700 {
+		return os.Chmod(s.Dir, 0o700)
 	}
 	return nil
 }
@@ -138,6 +138,10 @@ func (s *Store) Set(ref, value string) error {
 		_ = tmp.Close()
 		return err
 	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
@@ -145,7 +149,12 @@ func (s *Store) Set(ref, value string) error {
 		return err
 	}
 	cleanup = false
-	return nil
+	dir, err := os.Open(s.Dir)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
 }
 
 // Delete removes the stored secret for ref.
