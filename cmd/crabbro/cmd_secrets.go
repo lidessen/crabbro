@@ -53,13 +53,24 @@ func cmdSecrets(cfg *clientConfig, args []string) error {
 	case "set":
 		fs := flag.NewFlagSet("secrets set", flag.ContinueOnError)
 		fromEnv := fs.String("from-env", "", "Read secret value from environment variable")
-		if err := fs.Parse(args[1:]); err != nil {
+		setArgs := args[1:]
+		name := ""
+		nameFirst := false
+		if len(setArgs) > 0 && !strings.HasPrefix(setArgs[0], "-") {
+			name, setArgs = setArgs[0], setArgs[1:]
+			nameFirst = true
+		}
+		if err := fs.Parse(setArgs); err != nil {
 			return err
 		}
-		if fs.NArg() < 1 {
+		if !nameFirst && fs.NArg() == 1 {
+			name = fs.Arg(0)
+		} else if !nameFirst || fs.NArg() != 0 {
 			return fmt.Errorf("usage: crabbro secrets set <name> [--from-env VAR]")
 		}
-		name := fs.Arg(0)
+		if name == "" {
+			return fmt.Errorf("usage: crabbro secrets set <name> [--from-env VAR]")
+		}
 		var val string
 		if *fromEnv != "" {
 			val = os.Getenv(*fromEnv)
