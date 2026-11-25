@@ -81,6 +81,12 @@ func TestSIWCVerifiedExecution(t *testing.T) {
 			}
 			refreshes, calls := 0, 0
 			client := &http.Client{Transport: siwcRoundTripper(func(r *http.Request) (*http.Response, error) {
+				if tc.name == "verified" {
+					if !siwcRefreshMu.TryLock() {
+						t.Fatalf("refresh mutex held during %s", r.URL.Path)
+					}
+					siwcRefreshMu.Unlock()
+				}
 				var body any
 				switch r.URL.Path {
 				case "/.well-known/openid-configuration":
@@ -109,8 +115,13 @@ func TestSIWCVerifiedExecution(t *testing.T) {
 				if tc.expired || (tc.refresh && calls == 2) {
 					want = "Bearer new-access-token"
 				}
-				if r.Header.Get("Authorization") != want {
-					t.Fatal("wrong bearer")
+				if values := r.Header.Values("Authorization"); len(values) != 1 || values[0] != want {
+					t.Fatal("wrong authorization header")
+				}
+				for _, name := range []string{"X-Api-Key", "X-Goog-Api-Key"} {
+					if _, present := r.Header[name]; present {
+						t.Errorf("upstream request contains %s", name)
+					}
 				}
 				if (tc.refresh && calls == 1) || tc.reject {
 					return &http.Response{StatusCode: 401, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("old-access-token old-refresh-token new-access-token new-refresh-token " + idToken))}, nil
@@ -119,11 +130,18 @@ func TestSIWCVerifiedExecution(t *testing.T) {
 				body := `data: {"type":"response.completed","response":{"id":"old-access-token old-refresh-token new-access-token new-refresh-token ` + idToken + `","object":"response","output":[]}}` + "\n\n"
 				return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
 			}
-			endpoint := &config.EndpointSpec{BaseURL: "https://api.openai.com/v1"}
+			endpoint := &config.EndpointSpec{
+				BaseURL: "https://api.openai.com/v1",
+				// Endpoint defaults are applied after the initial header cleanup.
+				Headers: map[string]string{"X-Api-Key": "test-endpoint-key", "X-Goog-Api-Key": "test-endpoint-key"},
+			}
 			model := &config.ModelSpec{}
 			cand := router.Candidate{Plan: &config.Plan{ID: "plan", SIWC: &config.SIWCSpec{SessionRef: "session", HostIDRef: "host"}}, CredentialRef: "session", Endpoint: endpoint, EndpointProto: config.ProtocolOpenAIResponses, ModelSpec: model, Target: config.Target{Model: "model"}}
 			selection := &router.Selection{Route: &config.Route{ID: "route"}}
 			request := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+			request.Header.Set("X-Api-Key", "test-gateway-key")
+			request.Header.Set("X-Goog-Api-Key", "test-gateway-key")
+			request.Header.Set("Authorization", "Bearer test-gateway-key")
 			output := httptest.NewRecorder()
 			var attempts []shared.GatewayAttempt
 			accounted := 0

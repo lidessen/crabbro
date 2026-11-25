@@ -354,6 +354,7 @@ func (e *Executor) tryCandidate(
 		}
 		upReq.Body = io.NopCloser(bytes.NewReader(upBody))
 		upReq.ContentLength = int64(len(upBody))
+		upReq.Header = scrub.StripAuthHeaders(upReq.Header)
 		upReq.Header.Set("Authorization", "Bearer "+secVal)
 	} else {
 		codec.InjectCredential(upReq.Header, cand.Endpoint, cand.EndpointProto, secVal)

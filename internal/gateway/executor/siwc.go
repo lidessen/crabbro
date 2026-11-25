@@ -21,8 +21,6 @@ import (
 var siwcRefreshMu sync.Mutex
 
 func (e *Executor) siwcSession(ctx context.Context, ref string, rejected *siwc.Tokens) (siwc.Tokens, string, bool, error) {
-	siwcRefreshMu.Lock()
-	defer siwcRefreshMu.Unlock()
 	store := siwc.Store{Secrets: e.Secrets}
 	tokens, err := store.Load(ref)
 	if err != nil {
@@ -32,35 +30,58 @@ func (e *Executor) siwcSession(ctx context.Context, ref string, rejected *siwc.T
 	if err != nil {
 		return tokens, "", false, errors.New("SIWC verification unavailable")
 	}
-	// Only expiry or a 401 permits a refresh; invalid identity or scope fails closed.
-	refresh := !tokens.ExpiresAt.After(time.Now())
-	if rejected != nil && tokens.AccessToken == rejected.AccessToken && tokens.RefreshToken == rejected.RefreshToken {
-		refresh = true
-	}
-	if refresh {
-		// Refresh must not silently replace the account bound to this session.
-		identity, verifyErr := e.SIWCClient.VerifyIDToken(ctx, d, tokens.IDToken, tokens.ClientID, "")
-		if verifyErr != nil || !tokens.GrantedDirect() || !strings.EqualFold(tokens.TokenType, "Bearer") {
-			return tokens, "", false, errors.New("SIWC verification failed")
+	if siwcNeedsRefresh(tokens, rejected) {
+		var refreshed bool
+		tokens, refreshed, err = e.refreshSIWCSession(ctx, d, store, ref, rejected)
+		if err != nil {
+			return tokens, "", false, err
 		}
-		next, refreshErr := e.SIWCClient.Refresh(ctx, d, tokens)
-		if refreshErr != nil {
-			return tokens, "", false, errors.New("SIWC refresh failed")
+		if refreshed {
+			return tokens, tokens.AccessToken, true, nil
 		}
-		session, verifyErr := e.SIWCClient.VerifiedSession(ctx, d, next)
-		if verifyErr != nil || session.Identity.Subject != identity.Subject || session.Identity.AccountID != identity.AccountID {
-			return tokens, "", false, errors.New("SIWC verification failed")
-		}
-		if store.Save(ref, next) != nil {
-			return tokens, "", false, errors.New("SIWC session persistence failed")
-		}
-		return next, session.AccessToken, true, nil
 	}
 	session, err := e.SIWCClient.VerifiedSession(ctx, d, tokens)
 	if err != nil {
 		return tokens, "", false, errors.New("SIWC verification failed")
 	}
 	return tokens, session.AccessToken, false, nil
+}
+
+// Only expiry or a 401 permits a refresh; invalid identity or scope fails closed.
+func siwcNeedsRefresh(tokens siwc.Tokens, rejected *siwc.Tokens) bool {
+	return !tokens.ExpiresAt.After(time.Now()) ||
+		(rejected != nil && tokens.AccessToken == rejected.AccessToken && tokens.RefreshToken == rejected.RefreshToken)
+}
+
+func (e *Executor) refreshSIWCSession(ctx context.Context, d siwc.Discovery, store siwc.Store, ref string, rejected *siwc.Tokens) (siwc.Tokens, bool, error) {
+	siwcRefreshMu.Lock()
+	defer siwcRefreshMu.Unlock()
+
+	tokens, err := store.Load(ref)
+	if err != nil {
+		return tokens, false, errors.New("SIWC session unavailable")
+	}
+	if !siwcNeedsRefresh(tokens, rejected) {
+		return tokens, false, nil
+	}
+
+	// Bind the refreshed credentials to the account in the stored session.
+	identity, err := e.SIWCClient.VerifyIDToken(ctx, d, tokens.IDToken, tokens.ClientID, "")
+	if err != nil || !tokens.GrantedDirect() || !strings.EqualFold(tokens.TokenType, "Bearer") {
+		return tokens, false, errors.New("SIWC verification failed")
+	}
+	next, err := e.SIWCClient.Refresh(ctx, d, tokens)
+	if err != nil {
+		return tokens, false, errors.New("SIWC refresh failed")
+	}
+	session, err := e.SIWCClient.VerifiedSession(ctx, d, next)
+	if err != nil || session.Identity.Subject != identity.Subject || session.Identity.AccountID != identity.AccountID {
+		return tokens, false, errors.New("SIWC verification failed")
+	}
+	if err := store.Save(ref, next); err != nil {
+		return tokens, false, errors.New("SIWC session persistence failed")
+	}
+	return next, true, nil
 }
 
 func siwcBody(body []byte) ([]byte, error) {
