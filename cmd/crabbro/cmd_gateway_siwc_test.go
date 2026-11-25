@@ -55,7 +55,7 @@ func TestGatewaySIWCStatusEmpty(t *testing.T) {
 }
 
 func TestGatewaySIWCStatusRejectsArguments(t *testing.T) {
-	if err := cmdGateway(&clientConfig{}, []string{"siwc-status", "extra"}); err == nil {
+	if err := cmdGateway(&clientConfig{}, []string{"auth", "status", "extra"}); err == nil {
 		t.Fatal("expected argument error")
 	}
 }

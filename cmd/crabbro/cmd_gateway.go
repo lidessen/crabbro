@@ -18,14 +18,14 @@ import (
 
 func cmdGateway(cfg *clientConfig, args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: crabbro gateway <status|plans|siwc-status|routes|quotas|usage|why|cooldown-clear|preview|reload>")
+		return fmt.Errorf("usage: crabbro gateway <status|plans|auth|routes|quotas|usage|why|cooldown-clear|preview|reload>")
 	}
 	switch args[0] {
 	case "help", "--help", "-h":
-		fmt.Println("usage: crabbro gateway <status|plans|siwc-status|routes|quotas|usage|why|cooldown-clear|preview|reload>")
+		fmt.Println("usage: crabbro gateway <status|plans|auth|routes|quotas|usage|why|cooldown-clear|preview|reload>")
 		return nil
-	case "siwc-status":
-		return gatewaySIWCStatus(cfg, args[1:])
+	case "auth":
+		return gatewayAuth(cfg, args[1:])
 	case "status":
 		return gatewayGetJSON(cfg, args[1:], "/v1/gateway/status", func(raw []byte) {
 			var st shared.GatewayStatusResponse
@@ -253,15 +253,18 @@ type gatewaySIWCStatusEntry struct {
 }
 
 func gatewaySIWCStatus(cfg *clientConfig, args []string) error {
-	fs := flag.NewFlagSet("gateway siwc-status", flag.ContinueOnError)
+	fs := flag.NewFlagSet("gateway auth status", flag.ContinueOnError)
 	pretty := fs.Bool("pretty", false, "Human-readable output")
 	if err := fs.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			return nil
+		}
 		return err
 	}
 	if fs.NArg() != 0 {
-		return fmt.Errorf("usage: crabbro gateway siwc-status [--pretty]")
+		return fmt.Errorf("usage: crabbro gateway auth status [--pretty]")
 	}
-	resp, err := doRequest(cfg, http.MethodGet, "/v1/gateway/plans", nil)
+	resp, err := gatewayAuthRequest(cfg, http.MethodGet, "/v1/gateway/plans", nil)
 	if err != nil {
 		return fmt.Errorf("fetch gateway plans: %w", err)
 	}
