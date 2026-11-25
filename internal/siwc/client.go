@@ -1,6 +1,6 @@
 // Package siwc implements the foundational OpenAI SIWC OAuth flow. Token
-// exchange alone does not authenticate an account: ID token verification and
-// account binding are required before integration with the gateway.
+// exchange alone does not authenticate an account: callers must verify the
+// session and bind its identity before integration with the gateway.
 package siwc
 
 import (
@@ -74,7 +74,8 @@ func (c Client) request(ctx context.Context, method, endpoint string, body io.Re
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("SIWC request failed (HTTP %d)", resp.StatusCode)
 	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(out); err != nil {
+	data, err := io.ReadAll(io.LimitReader(resp.Body, (1<<20)+1))
+	if err != nil || len(data) > 1<<20 || json.Unmarshal(data, out) != nil {
 		return errors.New("invalid SIWC response")
 	}
 	return nil
@@ -82,31 +83,48 @@ func (c Client) request(ctx context.Context, method, endpoint string, body io.Re
 
 // Discover retrieves the issuer metadata and rejects an issuer mismatch.
 func (c Client) Discover(ctx context.Context) (Discovery, error) {
+	issuer, err := c.issuer()
+	if err != nil {
+		return Discovery{}, err
+	}
+	var d Discovery
+	if err := c.request(ctx, http.MethodGet, issuer+"/.well-known/openid-configuration", nil, "", &d); err != nil {
+		return Discovery{}, err
+	}
+	if err := c.validateDiscovery(d); err != nil {
+		return Discovery{}, err
+	}
+	return d, nil
+}
+
+func (c Client) issuer() (string, error) {
 	issuer := c.Issuer
 	if issuer == "" {
 		issuer = DefaultIssuer
 	}
 	u, err := url.Parse(issuer)
 	if err != nil || !validEndpoint(issuer) || u.RawQuery != "" || strings.HasSuffix(issuer, "/") {
-		return Discovery{}, errors.New("invalid SIWC issuer")
+		return "", errors.New("invalid SIWC issuer")
 	}
-	var d Discovery
-	if err := c.request(ctx, http.MethodGet, issuer+"/.well-known/openid-configuration", nil, "", &d); err != nil {
-		return Discovery{}, err
+	return issuer, nil
+}
+
+func (c Client) validateDiscovery(d Discovery) error {
+	issuer, err := c.issuer()
+	if err != nil || d.Issuer != issuer {
+		return errors.New("invalid SIWC discovery metadata")
 	}
-	if d.Issuer != issuer {
-		return Discovery{}, errors.New("invalid SIWC discovery metadata")
-	}
+	u, _ := url.Parse(issuer)
 	for _, endpoint := range []string{d.AuthorizationEndpoint, d.TokenEndpoint, d.JWKSURI} {
 		if !validEndpoint(endpoint) {
-			return Discovery{}, errors.New("invalid SIWC discovery metadata")
+			return errors.New("invalid SIWC discovery metadata")
 		}
-		endpointURL, _ := url.Parse(endpoint)
-		if endpointURL.Scheme != u.Scheme || !strings.EqualFold(endpointURL.Host, u.Host) {
-			return Discovery{}, errors.New("invalid SIWC discovery metadata")
+		e, _ := url.Parse(endpoint)
+		if e.Scheme != u.Scheme || !strings.EqualFold(e.Host, u.Host) {
+			return errors.New("invalid SIWC discovery metadata")
 		}
 	}
-	return d, nil
+	return nil
 }
 
 // Attempt holds one authorization request. Do not log or serialize it.
@@ -220,6 +238,9 @@ func (c Client) token(ctx context.Context, d Discovery, clientID string, form ur
 	if clientID == "" || clientID == DynamicClientID {
 		return Tokens{}, errors.New("issued SIWC client ID is required")
 	}
+	if err := c.validateDiscovery(d); err != nil {
+		return Tokens{}, err
+	}
 	form.Set("client_id", clientID)
 	form.Set("resource", Resource)
 	var result tokenResponse
@@ -237,7 +258,19 @@ func (c Client) Exchange(ctx context.Context, d Discovery, a Attempt, cb Callbac
 	if cb.Code == "" || cb.ClientID == "" || a.Verifier == "" || !validRedirect(a.RedirectURI) || (a.ClientID != DynamicClientID && cb.ClientID != a.ClientID) {
 		return Tokens{}, errors.New("invalid SIWC exchange")
 	}
-	return c.token(ctx, d, cb.ClientID, url.Values{"grant_type": {"authorization_code"}, "code": {cb.Code}, "code_verifier": {a.Verifier}, "redirect_uri": {a.RedirectURI}})
+	tokens, err := c.token(ctx, d, cb.ClientID, url.Values{"grant_type": {"authorization_code"}, "code": {cb.Code}, "code_verifier": {a.Verifier}, "redirect_uri": {a.RedirectURI}})
+	if err != nil {
+		return Tokens{}, err
+	}
+	if tokens.IDToken != "" {
+		if a.Nonce == "" {
+			return Tokens{}, errors.New("SIWC exchange nonce is required")
+		}
+		if _, err := c.VerifyIDToken(ctx, d, tokens.IDToken, tokens.ClientID, a.Nonce); err != nil {
+			return Tokens{}, err
+		}
+	}
+	return tokens, nil
 }
 
 // Refresh returns replacement credentials. The caller must serialize refreshes
@@ -249,6 +282,11 @@ func (c Client) Refresh(ctx context.Context, d Discovery, old Tokens) (Tokens, e
 	next, err := c.token(ctx, d, old.ClientID, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {old.RefreshToken}})
 	if err != nil {
 		return Tokens{}, err
+	}
+	if next.IDToken != "" {
+		if _, err := c.VerifyIDToken(ctx, d, next.IDToken, next.ClientID, ""); err != nil {
+			return Tokens{}, err
+		}
 	}
 	if next.RefreshToken == "" {
 		next.RefreshToken = old.RefreshToken

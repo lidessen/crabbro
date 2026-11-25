@@ -75,7 +75,7 @@ func TestRefreshRejectsScopeDowngrade(t *testing.T) {
 		})
 	})
 	old := Tokens{ClientID: "client", RefreshToken: "refresh", Scope: DirectScope}
-	next, err := (Client{HTTPClient: hc}).Refresh(context.Background(), Discovery{TokenEndpoint: base + "/token"}, old)
+	next, err := (Client{Issuer: base, HTTPClient: hc}).Refresh(context.Background(), Discovery{Issuer: base, AuthorizationEndpoint: base + "/authorize", TokenEndpoint: base + "/token", JWKSURI: base + "/jwks"}, old)
 	if err == nil || !strings.Contains(err.Error(), "scope") || next != (Tokens{}) {
 		t.Fatal("refresh accepted downgraded scope")
 	}
@@ -125,7 +125,7 @@ func TestAuthorizationExchangeRefresh(t *testing.T) {
 					io.WriteString(w, `{"access_token":"new-access","refresh_token":"new-refresh","token_type":"Bearer","expires_in":3600}`)
 					return
 				}
-				io.WriteString(w, `{"access_token":"access-secret","refresh_token":"refresh-secret","id_token":"id-secret","token_type":"Bearer","scope":"openid chatgpt.tokens.use.direct offline_access","expires_in":3600}`)
+				io.WriteString(w, `{"access_token":"access-secret","refresh_token":"refresh-secret","token_type":"Bearer","scope":"openid chatgpt.tokens.use.direct offline_access","expires_in":3600}`)
 			default:
 				http.NotFound(w, r)
 			}
@@ -265,7 +265,7 @@ func TestStoreAndHostID(t *testing.T) {
 func TestErrorsDoNotLeak(t *testing.T) {
 	hc := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) { return nil, errors.New("access-secret refresh-secret") })}
 	c := Client{HTTPClient: hc}
-	d := Discovery{TokenEndpoint: "https://auth.openai.com/token"}
+	d := Discovery{Issuer: DefaultIssuer, AuthorizationEndpoint: DefaultIssuer + "/authorize", TokenEndpoint: DefaultIssuer + "/token", JWKSURI: DefaultIssuer + "/jwks"}
 	_, err := c.Refresh(context.Background(), d, Tokens{ClientID: "client", RefreshToken: "refresh-secret"})
 	if err == nil || strings.Contains(err.Error(), "secret") {
 		t.Fatal("request error leaked credentials")
